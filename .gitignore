@@ -1,0 +1,43 @@
+# Dependencies and local caches
+node_modules/
+.pnpm-store/
+.npm/
+.cache/
+coverage/
+
+# Runtime state, credentials and local environment
+.env
+.env.*
+!.env.example
+.credentials*
+credentials.yaml
+credentials.yml
+credentials.json
+state.json
+permanent-locks.json
+channel-pack/state.json
+channel-pack/permanent-locks.json
+*.log
+*.pid
+*.pcap
+*.pcapng
+*.har
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tgz.sha256
+backups/
+.backups/
+attachments/
+
+# One-off local account migration, not part of the plugin
+scripts/import-qq.mjs
+
+# Editor and temporary files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+*.bak

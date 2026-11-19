@@ -1,0 +1,9 @@
+- insert:
+    - id: dsh-unified-router
+      name: dsh-unified-router
+      config:
+        backend: standalone
+      meta:
+        title:
+          zh: Unified Router
+          en: Unified Router

@@ -1,0 +1,47 @@
+{
+  "name": "dsh-unified-router",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/web-host.js",
+  "license": "MIT",
+  "displayName": "Unified Router",
+  "description": "Loomy、Raccoon、Qoder 中国版、TRAE、商汤 Token Plan 与 WorkBuddy（腾讯 CodeBuddy 中国版）的模型与额度管理，通过 Web 设置面板使用；仅 CN 版。",
+  "exports": {
+    ".": "./lib/web-host.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test test/backend.test.mjs test/host.test.mjs test/web-client.test.mjs test/model-selection-ui.test.mjs test/sensenova-manager.test.mjs test/sensenova-models.test.mjs test/plan-models-ui.test.mjs test/workbuddy.test.mjs test/model-rate-badge.test.mjs test/qoder-cli.test.mjs test/raccoon-thinking.test.mjs test/model-blacklist-hygiene.test.mjs"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0",
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.5 <0.3",
+    "@earendil-works/pi-ai": ">=0.85.0 <2.0.0"
+  }
+}
