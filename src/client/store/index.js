@@ -49,8 +49,10 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     } else if (!managedMethod && (method === 'settings.refresh' ? (payload?.provider !== 'all' && !allowed(payload?.provider))
       : method !== 'settings.snapshot' && !packAllowed(payload?.provider))) throw new Error('不支持此渠道')
     let result
-    const cached = snapshotReads.has(method) && !payload.localOnly
-    try { result = await call(method, cached ? { ...payload, snapshot: true } : payload, signal) } catch { throw new Error('主机请求未完成') }
+    const live = payload?.live === true
+    const cleanPayload = live ? (() => { const { live: _drop, ...rest } = payload; return rest })() : payload
+    const cached = snapshotReads.has(method) && !cleanPayload.localOnly && !live
+    try { result = await call(method, cached ? { ...cleanPayload, snapshot: true } : cleanPayload, signal) } catch { throw new Error('主机请求未完成') }
     if (signal?.aborted || disposed) throw new Error('请求已结束')
     if (result?.ok !== true) throw new Error('主机未能完成此操作')
     if (cached && result.value?.snapshot) sync.markSnapshotProtocol()
@@ -148,7 +150,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     schedulePlanPoll(generation)
   }
 
-  async function loadPlan(target = PLAN_PROVIDER_ID) {
+  async function loadPlan(target = PLAN_PROVIDER_ID, force = false) {
     if (disposed || target !== PLAN_PROVIDER_ID) return false
     stopPlanPolling()
     readController?.abort()
@@ -163,8 +165,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       publish({ loading: false, notice: '返回页面时将自动读取商汤状态。' })
       return false
     }
-    // Host 快照协议已建立且商汤状态已就绪：直接增量读游标，不再重复打专用快照 RPC。
-    if (sync.hasSnapshots() && state.plan) {
+    // 普通切渠道且商汤状态已就绪时直接走增量游标；写操作后 force=true 必须强制拉取最新值。
+    if (!force && sync.hasSnapshots() && state.plan) {
       publish({ loading: false })
       void sync.readHostSnapshots()
       return true
@@ -192,7 +194,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     }
   }
 
-  async function loadManaged(target) {
+  async function loadManaged(target, force = false) {
     const spec = providerById(target)?.snapshot
     if (disposed || !spec) return false
     stopPlanPolling()
@@ -203,13 +205,13 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     const pendingMap = state.pending
     publish({ ...initial(target), ...sharedCards(), busy, pending: pendingMap, loading: !spec.ready(state),
       notice: busy ? state.notice : '' })
-    if (sync.hasSnapshots() && spec.ready(state)) {
+    if (!force && sync.hasSnapshots() && spec.ready(state)) {
       publish({ loading: false })
       void sync.readHostSnapshots()
       return true
     }
     try {
-      const values = await Promise.all(spec.methods.map(method => request(method, { provider: target }, controller.signal)))
+      const values = await Promise.all(spec.methods.map(method => request(method, { provider: target, ...(force ? { live: true } : {}) }, controller.signal)))
       if (disposed || current !== revision || controller.signal.aborted) return false
       const main = values[0]?.snapshot
       if (main?.at === null) {
@@ -265,11 +267,11 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     }
   }
 
-  async function load(target = state.provider, autoBalance = true) {
+  async function load(target = state.provider, autoBalance = true, force = false) {
     if (disposed || !allowed(target)) return false
     if (!sync.hasSnapshots()) sync.resetCursor()
-    if (target === PLAN_PROVIDER_ID) return loadPlan(target)
-    if (providerById(target)?.snapshot) return loadManaged(target)
+    if (target === PLAN_PROVIDER_ID) return loadPlan(target, force)
+    if (providerById(target)?.snapshot) return loadManaged(target, force)
     stopPlanPolling()
     readController?.abort()
     const controller = new AbortController(), current = ++revision
@@ -473,7 +475,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       }
       if (!disposed && state.provider === channel) {
         let reloaded = null
-        if (options.refresh !== false) reloaded = await load(channel, false)
+        if (options.refresh !== false) reloaded = await load(channel, false, true)
         if (!disposed && state.provider === channel) {
           const done = typeof options.message === 'function' ? options.message(result) : options.message || '已应用。'
           publish({ notice: reloaded === false ? `${done}列表更新失败，显示上次结果。` : done })
@@ -487,6 +489,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     } finally {
       writes.delete(controller)
       release()
+      if (!disposed && sync.hasSnapshots()) void sync.readHostSnapshots()
     }
   }
 
@@ -509,7 +512,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         cache.persistCards(state)
         publish({ notice: options.message || '商汤设置已保存。' })
       } else {
-        const refreshed = await loadPlan(PLAN_PROVIDER_ID)
+        const refreshed = await loadPlan(PLAN_PROVIDER_ID, true)
         if (!disposed && state.provider === PLAN_PROVIDER_ID) publish({ notice: refreshed ? options.message || '商汤设置已保存。' : '设置已保存，但模型目录读取未完成。' })
       }
       return true
@@ -519,6 +522,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     } finally {
       writes.delete(controller)
       release()
+      if (!disposed && sync.hasSnapshots()) void sync.readHostSnapshots()
     }
   }
 
@@ -713,7 +717,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
           logins.delete(channel)
           if (state.provider !== channel) return
           publish({ login: null })
-          if (value.success) refreshed = await load(channel, false)
+          if (value.success) refreshed = await load(channel, false, true)
         },
       })
     },

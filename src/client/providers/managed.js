@@ -37,28 +37,33 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
       fromRead([snapshot, models], state) {
         const previous = entry(state) ?? EMPTY_MANAGED
         const { managed, stale } = managedSnapshotFrom({ ...snapshot, models: models?.models, modelSource: models?.source }, previous)
-        return withEntry(state, { ...managed, ready: true, stale: stale || snapshot?.snapshot?.stale === true, error: false })
+        return withEntry(state, { ...managed, ready: true, stale: stale || snapshot?.snapshot?.stale === true, error: false, liveAt: Date.now() })
       },
       apply(get, state) {
         const usage = get('managed.snapshot')
         const models = get('managed.models')
         if (!usage && !models?.value) return {}
         const previous = entry(state) ?? EMPTY_MANAGED
+        const liveAt = previous.liveAt ?? 0
+        const freshUsage = usage && (!liveAt || !Number.isFinite(usage.at) || usage.at >= liveAt) ? usage : null
+        const freshModels = models?.value && (!liveAt || !Number.isFinite(models.at) || models.at >= liveAt) ? models : null
+        if (!freshUsage && !freshModels) return {}
         const { managed } = managedSnapshotFrom({
-          ...(usage?.value ?? previous),
-          accounts: usage?.value?.accounts ?? previous.accounts,
-          models: models?.value?.models,
-          modelSource: models?.value?.source,
+          ...(freshUsage?.value ?? previous),
+          accounts: freshUsage?.value?.accounts ?? previous.accounts,
+          models: freshModels?.value?.models,
+          modelSource: freshModels?.value?.source,
           loginUrl: previous.loginUrl,
         }, previous)
         return {
           ...withEntry(state, {
             ...managed,
-            stale: usage?.stale === true,
-            error: usage?.stale === true && !usage.value,
-            ready: !!usage?.value || previous.ready === true,
+            stale: freshUsage ? freshUsage.stale === true : previous.stale === true,
+            error: freshUsage ? (freshUsage.stale === true && !freshUsage.value) : previous.error === true,
+            ready: !!freshUsage?.value || previous.ready === true,
+            liveAt,
           }),
-          ...(usage && state.provider === id ? { loading: false } : {}),
+          ...(freshUsage && state.provider === id ? { loading: false } : {}),
         }
       },
     },
@@ -245,8 +250,22 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
     [`${id}Login`]() {
       const options = {
         scope: `login:${id}`,
-        progress: `正在准备 ${title} 浏览器登录…`,
+        progress: `正在打开 ${title} 浏览器登录…`,
         message: value => value?.signedIn === true ? `已添加 ${title} 账号。` : `${title} 登录未完成，请重试。`,
+        result(value) {
+          if (value?.signedIn === true && value.id) {
+            patchEntry(cur => ({
+              ...cur,
+              ready: true,
+              enabled: typeof value.enabled === 'boolean' ? value.enabled : cur.enabled,
+              registered: typeof value.registered === 'boolean' ? value.registered : cur.registered,
+              accounts: [
+                ...(cur.accounts ?? []).filter(a => a.id !== value.id),
+                { id: value.id, name: value.name || value.id, uid: value.uid || '', enabled: true, source: 'browser', signedIn: true, plan: '', balance: null, unit: '', windows: [], updatedAt: Date.now(), error: '' },
+              ],
+            }))
+          }
+        },
       }
       const login = mutate('managed.login', { provider: id }, options)
       let polling = true, timer = null
@@ -261,17 +280,17 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
           }
         } catch {}
       }
-      const schedule = () => {
+      const schedule = (delay = 1000) => {
         if (!polling || isDisposed() || typeof setTimeout !== 'function' || typeof clearTimeout !== 'function') return
         timer = setTimeout(async () => {
           loginUrlTimers.delete(timer)
           timer = null
           await fetchUrl()
-          schedule()
-        }, 1500)
+          schedule(1000)
+        }, delay)
         loginUrlTimers.add(timer)
       }
-      schedule()
+      schedule(250)
       return login.finally(() => {
         polling = false
         controller.abort()
@@ -285,6 +304,20 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
         scope: `login:${id}`,
         progress: `正在读取本机 ${title} 登录态…`,
         message: value => value?.signedIn ? `已导入本机 ${title} 账号。` : `未检测到本机 ${title} 登录态。`,
+        result(value) {
+          if (value?.signedIn === true && value.id) {
+            patchEntry(cur => ({
+              ...cur,
+              ready: true,
+              enabled: typeof value.enabled === 'boolean' ? value.enabled : cur.enabled,
+              registered: typeof value.registered === 'boolean' ? value.registered : cur.registered,
+              accounts: [
+                ...(cur.accounts ?? []).filter(a => a.id !== value.id),
+                { id: value.id, name: value.name || value.id, uid: value.uid || '', enabled: true, source: 'local', signedIn: true, plan: '', balance: null, unit: '', windows: [], updatedAt: Date.now(), error: '' },
+              ],
+            }))
+          }
+        },
       })
     },
     [`${id}ImportCredential`](credential) {
@@ -296,6 +329,20 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
         scope: `login:${id}`,
         progress: `正在验证 ${title} 凭据…`,
         message: `已导入 ${title} 账号。`,
+        result(value) {
+          if (value?.signedIn === true && value.id) {
+            patchEntry(cur => ({
+              ...cur,
+              ready: true,
+              enabled: typeof value.enabled === 'boolean' ? value.enabled : cur.enabled,
+              registered: typeof value.registered === 'boolean' ? value.registered : cur.registered,
+              accounts: [
+                ...(cur.accounts ?? []).filter(a => a.id !== value.id),
+                { id: value.id, name: value.name || value.id, uid: value.uid || '', enabled: true, source: 'credential', signedIn: true, plan: '', balance: null, unit: '', windows: [], updatedAt: Date.now(), error: '' },
+              ],
+            }))
+          }
+        },
       })
     },
     [`${id}UpdateAccount`](accountId, nickname, enabled) {

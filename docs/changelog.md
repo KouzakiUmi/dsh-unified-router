@@ -2,6 +2,18 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.5.1（2026-11-20）
+
+### 修复与补齐浏览器 OAuth / 独立窗口登录
+
+- **通用浏览器登录与隔离收割器**（`lib/browser-login.js`）：新增独立临时 Profile Chrome/Edge 启动与 CDP Cookie 收割能力（零第三方依赖），支持多账号隔离登录；找不到 Chromium 时自动回退系统默认浏览器。
+- **四个新渠道全部打通浏览器登录**：
+  - **Coze**：新增 `browser` 登录（打开 `coze.cn` 登录后自动收割 Passport Cookie 并经 `impersonate_coze_user` 签发 10 分钟 PAT，到期自动用 Cookie 后台续签，不再依赖桌面端运行），`parseCredential` 同时支持粘贴 Cookie。
+  - **豆包工作**：改用独立浏览器打开 `doubao.com/chat` 登录后自动收割完整会话 Cookie，修复先前扫码接口直接报错无法打开登录页的问题。
+  - **AStudio**：改用独立浏览器打开 `agent.xfyun.cn/studio-credits`（支持手机验证码 / 微信扫码 / 密码登录），自动换取 3 年期 `modelBearerToken` JWT。
+  - **CodeArts**：OAuth 授权地址生成后自动弹出隔离浏览器完成 PKCE + DPoP 回调。
+- **登录后界面立即刷新**：修复写操作后重读被 Host 快照短路或被 `state.busy` 丢弃的问题；登录、导入、删号与启停后直接拉取实时状态并同步乐观补丁，无需关闭设置页重新进入。
+
 ## 0.5.0（2026-11-20）
 
 ### 模块化底座升级与四个自管多账号新渠道

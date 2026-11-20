@@ -192,6 +192,47 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
     const switches = treeNodes(chTree).filter(n => n.props?.role === 'switch').map(n => n.props['aria-label'])
     assert.ok(switches.includes('AStudio 自动每日签到'))
     assert.ok(switches.includes('AStudio 自动领取奖励'))
+    // 验证：Host 快照协议激活后，登录/导入完成无需关闭设置页即可立即刷新账号列表与已连接状态
+    let snapCursor = 'snap-1'
+    let loggedIn = false
+    const loginRpc = async (method, payload) => {
+      if (method === 'settings.snapshot') {
+        if (payload.cursor === snapCursor) return { ok: true, value: { cursor: snapCursor, entries: null } }
+        return {
+          ok: true,
+          value: {
+            cursor: snapCursor,
+            entries: {
+              'coze/managed.snapshot': { value: { provider: 'coze', enabled: true, registered: loggedIn, authMethods: ['browser', 'local', 'credential'], accounts: loggedIn ? [{ id: 'coze-12345678', name: 'Coze 测试号', uid: 'u-coze', enabled: true, signedIn: true, windows: [] }] : [] }, at: 100, stale: false },
+              'coze/managed.models': { value: { provider: 'coze', models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', enabled: true }], source: loggedIn ? 'remote' : 'fallback' }, at: 100, stale: false },
+            },
+          },
+        }
+      }
+      if (method === 'managed.login') {
+        loggedIn = true
+        snapCursor = 'snap-2'
+        return { ok: true, value: { provider: 'coze', id: 'coze-12345678', signedIn: true, name: 'Coze 测试号', uid: 'u-coze', enabled: true, registered: true } }
+      }
+      if (method === 'managed.snapshot') {
+        assert.equal(payload.snapshot, undefined, '登录后的强制刷新应直接读最新实时状态，不读陈旧快照')
+        return { ok: true, value: { provider: 'coze', enabled: true, registered: true, authMethods: ['browser', 'local', 'credential'], accounts: [{ id: 'coze-12345678', name: 'Coze 测试号', uid: 'u-coze', enabled: true, signedIn: true, windows: [] }] } }
+      }
+      if (method === 'managed.models') {
+        return { ok: true, value: { provider: 'coze', models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', enabled: true }], source: 'remote' } }
+      }
+      return { ok: true, value: {} }
+    }
+    const loginStore = module.createRouterStore(loginRpc, 'coze')
+    try {
+      await loginStore.readHostSnapshots()
+      assert.equal(loginStore.getSnapshot().managed.coze.accounts.length, 0)
+      await loginStore.cozeLogin()
+      const after = loginStore.getSnapshot().managed.coze
+      assert.equal(after.accounts.length, 1, '登录后无需关闭设置页应立即刷新出新账号')
+      assert.equal(after.registered, true, '登录后应立即更新已注册状态')
+      assert.equal(after.modelSource, 'remote', '登录后应立即刷新远端模型目录')
+    } finally { loginStore.dispose() }
   } finally { store.dispose(); react.dispose() }
 })
 
