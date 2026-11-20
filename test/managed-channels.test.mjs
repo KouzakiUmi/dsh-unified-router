@@ -324,6 +324,37 @@ test('自管管理器异步注册竞态与多账号故障切换：删号/dispose
   } finally { manager.dispose() }
 })
 
+test('豆包工作：兼容额度备用结构及任务状态，只读取不领奖', async () => {
+  const usage = await doubaoworkSpec.fetchUsage({
+    getCredential: async () => ({ cookie: 'sessionid=fixture' }),
+    saveCredential: async () => true,
+    fetch: async url => {
+      const path = new URL(url).pathname
+      if (path.includes('/account/info/')) return Response.json({ data: { user_id_str: '123' } })
+      if (path.endsWith('/launch')) return Response.json({ data: { ug_campaign_info: { campaign_group_code: 'fixture' } } })
+      if (path.endsWith('/summary/')) return Response.json({}, { status: 503 })
+      if (path.endsWith('/overview/')) return Response.json({ data: { quota_package_section: { window_limit_groups: [{
+        window_limits: [{ window_type: 3, total_amount: '2,100', used_amount: '1,700' }],
+      }] } } })
+      assert.ok(path.endsWith('/detail/'), '不提交任何领取或完成请求')
+      return Response.json({ data: { tasks: [{ task_status: 2 }, { task_status: 3 }, { task_status: 1, reward_mode: 2 }] } })
+    },
+  }, {})
+  assert.equal(usage.balance, 400)
+  assert.equal(usage.windows[0].name, '活动赠送')
+  assert.equal(usage.windows[1].display, '待领取 2 项 · 已领取 1 项')
+  assert.equal(doubaoworkSpec.completeTasks, undefined)
+})
+
+test('Coze：额度业务失败不撤销登录状态，明确鉴权失败才标过期', async () => {
+  const run = code => cozeSpec.fetchUsage({
+    getCredential: async () => ({ patToken: 'cztei_fixture', ownerId: 'fixture' }),
+    fetch: async () => Response.json({ code }),
+  }, {})
+  assert.deepEqual(await run(500), { error: 'upstream_error' })
+  assert.deepEqual(await run(700012006), { signedIn: false, error: 'auth_expired' })
+})
+
 test('Coze：实时模型目录与倍率/多模态能力解析、凭据收敛', async () => {
   const models = parseCozeModelList({
     data: {
@@ -414,4 +445,18 @@ test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）
   assert.equal(ck.outcome, 'claimed')
   assert.equal(ck.credit, 200)
   assert.ok(hitUrls.some(u => u.includes('/v1/ops/delivery?channel=IDE')))
+})
+
+test('CodeArts：已领取不重复提交，空列表和查询失败分别处理', async () => {
+  const run = data => codeartsSpec.checkin({
+    getCredential: async () => ({ accessKey: 'AK', secretKey: 'SK', securityToken: 'ST', expiresAt: Date.now() + 3_600_000 }),
+    fetch: async (url) => {
+      const path = new URL(url).pathname
+      assert.ok(!path.endsWith('/claim') && !path.endsWith('/confirm'))
+      return path.endsWith('/delivery') ? Response.json(data) : Response.json({ code: 0 })
+    },
+  }, {})
+  assert.equal((await run({ code: 0, data: { items: [{ type: 'USER_LOGIN', status: 'CLAIMED', claimable: true }] } })).outcome, 'already-claimed')
+  assert.deepEqual(await run({ code: 0, data: { items: [] } }), { outcome: 'inactive', unsubmitted: true })
+  assert.deepEqual(await run({ code: 500, data: { items: [] } }), { outcome: 'failed', unsubmitted: true })
 })

@@ -195,6 +195,52 @@ function makeManager(t, { spec, fetch, llm, credentials, loadLlmAdapter, modelSe
 }
 
 // ---- 基础：无 Key → fallback，不注册 ---------------------------------------
+test('限速快照随当前 Key，换 Key 后忽略旧适配器的迟到事件', async t => {
+  const adapters = []
+  const hits = []
+  const manager = createApiKeyManager(context(credentialsFixture(), { llm: llmStub() }), specStub(), {
+    ...await tempPaths(t), env: {}, fetch: fetchStub(() => undefined).fetch,
+    modelSettings: modelSettingsStub(), onRateLimit: hit => hits.push(hit),
+    loadLlmAdapter: async () => ({ onRateLimit, providerId }) => {
+      adapters.push(onRateLimit)
+      return { adapter: {}, providerIds: [providerId] }
+    },
+  })
+  t.after(() => manager.dispose())
+  const call = (method, payload) => manager.call(`apikey.${method}`, { provider: 'agnes', ...payload })
+  await call('setKey', { apiKey: KEY_A })
+  await call('setEnabled', { enabled: true })
+  const hit = { until: Date.now() + 60_000, reason: 'tpm', estimated: true }
+  await adapters[0](hit)
+  await adapters[0]({ ...hit, until: hit.until - 1 })
+  assert.deepEqual((await call('snapshot')).rateLimit, hit)
+  await call('setKey', { apiKey: KEY_B })
+  await adapters[0]({ ...hit, until: hit.until + 1000 })
+  assert.equal((await call('snapshot')).rateLimit, null)
+  assert.deepEqual(hits, [hit])
+})
+
+test('重启后首次快照恢复已开启的 API Key 提供方', async t => {
+  const files = await tempPaths(t)
+  const creds = credentialsFixture()
+  const make = llm => createApiKeyManager(context(creds, { llm }), specStub(), {
+    ...files, env: {}, fetch: fetchStub(() => undefined).fetch,
+    modelSettings: modelSettingsStub(), loadLlmAdapter: adapterLoader(),
+  })
+  const payload = { provider: 'agnes' }
+  const first = make(llmStub())
+  try {
+    await first.call('apikey.setKey', { ...payload, apiKey: KEY_A })
+    await first.call('apikey.setEnabled', { ...payload, enabled: true })
+  } finally { first.dispose() }
+  const llm = llmStub()
+  const restarted = make(llm)
+  t.after(() => restarted.dispose())
+  assert.equal((await restarted.collectSnapshot()).registered, true)
+  assert.equal((await restarted.collectSnapshot()).registered, true)
+  assert.equal(llm.registrations.length, 1)
+})
+
 test('无 Key：目录回落 fallback、不注册、余额为 null', async t => {
   const files = await tempPaths(t)
   const llm = llmStub()

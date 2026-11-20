@@ -40,6 +40,7 @@ fs.copyFileSync(path.join(root, 'vendor/channel-pack/qoder-auth-wasm.wasm'), pat
 const clientModules = [
   '../../lib/sensenova-params.js', // 商汤参数与 compat 白名单
   '../../lib/model-catalog.js',
+  '../../lib/apikey-quota-projection.js',
   'core.js',                 // 共享常量、输入校验、wire 归一化
   'store/pending.js',        // 局部非阻塞状态锁
   'store/cache.js',          // 首屏轻量恢复缓存

@@ -185,6 +185,8 @@ export function apikeySnapshotFrom(value) {
     models: rows.filter(model => typeof model?.id === 'string' && model.id.length <= 256 && model.id).slice(0, 512)
       .map(model => ({ id: model.id, name: text(model.name), enabled: model.enabled !== false, ...planModelFields(model) })),
     balance: apikeyBalanceFrom(source.balance),
+    quota: projectApiKeyQuota(source.quota),
+    rateLimit: projectApiKeyRateLimit(source.rateLimit),
   }
 }
 // 重进设置页时恢复的渠道快照：按注册表里的渠道 id 逐个重建，未知 id 丢弃。
@@ -290,6 +292,7 @@ export function managedSnapshotFrom(value, previous) {
         windows: old.windows.length ? old.windows : account.windows,
         balance: old.balance !== null ? old.balance : account.balance,
         unit: old.unit || account.unit,
+        updatedAt: old.updatedAt,
       }
     }
     return account
@@ -398,7 +401,8 @@ export function checkinEntry(state, provider, accountId) {
   if (current.date !== date) return null
   const account = current.accounts?.find(account => account.accountId === accountId)
   const kind = account?.kind
-  const label = Object.hasOwn(CHECKIN_LABELS, kind) ? CHECKIN_LABELS[kind] : null
+  const label = provider === 'codearts' && kind === 'inactive' ? '未查到今日签到记录'
+    : Object.hasOwn(CHECKIN_LABELS, kind) ? CHECKIN_LABELS[kind] : null
   if (!label) return null
   return { tag: [label, kind === 'claimed' || kind === 'already-claimed' ? 'success' : 'warn'], locked: account.retryable !== true }
 }

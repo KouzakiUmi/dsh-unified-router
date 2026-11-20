@@ -11,7 +11,15 @@ function managedRemaining(window) {
 
 const SOURCE_LABELS = { local: '本机导入', credential: '凭据导入', browser: '浏览器登录' }
 
-export function managedChannel({ id, title, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false }) {
+function managedConnectionStatus(current) {
+  const accounts = current.accounts ?? []
+  const active = accounts.filter(account => account.enabled !== false)
+  const connected = active.filter(account => account.signedIn).length
+  return { connected, label: connected ? `已连接 ${connected} 个` : !accounts.length ? '待添加账号'
+    : !active.length ? '账号已停用' : '账号需重新登录' }
+}
+
+export function managedChannel({ id, title, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false, accountLinks = [] }) {
   const entry = state => state.managed?.[id]
   const withEntry = (state, next) => ({ managed: { ...state.managed, [id]: next } })
 
@@ -71,16 +79,16 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
       const current = entry(state)
       if (!current?.ready && !(current?.accounts?.length)) return null
       const accounts = current.accounts ?? []
-      const signedIn = accounts.filter(account => account.signedIn && account.enabled !== false).length
+      const { connected: signedIn, label: connectionLabel } = managedConnectionStatus(current)
       const closed = current.enabled === false
-      const label = closed ? '渠道已关闭' : signedIn ? (current.registered ? '渠道运行中' : '已连接') : '待添加账号'
+      const label = closed ? '渠道已关闭' : signedIn ? (current.registered ? '渠道运行中' : '已连接 · 待注册') : connectionLabel
       return {
         closed,
         accounts: signedIn,
         totalAccounts: accounts.length,
         models: (current.models ?? []).length,
         label,
-        tone: !closed && signedIn && !accounts.some(account => account.error) ? 'success' : 'warn',
+        tone: !closed && current.registered && signedIn && !accounts.some(account => account.error && account.error !== 'upstream_error') ? 'success' : 'warn',
       }
     },
     accounts(state) {
@@ -100,6 +108,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
           methods.includes('local') && { label: '导入本机登录', call: [`${id}ImportLocal`], primary: !methods.includes('browser') },
           methods.includes('browser') && { label: '浏览器登录', call: [`${id}Login`], primary: true },
           methods.includes('credential') && { label: '粘贴凭据', call: ['toggleImportForm', id] },
+          ...accountLinks,
         ],
         rows: current.accounts.map(account => {
           const name = account.name || account.uid || account.id
@@ -135,7 +144,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
                 const fraction = managedRemaining(window)
                 return {
                   label: window.name, fraction,
-                  value: fraction === null ? window.balance : Math.round(fraction * 100),
+                   value: fraction === null ? window.display || window.balance : Math.round(fraction * 100),
                   unit: fraction === null ? window.unit : '% 剩余',
                   notes: [
                     window.amount !== null && `已用 ${displayNumber(window.amount)} ${window.unit}`.trim(),
@@ -186,7 +195,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
     },
     channel(state) {
       const current = entry(state) ?? EMPTY_MANAGED
-      const connected = current.accounts.some(account => account.signedIn && account.enabled !== false)
+      const { connected, label } = managedConnectionStatus(current)
       return [
         {
           id: 'models', name: '模型提供方',
@@ -196,7 +205,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
         },
         {
           id: 'accounts', name: '账号连接',
-          tags: [[connected ? `已连接 ${current.accounts.filter(a => a.signedIn).length} 个` : '待添加账号', connected ? 'success' : undefined]],
+          tags: [[current.ready || current.accounts.length ? label : '待读取', connected ? 'success' : undefined]],
           actions: [{ label: '管理账号', panel: 'accounts' }],
         },
       ]
@@ -379,7 +388,7 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
           const outcome = text(value?.outcome, 40)
           if (outcome === 'claimed') return `签到成功${typeof value?.credit === 'number' ? `，领取 ${value.credit} 积分` : ''}。`
           if (outcome === 'done' || outcome === 'already-claimed') return '今日已签到。'
-          if (outcome === 'inactive') return '今日签到活动未开启。'
+           if (outcome === 'inactive') return id === 'codearts' ? '未查到今日签到记录。' : '今日签到活动未开启。'
           if (outcome === 'ineligible') return '当前账号暂不支持签到。'
           if (outcome === 'pending') return '签到待确认。'
           return '签到未完成。'

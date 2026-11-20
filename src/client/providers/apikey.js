@@ -8,6 +8,39 @@ function apikeyMoney(value, unit) {
   return typeof value === 'number' ? `${unit === 'CNY' ? '¥' : '$'}${value.toFixed(2)}` : '—'
 }
 
+const apiQuotaLabels = {
+  'weekly-points': '周积分', 'window-points': '5 小时积分', 'monthly-credits': '月度 Credits',
+  'window-credits': '5 小时 Credits', 'pack-credits': '积分包 Credits',
+  'weekly-requests': '每周请求数', 'window-requests': '5 小时请求数',
+}
+
+function apiQuotaRows(quota, consoleUrl) {
+  if (!quota) return []
+  if (quota.status !== 'ready') return [{ id: 'console-quota', name: '控制台额度', href: consoleUrl,
+    meta: { 'needs-console': '未配置控制台会话', unavailable: '暂无额度数据', expired: '控制台会话已过期', error: '读取失败' }[quota.status] }]
+  return [
+    ...quota.windows.map(row => ({ id: row.id, name: apiQuotaLabels[row.id],
+      meta: `${row.remaining === null ? `已用 ${displayNumber(row.used)}` : `剩余 ${displayNumber(row.remaining)}`}${row.limit === null ? '' : ` / ${displayNumber(row.limit)}`}` })),
+    ...(quota.balance === null ? [] : [{ id: 'console-balance', name: '控制台余额', meta: apikeyMoney(quota.balance, 'CNY') }]),
+  ]
+}
+
+function ApiKeyCooldown({ limit }) {
+  const secondsLeft = () => Math.max(0, Math.ceil((limit.until - Date.now()) / 1000))
+  const [seconds, setSeconds] = React.useState(secondsLeft)
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      const next = secondsLeft()
+      setSeconds(next)
+      if (!next) clearInterval(timer)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [limit.until])
+  if (!seconds) return '可重试'
+  const label = limit.reason === 'rpm' ? '请求频率受限（RPM）' : limit.reason === 'tpm' ? 'Token 速率受限（TPM）' : '请求限速'
+  return h('span', { role: 'timer' }, `${label} · ${limit.estimated ? '预计' : '剩余'} ${seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ` : ''}${seconds % 60} 秒`)
+}
+
 export function apiKeyChannel({ id, title, host }) {
   const entry = state => state.apikeys?.[id]
   const withEntry = (state, next) => ({ apikeys: { ...state.apikeys, [id]: next } })
@@ -82,7 +115,10 @@ export function apiKeyChannel({ id, title, host }) {
         { id: 'key', name: 'API Key', meta: host,
           tags: [[current?.hasApiKey ? '已配置' : '待配置', current?.hasApiKey ? 'success' : undefined]],
           form: { kind: 'key', call: [id + 'SetKey'] } },
-        ...(usage ? [{ id: 'usage', name: '账户用量',
+        ...(current?.rateLimit?.until > Date.now() ? [{ id: 'rate-limit', name: '限速提醒',
+          meta: h(ApiKeyCooldown, { key: current.rateLimit.until, limit: current.rateLimit }) }] : []),
+        ...apiQuotaRows(current?.quota, APIKEY_CONSOLES[id]),
+        ...(usage && current?.quota?.status !== 'ready' ? [{ id: 'usage', name: '账户用量',
           meta: usage.error ? undefined : `已用 ${apikeyMoney(usage.used, usage.unit)}${usage.limit !== null ? ` / ${apikeyMoney(usage.limit, usage.unit)}` : ''}`,
           tags: [usage.error && ['读取失败', 'warn'], usage.unlimited && ['无限额度', 'info']] }] : []),
       ]

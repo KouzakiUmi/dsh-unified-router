@@ -203,6 +203,25 @@ test('设置页：卡片状态、模型分区与渠道分区按快照呈现', as
   assert.equal(providerSwitch.props.disabled, true, '没有 Key 时提供方开关不可用')
 })
 
+test('渠道展示控制台额度和可到期的限速提醒', async () => {
+  const { module, react } = loadClient(); const host = hostFixture(); let Settings
+  host.state.unisound = snapshotOf('unisound', {
+    quota: { status: 'ready', windows: [{ id: 'window-points', remaining: 300, limit: 500 }] },
+    rateLimit: { until: Date.now() + 60_000, reason: 'tpm', estimated: true },
+  })
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req) { return host.call(req.method, req.payload) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  render(); await tick()
+  treeNodes(render()).find(n => n.props['aria-label'] === '切换到 云知声').props.onClick(); await tick(); render()
+  treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
+  const screen = render()
+  assert.match(textOf(screen), /5 小时积分\|剩余 300 \/ 500/)
+  const cooldown = treeNodes(screen).find(n => n.type?.name === 'ApiKeyCooldown')
+  assert.equal(cooldown.props.limit.reason, 'tpm')
+  assert.equal(cooldown.props.limit.estimated, true)
+})
+
 test('无限额度与读取失败的用量行', async () => {
   const { module, react } = loadClient(); const host = hostFixture(); let Settings
   host.state.agnes = snapshotOf('agnes', { balance: { used: 0, limit: null, unlimited: true, unit: 'USD' } })

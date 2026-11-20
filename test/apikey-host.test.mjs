@@ -246,6 +246,18 @@ test('balance 投影三种形状：null / {error:true} / 正常值', async () =>
   } finally { f.dispose() }
 })
 
+test('额度与限速快照仅保留允许的业务字段', () => {
+  const value = publicResult('apikey.snapshot', {
+    provider: 'unisound', quota: { status: 'ready', windows: [
+      { id: 'weekly-points', used: 0, limit: 2500, cookie: 'NEVER_DISPLAY' },
+      { id: 'NEVER_DISPLAY', remaining: 100 },
+    ] }, rateLimit: { until: 1_800_000_000_000, reason: 'tpm', estimated: true, token: 'NEVER_DISPLAY' },
+  })
+  assert.deepEqual(value.quota.windows, [{ id: 'weekly-points', used: 0, limit: 2500, remaining: 2500 }])
+  assert.deepEqual(value.rateLimit, { until: 1_800_000_000_000, reason: 'tpm', estimated: true })
+  assert.doesNotMatch(JSON.stringify(value), /NEVER_DISPLAY/)
+})
+
 test('模型列表过滤非法 id、截断到 512、脏字段不外泄', () => {
   const models = Array.from({ length: 520 }, (_, i) => modelRow(`m-${i}`))
   models.push(modelRow('  '), modelRow('__proto__'), modelRow('x'.repeat(300)), { name: '无 id' }, null)

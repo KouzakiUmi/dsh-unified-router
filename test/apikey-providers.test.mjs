@@ -1,6 +1,42 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { APIKEY_PROVIDERS, APIKEY_PROVIDER_IDS, apikeyProvider } from '../lib/apikey-providers.js'
+import { detectApiKeyRateLimit, readApiKeyQuota } from '../lib/apikey-quota.js'
+import { projectApiKeyQuota } from '../lib/apikey-quota-projection.js'
+
+test('控制台额度使用独立凭据，按渠道投影且丢弃敏感字段', async () => {
+  assert.deepEqual(await readApiKeyQuota('unisound', () => assert.fail('未配置不发请求'), undefined, {}), { status: 'needs-console' })
+  const u = await readApiKeyQuota('unisound', async ({ url, headers }) => {
+    assert.equal(url, 'https://maas.unisound.com/manager/u-plan/subscription/current')
+    assert.deepEqual(headers, { cookie: 'session=fake' })
+    return { errorCode: '0', result: { weeklyPointsTotal: 2500, weeklyPointsUsed: 100, window5hLimit: 500, window5hRemain: 300, apiKey: 'NEVER_DISPLAY' } }
+  }, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'session=fake' })
+  assert.deepEqual(u.windows.map(row => [row.id, row.remaining]), [['window-points', 300], ['weekly-points', 2400]])
+  assert.doesNotMatch(JSON.stringify(projectApiKeyQuota(u)), /NEVER_DISPLAY|session/)
+  const a = await readApiKeyQuota('agnes', async ({ url, headers }) => {
+    assert.equal(new URL(url).origin, 'https://platform-backend.agnes-ai.cn')
+    assert.equal(headers.authorization, 'Bearer console-fixture')
+    if (url.endsWith('/credits')) return { code: 200, data: { plan_quota_credits: 200, plan_balance_credits: 150 } }
+    if (url.endsWith('/balance')) return { code: 200, data: { available_total_minor: 1234, currency: 'cny' } }
+    throw new Error('isolated failed resource')
+  }, undefined, { UNIFIED_ROUTER_AGNES_CONSOLE_TOKEN: 'console-fixture' })
+  assert.equal(a.balance, 12.34)
+  assert.equal(a.windows[0].remaining, 150)
+  const denied = await readApiKeyQuota('unisound', async () => ({ errorCode: '1', errorMsg: '用户未登录或session超时' }), undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'session=fake' })
+  assert.deepEqual(denied, { status: 'expired' })
+})
+
+test('限速区分 RPM/TPM、账单耗尽、明确等待时间与估算', async () => {
+  const now = 1_800_000_000_000
+  const rpm = Response.json({ base_resp: { status_code: 100501 } })
+  assert.deepEqual(await detectApiKeyRateLimit('unisound', rpm, now), { reason: 'rpm', until: now + 60_000, estimated: true })
+  assert.equal((await rpm.json()).base_resp.status_code, 100501, '观察不消费原始响应')
+  const tpm = Response.json({ base_resp: { status_code: 100502 } }, { status: 429, headers: { 'Retry-After': '12' } })
+  assert.deepEqual(await detectApiKeyRateLimit('unisound', tpm, now), { reason: 'tpm', until: now + 12_000, estimated: false })
+  const quota = Response.json({ error: { code: 'insufficient_quota' } }, { status: 429 })
+  assert.equal(await detectApiKeyRateLimit('agnes', quota, now), null)
+  assert.equal(await detectApiKeyRateLimit('unisound', new Response('data: test\n\n', { headers: { 'Content-Type': 'text/event-stream' } }), now), null)
+})
 
 // API Key 渠道规格（docs/APIKEY-CHANNELS.md §2）：端点、目录解析、兜底表、
 // 思考方言与余额解析。测试全程离线，只验证纯函数形状与文档给出的事实。
@@ -147,7 +183,7 @@ test('Agnes balance：两个请求、美分换算、unlimited 阈值、缺字段
     agnes.balance.parse([{ hard_limit_usd: 10_000_000 }, { total_usage: 100 }]),
     { used: 1, limit: null, unlimited: true, unit: 'USD' },
   )
-  assert.equal(agnes.balance.parse([{ hard_limit_usd: 20_000_000 }, { total_usage: 0 }]).unlimited, true)
+  assert.equal(agnes.balance.parse([{ hard_limit_usd: 100_000_000 }, { total_usage: 0 }]), null, '兼容账单占位值不是实时额度')
   assert.equal(agnes.balance.parse([{ hard_limit_usd: 9_999_999 }, { total_usage: 0 }]).unlimited, false)
   for (const bad of [
     undefined, null, [], [{}, {}], [null, null],

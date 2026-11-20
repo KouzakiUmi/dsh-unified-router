@@ -40,6 +40,20 @@ test('推荐按发版批次和同渠道性能倍率筛选，保留能力有差�
   assert.equal(modelRecommendationExclusions(qoder(0.5), 'loomy').size, 0, 'Qoder 的别名不外溢')
 })
 
+test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型号标旧', () => {
+  for (const [provider, old, next, other] of [
+    ['astudio', 'xopdsv4flash0731in', 'xdeepseek-flash-in', 'xopdeepseekv4pro0813'],
+    ['doubaowork', 'person-kimi-k3-261111', 'person-kimi-k3-1-pro-261111', 'person-kimi-k3-1-pro-highspeed-261111'],
+    ['coze', 'deepseek-v4-flash-0731', 'deepseek-v4.1-flash-selected', 'deepseek-v4-pro-0813'],
+    ['codearts', 'openpangu-2.0-pro', 'openpangu-2.1-pro', 'openpangu-2.0-flash'],
+    ['agnes', 'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-2.5-pro'],
+  ]) {
+    const rows = [old, next, other].map(id => ({ id, name: '同一显示名' }))
+    assert.deepEqual([...modelRecommendationExclusions(rows, provider)], [[old, { kind: 'older', alternative: next }]])
+    assert.equal(modelRecommendationExclusions([{ id: old }], provider).size, 0)
+  }
+})
+
 test('独立后端渠道的精选列表、启停恢复与持久化', async t => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-router-test-'))
   const kernel = new URL('./kernel.mjs', import.meta.url).href

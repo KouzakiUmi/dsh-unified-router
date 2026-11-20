@@ -16,7 +16,7 @@ Agnes 与云知声共用同一套实现，差异只在 `lib/apikey-providers.js`
 | | `agnes-2.5-pro-theta`：目录里存在，规格文档未给出 → 上下文与输出按未知（0） | 实测目录 |
 | 非聊天模型 | `agnes-image-*`、`agnes-video-*` 出现在同一目录，聊天适配器必须过滤掉 | 实测目录 |
 | 思考 | 默认不思考；`reasoning_effort: "none"` 保持关闭；`low` 起开启思考并返回 `reasoning_content`。`thinking:{type:"disabled"}` 实测**关不掉**思考，不使用 | 实测（agnes-3.0-flash） |
-| 用量 | 站点是 New API 分支：`GET /v1/dashboard/billing/subscription`（`hard_limit_usd`）与 `GET /v1/dashboard/billing/usage`（`total_usage`，OpenAI 账单口径：美分）可用 | 实测返回 200；`total_usage` 单位按 OpenAI 口径推定，实测值为 0 |
+| 用量 | 兼容账单接口返回的巨大名义上限与零用量组合按无数据处理；套餐窗口、积分包和余额由国内站控制台接口读取 | 兼容账单已实测；控制台解析基于前端协议与离线样例 |
 | 不可用 | `/api/user/self`、`/api/usage/token` 被 Cloudflare 挡（403），不使用 | 实测 |
 
 ### 云知声 MaaS
@@ -27,7 +27,13 @@ Agnes 与云知声共用同一套实现，差异只在 `lib/apikey-providers.js`
 | 目录 | `GET /anthropic/v1/models`（`x-api-key` 或 Bearer），返回 `{data:[{id, display_name, context_window, max_output}], has_more, last_id}`，支持 `limit`/`after_id` 分页 | 官方文档，未用真实 Key 实测 |
 | 模型 | Unisound：`u2-flash`、`u2`、`u2-med`、`u2-radimed`；另有 DeepSeek、豆包、混元、MiMo、Kimi、GLM、MiniMax、Qwen 等第三方模型，同一 Key 调用 | 官方文档 |
 | 思考 | `u2`、`u2-flash`：`reasoning_effort` 取 `none/minimal/low/medium/high/xhigh`，默认 `high`，`max` 映射为 `xhigh`；`u2-flash` 产品页另写 `none/low/high/max` 四档。`u2-radimed` 默认关闭且不支持开启 | 官方文档 |
-| 余额 | 官方文档没有公开余额接口 | 已查文档范围 |
+| 余额 | 推理 API Key 无公开余额接口；控制台会话可读取 U Plan 的 5 小时与每周积分 | [U Plan 订阅概要](https://maas.unisound.com/docs/token-plan/overview)、控制台前端协议与离线样例 |
+
+### 控制台额度与限速提醒
+
+- 在宿主启动环境中配置 `UNIFIED_ROUTER_AGNES_CONSOLE_TOKEN`（Agnes 国内站控制台 Bearer 会话）或 `UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE`（云知声控制台 Cookie）。推理仍使用原 API Key；控制台会话只发往对应固定域名，读取请求禁止重定向。
+- 设置页「渠道」展示读取到的控制台额度。会话缺失或失效时显示对应状态及控制台入口；额度状态不改变推理注册或模型开关。
+- 推理命中 HTTP 429 后显示限速倒计时，优先用 `Retry-After`，缺失时估算 60 秒。云知声 JSON 业务码 `100501` / `100502` 分别显示 RPM / TPM，已识别的余额或套餐耗尽不生成倒计时。提醒不自动重试，也不拦截请求。
 
 ## 2. 数据结构
 

@@ -10,7 +10,8 @@ function renderTags(tags = []) {
 
 function renderActions(actions = [], ui, scope) {
   const locked = scope ? (ui.loading || ui.isPending(scope)) : ui.disabled
-  return actions.filter(Boolean).map(({ label, call, panel, open, primary: main, danger: destructive, disabled, accessible }) => {
+  return actions.filter(Boolean).map(({ label, call, panel, open, href, primary: main, danger: destructive, disabled, accessible }) => {
+    if (href && /^https:\/\//.test(href)) return h('a', { key: label, href, target: '_blank', rel: 'noopener noreferrer', className: 'eac-button' }, label)
     const run = panel ? () => ui.setPanel(panel, open) : () => ui.act(...call)
     const makeButton = main ? primary : destructive ? danger : button
     return makeButton(label, run, locked || disabled, { key: label, 'aria-label': accessible })
@@ -303,7 +304,7 @@ function ChannelPanel(rows, ui, provider, state) {
         key, name: row.name, meta: row.meta, tags: renderTags(row.tags),
         switchControl: row.toggle ? Switch({ checked: row.enabled ?? false, disabled: rowDisabled || row.enabled === undefined,
           label: row.toggleLabel || row.name, onChange: () => ui.act(...row.toggle) }) : undefined,
-        controls: renderActions(row.actions, ui, scope),
+        controls: row.href ? h('a', { href: row.href, target: '_blank', rel: 'noopener noreferrer' }, '打开控制台') : renderActions(row.actions, ui, scope),
         moreLabel: row.form ? '配置' : undefined, expanded: ui.more[key] === true,
         onToggle: () => ui.act('toggleMore', key), detail: row.form && renderForm(row.form, ui),
       })

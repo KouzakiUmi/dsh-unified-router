@@ -5,5 +5,5 @@ export const doubaowork = managedChannel({
   credentialHint: '粘贴含 sessionid / sessionid_ss 的豆包 Cookie 字符串',
   checkin: false,
   claimRewards: false,
-  completeTasks: true,
+  accountLinks: [{ label: '打开豆包工作', href: 'https://www.doubao.com/chat' }],
 })
