@@ -1,6 +1,6 @@
 {
   "name": "dsh-unified-router",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "main": "lib/web-host.js",
   "license": "MIT",
@@ -49,6 +49,7 @@
     "docs/DESIGN-STANDARDS.md",
     "docs/APIKEY-CHANNELS.md",
     "docs/MANAGED-CHANNELS.md",
+    "docs/MODEL-SPECS.md",
     "docs/QODER-CLI.md"
   ],
   "exports": {

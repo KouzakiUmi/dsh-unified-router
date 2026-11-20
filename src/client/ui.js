@@ -27,20 +27,34 @@ export function paramSummary(value) {
  * - 输出上限：不超过模型的 maxTokens；模型没报就不显示这一组
  * - 思考深度：只列模型 efforts 里真实存在的档位
  */
-// 官方 Qoder 客户端的上下文窗口就是固定三档（截图核实）：200K / 400K / 1M。
+// 精简常用档位（各最多 4 档，去掉无意义小档）：
+// - 上下文：200K / 400K / 500K / 1M（若模型上限本身是 256K 或 128K 则保留其自身顶档）
+// - 最大输出：64K 起（64K / 128K / 256K / 384K）
+// 显示名与模型实际接受的数字分离：如 1_000_000 与 1_048_576 均绑定到「1M」按钮。
 export const CONTEXT_TIERS = Object.freeze([
-  { tokens: 200_000, label: '200K' },
-  { tokens: 400_000, label: '400K' },
-  { tokens: 1_000_000, label: '1M' },
+  { tokens: 200_000, label: '200K', min: 192_000, max: 210_000 },
+  { tokens: 400_000, label: '400K', min: 390_000, max: 420_000 },
+  { tokens: 500_000, label: '500K', min: 480_000, max: 530_000 },
+  { tokens: 1_000_000, label: '1M', min: 950_000, max: 1_100_000 },
 ])
+// 输出档位全集（64K 起，支持到 MiniMax 512K 与 Kimi 1M）；展示时按模型官方上限与渠道硬上限精选 1–4 档。
 export const OUTPUT_TIERS = Object.freeze([
-  { tokens: 65536, label: '64K' },
-  { tokens: 131072, label: '128K' },
-  { tokens: 262144, label: '256K' },
-  { tokens: 393216, label: '384K' },
+  { tokens: 65_536, label: '64K', min: 60_000, max: 67_000 },
+  { tokens: 131_072, label: '128K', min: 120_000, max: 135_000 },
+  { tokens: 262_144, label: '256K', min: 245_000, max: 268_000 },
+  { tokens: 393_216, label: '384K', min: 375_000, max: 405_000 },
+  { tokens: 524_288, label: '512K', min: 500_000, max: 560_000 },
+  { tokens: 1_048_576, label: '1M', min: 950_000, max: 1_100_000 },
+])
+const EXTRA_DISPLAY_TIERS = Object.freeze([
+  { label: '128K', min: 120_000, max: 136_000 },
+  { label: '256K', min: 245_000, max: 268_000 },
+  { label: '32K', min: 30_000, max: 33_500 },
+  { label: '16K', min: 15_000, max: 17_000 },
 ])
 // 各渠道的档位取值并不统一，这里必须全部认：
 // - Loomy/Qoder 是 none..max 的强度档；
+// - TRAE 是 light / high / extra_high；
 // - Raccoon 老模型是 on/off 两态（见 raccoonThinkingExtraBody）；
 // - Raccoon 新目录用托管档位 level_1..level_5（名字与
 //   `raccoon-product.ts` 的 RACCOON_THINKING_LEVEL_NAMES 保持一致，两处都要有）。
@@ -50,26 +64,44 @@ export const EFFORT_LABELS = Object.freeze({
   level_1: '极少', level_2: '低', level_3: '中', level_4: '高', level_5: '最大',
 })
 export function formatTokens(n) {
-  const standard = CONTEXT_TIERS.find(tier => tier.tokens === n)
-  if (standard) return standard.label
-  if (n >= 1048576) return `${Math.round(n / 1048576 * 10) / 10}M`
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return String(n ?? '')
+  for (const tier of [...CONTEXT_TIERS, ...OUTPUT_TIERS, ...EXTRA_DISPLAY_TIERS]) {
+    if (n >= tier.min && n <= tier.max) return tier.label
+  }
+  if (n >= 950_000) return `${Math.round(n / 1_000_000 * 10) / 10}M`
   if (n >= 1024 && n % 1024 === 0) return `${n / 1024}K`
   if (n >= 1000 && n % 1000 === 0) return `${n / 1000}K`
+  if (n >= 10_000) return `${Math.round(n / 1000)}K`
   return Number(n).toLocaleString('en-US')
 }
 /**
- * 只保留不超过上限的档位。
- *
- * 上限未知时**不返回空**：很多渠道（如 Loomy）上游根本不报输出上限，
- * 这时给全部标准档位让用户自己挑——这正是「拉不到就手动设」的用途，
- * 空着一组反而让用户无从设置。
+ * 将常用档位绑定到该模型实际可接受的数值：
+ * - 上限落在某档位容差区间内（如 1_048_576 与 1_000_000 都命中 1M、64_000 命中 64K）时，
+ *   按钮保留干净显示名（1M / 64K），但真实值绑定为模型上限 `ceiling`；
+ * - 若模型上限恰好在两档之间（如 256K / 262_144），将模型上限补为顶档（显示 256K）；
+ * - 其余高于上限的档位隐藏；上限未知且 allowUnknown=true 时返回全部 4 个核心档位。
  */
 export function tiersUnder(all, ceiling, allowUnknown = false) {
   if (typeof ceiling !== 'number' || ceiling <= 0) return allowUnknown ? all : []
-  const fitting = all.filter(t => t.tokens <= ceiling)
-  // 标准档位一个都放不下时（例如上限 63999），直接用模型自己的上限当唯一选项，
-  // 否则这组会整个消失，用户反而没得调。
-  return fitting.length > 0 ? fitting : [{ tokens: ceiling, label: formatTokens(ceiling) }]
+  const fitting = []
+  let matchedCeiling = false
+  for (const tier of all) {
+    if (ceiling >= tier.min && ceiling <= tier.max) {
+      fitting.push({ ...tier, tokens: ceiling })
+      matchedCeiling = true
+    } else if (tier.tokens <= ceiling) {
+      fitting.push(tier)
+    }
+  }
+  if (!matchedCeiling && ceiling > 0 && (!fitting.length || ceiling > fitting[fitting.length - 1].tokens * 1.15)) {
+    fitting.push({ tokens: ceiling, label: formatTokens(ceiling), min: ceiling, max: ceiling })
+  }
+  return fitting.length > 0 ? fitting : [{ tokens: ceiling, label: formatTokens(ceiling), min: ceiling, max: ceiling }]
+}
+function matchesTierValue(currentValue, tier) {
+  const num = Number(currentValue)
+  if (!Number.isFinite(num) || num <= 0) return false
+  return num === tier.tokens || (num >= tier.min && num <= tier.max)
 }
 export function defaultParamSummary(model) {
   const parts = []
@@ -86,10 +118,63 @@ export function currentModelSummary(model) {
     defaultEffort: model.params.reasoningEffort ?? model.defaultEffort, supportsImage: model.params.supportsImage ?? model.defaultVision,
   })
 }
-export function ModelParams({ value, model, disabled, onSave }) {
+/**
+ * 按模型官方口径与渠道硬上限生成精选输出档位（64K 起，最多 4 档）：
+ * - 上限 ≈ 1M（Kimi K3.1 Pro/K3）：64K / 128K / 256K / 1M（顶档精确绑定模型实际值）
+ * - 上限 ≈ 512K（MiniMax M3.1 Flash）：64K / 128K / 256K / 512K
+ * - 上限 ≈ 384K（DeepSeek V4.1 / OpenPangu 2.1）：64K / 128K / 256K / 384K
+ * - 上限 ≈ 256K（Doubao Seed 2.1 / Qwen 4 Max）：64K / 128K / 256K
+ * - 上限 ≈ 128K（GLM 5.3 / Qwen 3.8 / MiMo 2.6 / Spark X2.6）：64K / 128K
+ * - 上限 ≈ 64K（Hy4 / Step 5 / Agnes）：64K
+ * - 有渠道协议硬上限（如 CodeArts 32K）时强制不超过硬上限。
+ */
+export function outputTiersForModel(model, providerId) {
+  const provider = providerId || model?.provider || ''
+  const hardCap = channelOutputHardCap(provider)
+  const spec = officialModelSpec(model?.id, provider)
+  const declared = model?.maxTokens ?? model?.defaultMaxOutputLength ?? model?.maxOutputLength ?? 0
+  let ceiling = 0
+  if (hardCap !== null) {
+    ceiling = declared > 0 ? Math.min(hardCap, declared) : hardCap
+  } else if (spec?.maxOutput > 0) {
+    ceiling = declared > spec.maxOutput ? declared : spec.maxOutput
+  } else if (declared > 0) {
+    ceiling = declared
+  }
+  if (ceiling <= 0) return OUTPUT_TIERS.slice(0, 4)
+  // 若上限 ≥ 950K（1M 输出，如 Kimi K3.1 Pro）：精选 64K / 128K / 256K / 1M（4 档）
+  if (ceiling >= 950_000) {
+    return [
+      OUTPUT_TIERS[0],
+      OUTPUT_TIERS[1],
+      OUTPUT_TIERS[2],
+      { ...OUTPUT_TIERS[5], tokens: ceiling },
+    ]
+  }
+  // 若上限 ∈ [500K, 560K]（512K 输出，如 MiniMax M3.1 Flash）：精选 64K / 128K / 256K / 512K（4 档）
+  if (ceiling >= 500_000 && ceiling <= 560_000) {
+    return [
+      OUTPUT_TIERS[0],
+      OUTPUT_TIERS[1],
+      OUTPUT_TIERS[2],
+      { ...OUTPUT_TIERS[4], tokens: ceiling },
+    ]
+  }
+  return tiersUnder(OUTPUT_TIERS.slice(0, 4), ceiling, true)
+}
+
+export function contextTiersForModel(model, providerId) {
+  const provider = providerId || model?.provider || ''
+  const spec = officialModelSpec(model?.id, provider)
+  const declared = model?.contextWindow ?? model?.defaultContextWindow ?? 0
+  const ceiling = declared > 0 ? declared : (spec?.context ?? 0)
+  return tiersUnder(CONTEXT_TIERS, ceiling, false)
+}
+
+export function ModelParams({ value, model, providerId, disabled, onSave }) {
   const current = value || {}
-  const contextTiers = tiersUnder(CONTEXT_TIERS, model.contextWindow)
-  const outputTiers = tiersUnder(OUTPUT_TIERS, model.maxTokens, true)
+  const contextTiers = contextTiersForModel(model, providerId)
+  const outputTiers = outputTiersForModel(model, providerId)
   const efforts = Array.isArray(model.efforts) ? model.efforts : []
   // 即点即存，保存成功或失败都留在当前编辑器，便于连续调整或重试。
   const save = patch => { if (!disabled) void onSave(patch) }
@@ -101,8 +186,8 @@ export function ModelParams({ value, model, disabled, onSave }) {
         onClick: () => save({ ...current, [key]: undefined }),
       }, defaultValue > 0 ? `默认（${formatTokens(defaultValue)}）` : '清除覆盖'),
       ...tiers.map(t => h('button', {
-        type: 'button', key: t.tokens, className: 'eac-tier', disabled,
-        'aria-pressed': current[key] === t.tokens,
+        type: 'button', key: t.label, className: 'eac-tier', disabled,
+        'aria-pressed': matchesTierValue(current[key], t),
         onClick: () => save({ ...current, [key]: t.tokens }),
       }, t.label))))
   return h('div', { className: 'eac-params' },
@@ -196,7 +281,7 @@ export function CredentialImportForm({ disabled, hint, onSave, onCancel }) {
       primary('导入凭据', undefined, disabled, { type: 'submit' }),
       onCancel ? button('取消', onCancel, disabled) : null))
 }
-export function PlanModelParams({ model, disabled, value, setValue, onSave }) {
+export function PlanModelParams({ model, providerId, disabled, value, setValue, onSave }) {
   const [error, setError] = React.useState('')
   const draft = value ?? {}
   const set = (field, next) => { setError(''); setValue({ ...draft, [field]: next }) }
@@ -205,10 +290,28 @@ export function PlanModelParams({ model, disabled, value, setValue, onSave }) {
   const choose = (label, current, values, change, labels, defaultLabel) => h('label', { className: 'eac-field', key: label },
     h('span', null, label), h('select', { className: 'eac-input', value: current ?? '', disabled,
       onChange: event => change(event.target.value) }, h('option', { value: '' }, defaultLabel), ...options(values, labels)))
-  const tokens = (label, field, effective) => h('label', { className: 'eac-field' }, h('span', null, label),
-    h('input', { className: 'eac-input', type: 'number', inputMode: 'numeric', min: 1, max: 10000000, step: 1, disabled,
-      value: draft[field] ?? '', placeholder: effective > 0 ? `默认 ${formatTokens(effective)}` : '',
-      onChange: event => set(field, event.target.value) }))
+  const contextCeiling = model.defaultContextWindow ?? model.contextWindow
+  const outputDefault = model.defaultMaxOutputLength ?? model.maxOutputLength
+  const contextTiers = contextTiersForModel({ ...model, contextWindow: contextCeiling }, providerId)
+  const outputTiers = outputTiersForModel(model, providerId)
+  const tokenField = (label, field, effective, tiers) => h('div', { className: 'eac-param-group', key: field },
+    h('p', { className: 'eac-group-title' }, label),
+    tiers.length ? h('div', { className: 'eac-tier-row', role: 'group', 'aria-label': `${label}档位` },
+      h('button', {
+        type: 'button', className: 'eac-tier', disabled,
+        'aria-pressed': draft[field] == null || draft[field] === '',
+        onClick: () => set(field, null),
+      }, effective > 0 ? `默认（${formatTokens(effective)}）` : '默认'),
+      ...tiers.map(t => h('button', {
+        type: 'button', key: t.label, className: 'eac-tier', disabled,
+        'aria-pressed': matchesTierValue(draft[field], t),
+        onClick: () => set(field, t.tokens),
+      }, t.label))) : null,
+    h('label', { className: 'eac-field' },
+      h('span', null, label),
+      h('input', { className: 'eac-input', type: 'number', inputMode: 'numeric', min: 1, max: 10000000, step: 1, disabled,
+        value: draft[field] ?? '', placeholder: effective > 0 ? `默认 ${formatTokens(effective)}` : '',
+        onChange: event => set(field, event.target.value) })))
   const apply = event => {
     event.preventDefault()
     const { maxTokens = null, contextWindow = null, supportsImage = null, reasoningEffort = null } = draft
@@ -224,9 +327,9 @@ export function PlanModelParams({ model, disabled, value, setValue, onSave }) {
     void onSave(params)
   }
   return h('form', { className: 'eac-params', onSubmit: apply, 'aria-label': modelDisplayName(model) + ' 的模型设置' },
+    tokenField('上下文 Token', 'contextWindow', contextCeiling, contextTiers),
+    tokenField('最大输出 Token', 'maxTokens', outputDefault, outputTiers),
     h('div', { className: 'eac-param-grid' },
-      tokens('上下文 Token', 'contextWindow', model.defaultContextWindow),
-      tokens('最大输出 Token', 'maxTokens', model.defaultMaxOutputLength),
       model.thinkingLevels.length ? choose('默认思考档位', draft.reasoningEffort, model.thinkingLevels,
         next => set('reasoningEffort', next || null), EFFORT_LABELS,
         model.defaultEffort ? `默认（${EFFORT_LABELS[model.defaultEffort] ?? model.defaultEffort}）` : '清除覆盖') : null,

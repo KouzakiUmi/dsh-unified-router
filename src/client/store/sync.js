@@ -1,7 +1,7 @@
 // Host 快照同步器：Client 只通过增量游标消费 Host 快照，与 Host 后台定时采集彻底解耦。
 export function createHostSync({
   snapshotProviders, getState, isDisposed, request, publish, cache,
-  getWriteRevision, getReadRevision, newestStatusReadRef, newestAccountRead,
+  getWriteRevision, getReadRevision, newestStatusReadRef, newestAccountRead, newestModelRead,
 }) {
   let snapshotProtocol = false
   let hostCursor = null
@@ -46,6 +46,18 @@ export function createHostSync({
       if (status?.value && status.at >= newestStatusReadRef.current) patch.statuses = statusFrom(status.value)
       if (accounts?.value && accounts.at >= (newestAccountRead.get(state.provider) ?? 0) && (!state.loading || !state.accounts.length)) {
         patch.accounts = accountsFrom(accounts.value, state.provider)
+      }
+      if (packAllowed(state.provider)) {
+        const sides = modelProvidersOf(state.provider)
+        const sideEntries = sides.map(side => [side, get('model.list', side)])
+        const freshSides = sideEntries.filter(([side, entry]) => entry?.value && entry.at >= (newestModelRead?.get(side) ?? 0))
+        if (freshSides.length && (!state.loading || !state.models.length)) {
+          const bySide = new Map(freshSides.map(([side, entry]) => [side, modelsFrom(entry.value, side)]))
+          patch.models = sides.flatMap(side => bySide.has(side) ? bySide.get(side) : state.models.filter(m => m.provider === side))
+          const sourceUpdates = Object.fromEntries(freshSides.flatMap(([side, entry]) =>
+            CACHE_MODEL_SOURCES.has(entry.value?.source) ? [[side, entry.value.source]] : []))
+          if (Object.keys(sourceUpdates).length) patch.modelSource = { ...state.modelSource, ...sourceUpdates }
+        }
       }
       if (credits?.value) patch.balances = balancesFrom(credits.value).map(balance => ({ ...balance, stale: credits.stale || balance.stale }))
       else if (credits?.stale) patch.balances = state.balances.map(balance => ({ ...balance, stale: true }))

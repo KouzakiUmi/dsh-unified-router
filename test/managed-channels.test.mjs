@@ -324,7 +324,7 @@ test('自管管理器异步注册竞态与多账号故障切换：删号/dispose
   } finally { manager.dispose() }
 })
 
-test('Coze：实时模型目录与倍率/多模态能力解析、凭据收敛', () => {
+test('Coze：实时模型目录与倍率/多模态能力解析、凭据收敛', async () => {
   const models = parseCozeModelList({
     data: {
       models: [
@@ -341,9 +341,23 @@ test('Coze：实时模型目录与倍率/多模态能力解析、凭据收敛', 
   assert.equal(models[1].context, null)
   assert.equal(sanitizeCozeCredential({}), null)
   assert.equal(sanitizeCozeCredential({ patToken: 'cztei_abc' }).patToken, 'cztei_abc')
+
+  // 无 efforts 的 Coze 模型绝不能产出 reasoning: true + 全 null thinkingLevelMap（否则 DSH Core 报 invalid reasoning metadata）
+  const desc = toManagedModelDescriptor({ ...models[0], contextWindow: 128_000, maxOutputLength: 32_768 }, 'coze', cozeSpec)
+  assert.equal(desc.reasoning, false)
+  assert.equal(desc.thinkingLevelMap, undefined)
+
+  // 无 Cookie 的桌面 PAT 账号 claimRewards 不误报 failed
+  const noCookieRes = await cozeSpec.claimRewards({
+    entry: { source: 'local' },
+    fetch: async () => { throw new Error('不应发起请求') },
+    getCredential: async () => ({ patToken: 'cztei_only', ownerId: 'u1' }),
+    saveCredential: async () => false,
+  }, {})
+  assert.equal(noCookieRes.kind, 'empty')
 })
 
-test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）与相邻消息合并', () => {
+test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）与相邻消息合并', async () => {
   const signed = signHuaweiRequest({
     method: 'POST',
     url: 'https://snap-access.cn-north-4.myhuaweicloud.com/api/v1/chat/completions',
@@ -380,4 +394,24 @@ test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）
   ])
   assert.equal(sanitizeCodeArtsCredential({ accessKey: 'a' }), null)
   assert.ok(sanitizeCodeArtsCredential({ accessKey: 'a', secretKey: 's', securityToken: 't' }))
+
+  // CodeArts 每日签到：从 IDE 通道 data.items 解析 USER_LOGIN 活动并完成 claim + confirm
+  const hitUrls = []
+  const ck = await codeartsSpec.checkin({
+    fetch: async (url, init) => {
+      hitUrls.push(String(url))
+      if (String(url).includes('/v1/ops/delivery?channel=IDE')) {
+        return new Response(JSON.stringify({ code: 0, data: { items: [{ type: 'USER_LOGIN', campaignId: 'camp-1', claimable: true, status: 'PENDING', benefitAmount: 200 }] } }), { status: 200 })
+      }
+      if (String(url).includes('/v1/ops/claim')) {
+        return new Response(JSON.stringify({ code: 0, data: { id: 'ben-1', benefitAmount: 200 } }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ code: 0, data: {} }), { status: 200 })
+    },
+    getCredential: async () => ({ accessKey: 'AK', secretKey: 'SK', securityToken: 'ST', expiresAt: Date.now() + 3_600_000 }),
+    saveCredential: async () => true,
+  }, {})
+  assert.equal(ck.outcome, 'claimed')
+  assert.equal(ck.credit, 200)
+  assert.ok(hitUrls.some(u => u.includes('/v1/ops/delivery?channel=IDE')))
 })

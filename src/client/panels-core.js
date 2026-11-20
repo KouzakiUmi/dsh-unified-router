@@ -121,11 +121,12 @@ function AccountsPanel(view, ui) {
 function renderModelEditor(model, ui, modelDisabled) {
   const { editor, key } = model
   const onSave = value => ui.invoke(...editor.call, value)
-  if (editor.kind === 'tiers') return h(ModelParams, { key, model, value: editor.value, disabled: modelDisabled, onSave })
+  const providerId = model.provider || ui.providerId
+  if (editor.kind === 'tiers') return h(ModelParams, { key, model, providerId, value: editor.value, disabled: modelDisabled, onSave })
   const draft = ui.drafts[key]
   const value = draft ?? model.params
   return h(PlanModelParams, {
-    key, model, disabled: modelDisabled, value,
+    key, model, providerId, disabled: modelDisabled, value,
     setValue: value => ui.setDrafts(current => ({ ...current, [key]: value })),
     async onSave(value) {
       const ok = await onSave(value)

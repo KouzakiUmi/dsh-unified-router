@@ -8,6 +8,7 @@ import vm from 'node:vm'
 import { createAutomationSettings } from '../lib/automation-settings.js'
 import { createDailyCheckin } from '../lib/daily-checkin.js'
 import { createAutoTasks } from '../lib/auto-tasks.js'
+import { officialModelSpec, channelOutputHardCap } from '../lib/model-catalog.js'
 import { TRAE } from '../vendor/channel-pack/src/trae-product.ts'
 
 const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
@@ -234,6 +235,102 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
       assert.equal(after.modelSource, 'remote', '登录后应立即刷新远端模型目录')
     } finally { loginStore.dispose() }
   } finally { store.dispose(); react.dispose() }
+})
+
+test('参数档位快捷键：按官方规格表单与渠道硬上限生成（Kimi 1M/MiniMax 512K/DeepSeek 384K/GLM 128K/CodeArts 32K）', async () => {
+  assert.doesNotMatch(clientSource, /label:\s*'1024K'/)
+  assert.equal(officialModelSpec('kimi-k3.1-pro')?.maxOutput, 1_048_576)
+  assert.equal(officialModelSpec('person-kimi-k3-1-pro-261111')?.maxOutput, 1_048_576)
+  assert.equal(officialModelSpec('person-qwen4-max', 'doubaowork')?.maxOutput, 262_144)
+  assert.equal(officialModelSpec('person-qwen3-8-max', 'doubaowork')?.maxOutput, 131_072)
+  assert.equal(officialModelSpec('minimax-m3.1-flash')?.maxOutput, 524_288)
+  assert.equal(officialModelSpec('deepseek-v4.1-flash')?.maxOutput, 393_216)
+  assert.equal(officialModelSpec('glm-5.3')?.maxOutput, 131_072)
+  assert.equal(officialModelSpec('hy4std')?.maxOutput, 65_536)
+  assert.equal(channelOutputHardCap('codearts'), 32_000)
+
+  const react = reactHarness()
+  let module
+  vm.runInNewContext(clientSource, {
+    URL, AbortController, setTimeout, clearTimeout, navigator: {},
+    window: { __ModuleLoader__: { load(spec) { module = spec.factory(() => react) } } },
+  }, { filename: 'client.js' })
+  const host = async (method) => {
+    if (method === 'settings.snapshot') {
+      return {
+        ok: true,
+        value: {
+          cursor: 'c1',
+          entries: {
+            'astudio/managed.snapshot': { value: { provider: 'astudio', enabled: true, registered: true, accounts: [] }, at: 100, stale: false },
+            'astudio/managed.models': {
+              value: {
+                provider: 'astudio',
+                source: 'remote',
+                models: [
+                  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 65_536, defaultMaxOutputLength: 65_536, thinkingLevels: [], params: {} },
+                  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', enabled: true, contextWindow: 1_000_000, defaultContextWindow: 1_000_000, maxOutputLength: 65_536, defaultMaxOutputLength: 65_536, thinkingLevels: [], params: {} },
+                  { id: 'xdeepseek-flash-in', name: 'DeepSeek V4.1 Flash', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 100_000, defaultMaxOutputLength: 100_000, thinkingLevels: [], params: {} },
+                  { id: 'xopglm52', name: 'GLM 5.2', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 100_000, defaultMaxOutputLength: 100_000, thinkingLevels: [], params: {} },
+                ],
+              },
+              at: 100,
+              stale: false,
+            },
+          },
+        },
+      }
+    }
+    return { ok: true, value: { models: [], accounts: [], statuses: {} } }
+  }
+  let Settings
+  const ctx = { slots: { inject(_s, fn) { fn() }, register(_sp, c) { Settings = c } }, connection: { rpc: { call: (_p, _s, req) => host(req.method, req.payload) } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const openEditor = label => {
+    treeNodes(render()).find(n => n.props['aria-label'] === `${label} 的参数`).props.onClick()
+    const tree = render()
+    const editorNode = treeNodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'PlanModelParams')
+    let draft = {}
+    const planTree = editorNode.type({ ...editorNode.props, value: draft, setValue: v => { draft = v } })
+    const groupButtons = groupLabel => {
+      const group = treeNodes(planTree).find(n => n.props?.role === 'group' && n.props['aria-label'] === groupLabel)
+      return treeNodes(group).filter(n => n.type === 'button')
+    }
+    return { getDraft: () => draft, groupButtons }
+  }
+  try {
+    render()
+    await new Promise(r => setImmediate(r))
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 AStudio').props.onClick()
+    await new Promise(r => setImmediate(r))
+
+    // 1. Kimi K3.1 Pro：上下文 1M 绑 1_048_576；输出 64K/128K/256K/1M（顶档绑 1_048_576）
+    const kimi = openEditor('Kimi K3.1 Pro')
+    const kimiOut = kimi.groupButtons('最大输出 Token档位')
+    assert.deepEqual(kimiOut.slice(1).map(b => b.children[0]), ['64K', '128K', '256K', '1M'])
+    kimiOut.at(-1).props.onClick()
+    assert.equal(kimi.getDraft().maxTokens, 1_048_576, 'Kimi K3.1 Pro 1M 输出按钮应绑定 1_048_576')
+    kimi.groupButtons('上下文 Token档位').at(-1).props.onClick()
+    assert.equal(kimi.getDraft().contextWindow, 1_048_576)
+
+    // 2. MiniMax M3.1 Flash：上下文 1M 绑 1_000_000；输出 64K/128K/256K/512K（顶档绑 524_288）
+    const mm = openEditor('MiniMax M3.1 Flash')
+    const mmOut = mm.groupButtons('最大输出 Token档位')
+    assert.deepEqual(mmOut.slice(1).map(b => b.children[0]), ['64K', '128K', '256K', '512K'])
+    mmOut.at(-1).props.onClick()
+    assert.equal(mm.getDraft().maxTokens, 524_288)
+    mm.groupButtons('上下文 Token档位').at(-1).props.onClick()
+    assert.equal(mm.getDraft().contextWindow, 1_000_000, '1000000 模型点击 1M 按钮应绑定 1_000_000')
+
+    // 3. DeepSeek V4.1 Flash：输出 64K/128K/256K/384K
+    const ds = openEditor('DeepSeek V4.1 Flash')
+    assert.deepEqual(ds.groupButtons('最大输出 Token档位').slice(1).map(b => b.children[0]), ['64K', '128K', '256K', '384K'])
+
+    // 4. GLM 5.2：官方输出上限 128K，仅显示 64K/128K，不越界显示 256K/384K
+    const glm = openEditor('GLM 5.2')
+    assert.deepEqual(glm.groupButtons('最大输出 Token档位').slice(1).map(b => b.children[0]), ['64K', '128K'])
+  } finally { react.dispose() }
 })
 
 test('TRAE 模型参数与思考等级修复：客户端版本升级到 0.1.69，兜底模型带实测思考档位与视觉能力', () => {

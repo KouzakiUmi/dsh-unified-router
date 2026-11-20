@@ -2,6 +2,20 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.5.2（2026-11-20）
+
+### 真机联调问题修复与体验改进
+
+- **修复 Coze 模型加载报错（`invalid reasoning metadata`）**：[managed-llm.js](<../lib/managed-llm.js>) 仅在模型声明了有效 `efforts` 时设置 `reasoning: true` 与 `thinkingLevelMap`，不再为无思考档位的 Coze 模型输出全 `null` 档位表。
+- **修复自动任务与签到异常**：
+  - **CodeArts 签到**：修正 `/v1/ops/delivery` 响应解析路径（`data.items`）并同时兼容 `channel=IDE`（`USER_LOGIN`）与 `channel=DESKTOP`（`daily_claim`），解决先前一直报 `inactive` 的问题。
+  - **Coze 成就领奖**：`/api/achievement/*` 仅对带 Web Cookie 的浏览器登录账号调用，纯桌面 PAT 账号跳过该接口不再误报失败。
+  - **豆包工作目录去重**：兜底表更新为真实 `model_item_key`，联网成功时直接返回上游目录，不再混拼重复条目。
+- **模型目录中间态缓存与后台自动刷新**：自管多账号渠道启动即同步加载磁盘缓存 `*-catalog.json` 秒显并在后台静默刷新；账号池模型目录（`model.list`）纳入宿主快照持久化，宿主启动 8 秒后与每 30 分钟自动后台刷新远端目录，不再需要每次手动点击刷新。
+- **参数设置按官方规格表单驱动档位快捷键**（见 [MODEL-SPECS.md](MODEL-SPECS.md) 与 `lib/model-catalog.js`）：
+  - 上下文精选最多 4 档（`200K / 400K / 500K / 1M`，256K 模型自动以 `256K` 为顶档），`1_000_000` 与 `1_048_576` 均显示 `1M` 并按模型真实上限绑定；
+  - 输出从 `64K` 起按官方输出上限与渠道协议硬上限精选 1–4 档：Kimi K3.1 Pro/K3/K2.8 支持 `64K / 128K / 256K / 1M`（`1_048_576`）、MiniMax M3.1 Flash 支持 `64K / 128K / 256K / 512K`（`524_288`）、DeepSeek V4.1/OpenPangu 2.1 支持 `64K / 128K / 256K / 384K`（`393_216`）、Doubao Seed 2.1/Qwen 4 Max 支持 `64K / 128K / 256K`、GLM 5.3/Qwen 3.8/MiMo 2.6 支持 `64K / 128K`、Hy4/Step 5/Agnes 支持 `64K`；CodeArts `/api/v1` 自动收口至协议硬上限 `32K`。
+
 ## 0.5.1（2026-11-20）
 
 ### 修复与补齐浏览器 OAuth / 独立窗口登录

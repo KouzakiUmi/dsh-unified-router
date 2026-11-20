@@ -18,6 +18,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   const lifetime = new AbortController()
   let writeRevision = 0
   const newestAccountRead = new Map()
+  const newestModelRead = new Map()
   const newestStatusReadRef = { current: 0 }
 
   const loginProviderOf = id => isRaccoonFamily(id) ? RACCOON_FAMILY[0] : id
@@ -70,6 +71,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     getReadRevision: () => revision,
     newestStatusReadRef,
     newestAccountRead,
+    newestModelRead,
   })
 
   const loginFor = target => {
@@ -247,6 +249,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       const paramValues = results.slice(3 + sides.length)
       const rows = accountsFrom(accounts, target)
       newestAccountRead.set(target, started)
+      for (const side of sides) newestModelRead.set(side, started)
       newestStatusReadRef.current = started
       publish({
         accounts: rows,
@@ -352,6 +355,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       })
       const fresh = await Promise.all(sides.map(side => request('model.list', { provider: side }, controller.signal)))
       if (disposed || controller.signal.aborted || state.provider !== channel) return false
+      const refreshedAt = Date.now()
+      for (const side of sides) newestModelRead.set(side, refreshedAt)
       const refreshed = new Map(sides.map((side, index) => [side, modelsFrom(fresh[index], side)]))
       publish({
         models: modelProvidersOf(channel).flatMap(side => refreshed.has(side)
