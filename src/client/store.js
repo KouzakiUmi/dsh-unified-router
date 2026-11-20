@@ -20,8 +20,10 @@ export function restoredRouterState(provider, cache = readChannelCache(cacheStor
   const channel = cache?.channels[provider]
   return {
     ...initial(provider), ...channel, notice: '',
-    loading: !channel && (packAllowed(provider) || !(provider === PLAN_PROVIDER_ID ? cache?.plan : cache?.workbuddy)),
+    loading: !channel && (packAllowed(provider) || !(provider === PLAN_PROVIDER_ID ? cache?.plan
+      : provider === WORKBUDDY_ID ? cache?.workbuddy : cache?.apikeys?.[provider])),
     statuses: cache?.statuses ?? {},
+    ...(cache?.apikeys ? { apikeys: cache.apikeys } : {}),
     ...(cache?.plan ? { plan: cache.plan, planStale: !!cache.plan.catalogError } : {}),
     ...(cache?.workbuddy ? { workbuddy: cache.workbuddy, workbuddyReady: true } : {}),
   }
@@ -87,7 +89,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   /** 只落「卡片级」状态（计数 + 商汤/WorkBuddy 快照），让下次启动首屏就是上次的样子。 */
   function persistCards() {
     writeChannelCache(cacheStorage(), Object.fromEntries(channelCache), state.statuses,
-      { plan: state.plan, workbuddy: state.workbuddyReady ? state.workbuddy : null })
+      { plan: state.plan, workbuddy: state.workbuddyReady ? state.workbuddy : null,
+        apikeys: Object.fromEntries(Object.entries(state.apikeys ?? {}).filter(([, entry]) => entry?.ready === true)) })
   }
   const request = async (method, payload, signal) => {
     if (disposed || signal?.aborted) throw new Error('请求已结束')
@@ -99,6 +102,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       if (payload?.provider !== PLAN_PROVIDER_ID) throw new Error('不支持此渠道')
       if (method === 'plan.setEnabled' && typeof payload.enabled !== 'boolean') throw new Error('渠道开关无效')
       if (method === 'plan.setKey' && typeof payload.apiKey !== 'string') throw new Error('API Key 无效')
+    } else if (method === 'apikey.setKey' && typeof payload?.apiKey !== 'string') {
+      throw new Error('API Key 无效')
     } else if (!managedMethod && (method === 'settings.refresh' ? !allowed(payload?.provider)
       : method !== 'settings.snapshot' && !packAllowed(payload?.provider))) throw new Error('不支持此渠道')
     let result
@@ -528,7 +533,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     if (backgroundOnly || state.loading) return false
     const provider = state.provider
     // 商汤 / WorkBuddy 是快照型渠道，各有自己的读取路径，不走这里。
-    if (provider === PLAN_PROVIDER_ID || provider === WORKBUDDY_ID) return false
+    if (provider === PLAN_PROVIDER_ID || provider === WORKBUDDY_ID || providerById(provider)?.snapshot) return false
     const controller = new AbortController()
     lightController?.abort()
     lightController = controller
@@ -565,8 +570,9 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       }
       if (credits?.value) patch.balances = balancesFrom(credits.value).map(balance => ({ ...balance, stale: credits.stale || balance.stale }))
       else if (credits?.stale) patch.balances = state.balances.map(balance => ({ ...balance, stale: true }))
+      // 后一个渠道的 apply 要看到前一个渠道刚写进 patch 的字段（API Key 渠道共用 apikeys 映射）。
       for (const provider of snapshotProviders) {
-        Object.assign(patch, provider.snapshot.apply(method => get(method, provider.id), state))
+        Object.assign(patch, provider.snapshot.apply(method => get(method, provider.id), { ...state, ...patch }))
       }
       if (Object.keys(patch).length) {
         publish(patch)

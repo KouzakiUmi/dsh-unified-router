@@ -5,7 +5,7 @@
 > 改 UI 或加渠道时**先读这里**，不要再按单点反馈临时改。
 >
 > 覆盖版本：0.3.0 起（2026-11-18 定稿）。相关文档：[AGENTS.md](../AGENTS.md)（工程约定）、
-> [docs/CATALOG-AUDIT.md](CATALOG-AUDIT.md)（目录与上游差异）、[docs/HANDOFF.md](HANDOFF.md)（进度）。
+> [docs/CATALOG-AUDIT.md](CATALOG-AUDIT.md)（目录与上游差异）、[docs/architecture.md](architecture.md)（架构）。
 
 ---
 

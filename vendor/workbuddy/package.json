@@ -3,13 +3,12 @@
   "version": "0.2.35",
   "description": "OpenCode provider plugins for WorkBuddy's plans: WorkBuddy (CodeBuddy, copilot.tencent.com) and WorkBuddy AI (www.workbuddy.ai)",
   "type": "module",
-  "main": "./opencode.mjs",
-  "exports": { ".": "./opencode2.mjs" },
+  "main": "./index.mjs",
+  "exports": { ".": "./index.mjs" },
   "files": [
     "index.mjs",
-    "opencode.mjs",
-    "opencode2.mjs",
-    "README.md"
+    "README.md",
+    "NOTICE.md"
   ],
   "keywords": [
     "opencode",

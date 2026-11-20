@@ -248,7 +248,7 @@ line, #291); otherwise only a new chat clears it. A refusal that stands after
 the move ends in a hint that names no one client (since 0.1.28): WorkBuddy
 refused words in this client's prompt; use it from Hermes, OpenCode or Pi, or
 add another provider to the group. Since 0.2.3 that hint is preceded by the
-address of [REFUSED.md](REFUSED.md), which says what the check reads, how a
+address of `REFUSED.md` (shipped in the upstream package), which says what the check reads, how a
 line is reworded to pass it, and how to turn such a line off in an agent that
 has a switch for it — so the error carries its own fix, for the person who
 reads it or the agent they paste it to. Neither refusal rests the account.

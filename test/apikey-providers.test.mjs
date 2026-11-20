@@ -1,0 +1,280 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { APIKEY_PROVIDERS, APIKEY_PROVIDER_IDS, apikeyProvider } from '../lib/apikey-providers.js'
+
+// API Key 渠道规格（docs/APIKEY-CHANNELS.md §2）：端点、目录解析、兜底表、
+// 思考方言与余额解析。测试全程离线，只验证纯函数形状与文档给出的事实。
+
+const agnes = apikeyProvider('agnes')
+const unisound = apikeyProvider('unisound')
+const AGNES_EFFORTS = ['off', 'low', 'medium', 'high']
+const UNISOUND_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
+
+test('注册表：两个渠道、id 顺序与冻结', () => {
+  assert.deepEqual(APIKEY_PROVIDER_IDS, ['agnes', 'unisound'])
+  assert.deepEqual(Object.keys(APIKEY_PROVIDERS), ['agnes', 'unisound'])
+  assert.equal(apikeyProvider('agnes'), APIKEY_PROVIDERS.agnes)
+  assert.equal(apikeyProvider('unisound'), APIKEY_PROVIDERS.unisound)
+  assert.equal(Object.isFrozen(APIKEY_PROVIDERS), true)
+  assert.throws(() => { APIKEY_PROVIDERS.x = 1 }, TypeError)
+})
+
+test('apikeyProvider 对未知 id 返回 undefined', () => {
+  for (const id of [undefined, null, '', 'AGNES', 'raccoon', 'u2', 'constructor', 'hasOwnProperty']) {
+    assert.equal(apikeyProvider(id), undefined, `id=${String(id)}`)
+  }
+})
+
+test('两个 spec 的静态字段', () => {
+  assert.deepEqual(
+    {
+      id: agnes.id, title: agnes.title, endpoint: agnes.endpoint, chatPath: agnes.chatPath,
+      baseUrl: agnes.baseUrl, credentialRef: agnes.credentialRef,
+    },
+    {
+      id: 'agnes', title: 'Agnes', endpoint: 'https://api.agnes-ai.cn', chatPath: '/v1/chat/completions',
+      baseUrl: 'https://api.agnes-ai.cn/v1', credentialRef: 'UNIFIED_ROUTER_AGNES_API_KEY',
+    },
+  )
+  assert.deepEqual(
+    {
+      id: unisound.id, title: unisound.title, endpoint: unisound.endpoint, chatPath: unisound.chatPath,
+      baseUrl: unisound.baseUrl, credentialRef: unisound.credentialRef,
+    },
+    {
+      id: 'unisound', title: '云知声', endpoint: 'https://maas-api.unisound.com', chatPath: '/v1/chat/completions',
+      baseUrl: 'https://maas-api.unisound.com/v1', credentialRef: 'UNIFIED_ROUTER_UNISOUND_API_KEY',
+    },
+  )
+})
+
+test('Agnes catalog.request：URL 与 Bearer 头；next 恒 undefined', () => {
+  assert.deepEqual(agnes.catalog.request('KEY-1'), {
+    url: 'https://api.agnes-ai.cn/v1/models',
+    headers: { authorization: 'Bearer KEY-1' },
+  })
+  assert.equal(agnes.catalog.next({ has_more: true, last_id: 'x' }), undefined)
+  assert.equal(agnes.catalog.next({ data: [] }), undefined)
+  assert.equal(agnes.catalog.next(undefined), undefined)
+})
+
+test('Agnes parse：规格合并、图片/视频过滤、未知 id 零值、去重', () => {
+  const rows = agnes.catalog.parse({ data: [
+    { id: 'agnes-2.5-flash', supported_endpoint_types: ['chat'] },
+    { id: 'agnes-image-pro' },
+    { id: 'agnes-video-x' },
+    { id: 'agnes-3.0-flash' },
+    { id: 'agnes-2.5-pro' },
+    { id: 'agnes-2.5-pro-beta' },
+    { id: 'agnes-2.5-pro-alpha' },
+    { id: 'agnes-2.5-pro-theta' },
+    { id: 'agnes-9.9-new' },     // 表外新 id：不编造规格
+    { id: 'agnes-2.5-flash' },   // 重复 id 去重（保留首个）
+  ] })
+  assert.deepEqual(rows.map(row => row.id), [
+    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-2.5-pro',
+    'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha', 'agnes-2.5-pro-theta', 'agnes-9.9-new',
+  ])
+  assert.deepEqual(rows[0], {
+    id: 'agnes-2.5-flash', name: 'Agnes 2.5 Flash', context: 524_288, output: 65_536,
+    attachment: true, reasoning: true, efforts: AGNES_EFFORTS, defaultEffort: 'off',
+  })
+  for (const id of ['agnes-2.5-pro', 'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha']) {
+    const row = rows.find(entry => entry.id === id)
+    assert.equal(row.context, 1_048_576, id)
+    assert.equal(row.output, 65_536, id)
+    assert.equal(row.attachment, true, id)
+    assert.equal(row.reasoning, true, id)
+  }
+  // 文档未给规格的 theta 与表外新 id：context/output 记 0，不假设图片输入。
+  const theta = rows.find(row => row.id === 'agnes-2.5-pro-theta')
+  assert.equal(theta.context, 0)
+  assert.equal(theta.output, 0)
+  assert.equal(theta.attachment, false)
+  assert.equal(theta.name, 'Agnes 2.5 Pro Theta')
+  const fresh = rows.find(row => row.id === 'agnes-9.9-new')
+  assert.equal(fresh.context, 0)
+  assert.equal(fresh.output, 0)
+  assert.equal(fresh.attachment, false)
+  assert.equal(fresh.name, 'agnes-9.9-new', '表外 id 用 id 本身作展示名')
+  // 所有聊天文本模型统一思考档位（实测 reasoning_effort，默认关思考）。
+  assert.ok(rows.every(row => row.reasoning === true))
+  assert.ok(rows.every(row => assert.deepEqual(row.efforts, AGNES_EFFORTS) === undefined))
+  assert.ok(rows.every(row => row.defaultEffort === 'off'))
+})
+
+test('Agnes parse：坏形状返回 []，坏条目跳过', () => {
+  for (const bad of [undefined, null, 'x', 42, [], { data: 'x' }, { data: {} }, { data: null }]) {
+    assert.deepEqual(agnes.catalog.parse(bad), [], JSON.stringify(bad))
+  }
+  const longId = 'a'.repeat(257)
+  assert.deepEqual(agnes.catalog.parse({ data: [
+    { id: '' }, { id: longId }, { id: 12 }, 'not-object', null, {}, { id: 'agnes-ok' },
+  ] }).map(row => row.id), ['agnes-ok'])
+  assert.equal(agnes.catalog.parse({ data: [{ id: 'a'.repeat(256) }] }).length, 1, '256 字符 id 合法')
+})
+
+test('Agnes effortBody：off→none、有效档直发、其他 undefined', () => {
+  const row = agnes.fallback[0]
+  assert.deepEqual(agnes.effortBody('off', row), { reasoning_effort: 'none' })
+  for (const effort of ['low', 'medium', 'high']) {
+    assert.deepEqual(agnes.effortBody(effort, row), { reasoning_effort: effort })
+  }
+  for (const effort of [undefined, 'none', 'minimal', 'xhigh', 'max', 'banana', '']) {
+    assert.equal(agnes.effortBody(effort, row), undefined, `effort=${String(effort)}`)
+  }
+  // 绝不使用 thinking:{type:'disabled'}（实测关不掉思考）。
+  assert.equal(JSON.stringify(agnes.effortBody('off', row)).includes('thinking'), false)
+})
+
+test('Agnes balance：两个请求、美分换算、unlimited 阈值、缺字段 null', () => {
+  const requests = agnes.balance.requests('KEY-2')
+  assert.equal(requests.length, 2)
+  assert.deepEqual(requests[0], {
+    url: 'https://api.agnes-ai.cn/v1/dashboard/billing/subscription',
+    headers: { authorization: 'Bearer KEY-2' },
+  })
+  assert.deepEqual(requests[1], {
+    url: 'https://api.agnes-ai.cn/v1/dashboard/billing/usage',
+    headers: { authorization: 'Bearer KEY-2' },
+  })
+  // total_usage 是美分（OpenAI 账单口径），hard_limit_usd 是美元。
+  assert.deepEqual(
+    agnes.balance.parse([{ hard_limit_usd: 50 }, { total_usage: 12345 }]),
+    { used: 123.45, limit: 50, unlimited: false, unit: 'USD' },
+  )
+  assert.deepEqual(
+    agnes.balance.parse([{ hard_limit_usd: 10_000_000 }, { total_usage: 100 }]),
+    { used: 1, limit: null, unlimited: true, unit: 'USD' },
+  )
+  assert.equal(agnes.balance.parse([{ hard_limit_usd: 20_000_000 }, { total_usage: 0 }]).unlimited, true)
+  assert.equal(agnes.balance.parse([{ hard_limit_usd: 9_999_999 }, { total_usage: 0 }]).unlimited, false)
+  for (const bad of [
+    undefined, null, [], [{}, {}], [null, null],
+    [{ hard_limit_usd: '50' }, { total_usage: 1 }],
+    [{ hard_limit_usd: 50 }, { total_usage: 'x' }],
+    [{ hard_limit_usd: Number.NaN }, { total_usage: 1 }],
+    [{ hard_limit_usd: 50 }, { total_usage: Number.POSITIVE_INFINITY }],
+    [{ hard_limit_usd: 50 }],
+  ]) {
+    assert.equal(agnes.balance.parse(bad), null, JSON.stringify(bad))
+  }
+})
+
+test('Agnes fallback：六个确认存在的文本模型，字段与 parse 一致', () => {
+  assert.deepEqual(agnes.fallback.map(row => row.id), [
+    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-2.5-pro',
+    'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha', 'agnes-2.5-pro-theta',
+  ])
+  const parsed = Object.fromEntries(
+    agnes.catalog.parse({ data: agnes.fallback.map(row => ({ id: row.id })) }).map(row => [row.id, row]),
+  )
+  assert.deepEqual(Object.fromEntries(agnes.fallback.map(row => [row.id, row])), parsed)
+  assert.equal(agnes.fallback.find(row => row.id === 'agnes-3.0-flash').name, 'Agnes 3.0 Flash')
+  assert.equal(agnes.fallback.find(row => row.id === 'agnes-2.5-pro-theta').context, 0)
+})
+
+test('云知声 catalog.request：固定分页 URL、游标拼接与双鉴权头', () => {
+  assert.deepEqual(unisound.catalog.request('KEY-3'), {
+    url: 'https://maas-api.unisound.com/anthropic/v1/models?limit=1000',
+    headers: { 'x-api-key': 'KEY-3', authorization: 'Bearer KEY-3' },
+  })
+  const paged = unisound.catalog.request('KEY-3', 'model id/1')
+  assert.equal(paged.url, 'https://maas-api.unisound.com/anthropic/v1/models?limit=1000&after_id=model%20id%2F1')
+  assert.deepEqual(paged.headers, { 'x-api-key': 'KEY-3', authorization: 'Bearer KEY-3' })
+})
+
+test('云知声 parse：字段映射、校验、去重', () => {
+  const rows = unisound.catalog.parse({ data: [
+    { id: 'u2-flash', display_name: '宇视 U2 Flash', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'u2', display_name: 'U2', context_window: 262_144, max_output: 65_536 },
+    { id: 'u2-med', context_window: 128_000, max_output: 32_768 }, // 缺 display_name → 用 id
+    { id: 'u2-radimed', display_name: 'U2 RadiMed', context_window: 0, max_output: -1 },
+    { id: 'doubao-seed-1-6', display_name: '豆包', context_window: 'x', max_output: 1.5 }, // 非正整数 → 0
+    { id: 'u2-flash' }, // 去重
+    { id: '' }, { id: 'x'.repeat(257) }, { id: 9 }, 'junk', {},
+  ], has_more: false })
+  assert.deepEqual(rows.map(row => row.id), ['u2-flash', 'u2', 'u2-med', 'u2-radimed', 'doubao-seed-1-6'])
+  const flash = rows[0]
+  assert.equal(flash.name, '宇视 U2 Flash')
+  assert.equal(flash.context, 1_048_576)
+  assert.equal(flash.output, 131_072)
+  assert.equal(rows.find(row => row.id === 'u2-med').name, 'u2-med')
+  assert.equal(rows.find(row => row.id === 'u2-radimed').context, 0)
+  assert.equal(rows.find(row => row.id === 'u2-radimed').output, 0)
+  const doubao = rows.find(row => row.id === 'doubao-seed-1-6')
+  assert.equal(doubao.context, 0)
+  assert.equal(doubao.output, 0)
+  // 不确认就不声明：第三方模型一律无图片输入、无思考档位。
+  assert.ok(rows.every(row => row.attachment === false))
+  assert.deepEqual(doubao.efforts, [])
+  assert.equal(doubao.reasoning, false)
+  for (const bad of [undefined, null, 'x', [], { data: {} }, { data: 'list' }]) {
+    assert.deepEqual(unisound.catalog.parse(bad), [], JSON.stringify(bad))
+  }
+})
+
+test('云知声 u2 系列思考档位', () => {
+  const catalog = unisound.catalog.parse({ data: [
+    { id: 'u2-flash' }, { id: 'u2' }, { id: 'u2-med' }, { id: 'u2-radimed' }, { id: 'kimi-k2' },
+  ] })
+  for (const id of ['u2-flash', 'u2', 'u2-med']) {
+    const row = catalog.find(entry => entry.id === id)
+    assert.deepEqual(row.efforts, UNISOUND_EFFORTS, id)
+    assert.equal(row.defaultEffort, 'high', id)
+    assert.equal(row.reasoning, true, id)
+  }
+  // u2-radimed 默认关闭且不支持开启。
+  const radimed = catalog.find(row => row.id === 'u2-radimed')
+  assert.deepEqual(radimed.efforts, [])
+  assert.equal(radimed.reasoning, false)
+  // 其余模型不确认就不声明。
+  const kimi = catalog.find(row => row.id === 'kimi-k2')
+  assert.deepEqual(kimi.efforts, [])
+  assert.equal(kimi.reasoning, false)
+})
+
+test('云知声 catalog.next：has_more+last_id 才翻页', () => {
+  assert.equal(unisound.catalog.next({ has_more: true, last_id: 'u2' }), 'u2')
+  for (const json of [
+    undefined, null, 'x', {},
+    { has_more: false, last_id: 'u2' },
+    { has_more: true },
+    { has_more: true, last_id: '' },
+    { has_more: true, last_id: 7 },
+    { has_more: 'true', last_id: 'u2' },
+  ]) {
+    assert.equal(unisound.catalog.next(json), undefined, JSON.stringify(json))
+  }
+})
+
+test('云知声 effortBody：只在行档位表内发 reasoning_effort', () => {
+  const u2 = unisound.fallback.find(row => row.id === 'u2')
+  assert.deepEqual(unisound.effortBody('off', u2), { reasoning_effort: 'none' })
+  for (const effort of ['minimal', 'low', 'medium', 'high', 'xhigh']) {
+    assert.deepEqual(unisound.effortBody(effort, u2), { reasoning_effort: effort })
+  }
+  for (const effort of [undefined, 'max', 'banana', 'none']) {
+    assert.equal(unisound.effortBody(effort, u2), undefined, `effort=${String(effort)}`)
+  }
+  // 无思考档位的行（含兜底表外模型）任何档位都不发。
+  const radimed = unisound.fallback.find(row => row.id === 'u2-radimed')
+  for (const effort of ['off', 'low', 'high']) {
+    assert.equal(unisound.effortBody(effort, radimed), undefined)
+  }
+  assert.equal(unisound.effortBody('low'), undefined)
+  assert.equal(unisound.effortBody('low', {}), undefined)
+})
+
+test('云知声 fallback：四个官方确认的 u2 模型；无余额接口', () => {
+  assert.deepEqual(unisound.fallback.map(row => row.id), ['u2-flash', 'u2', 'u2-med', 'u2-radimed'])
+  const flash = unisound.fallback[0]
+  assert.equal(flash.context, 1_048_576) // 官方产品页：上下文 1M
+  assert.equal(flash.output, 131_072)    // 官方产品页：最大输出 128K
+  for (const row of unisound.fallback.slice(1)) {
+    assert.equal(row.context, 0)
+    assert.equal(row.output, 0)
+  }
+  assert.ok(unisound.fallback.every(row => row.attachment === false))
+  assert.equal(unisound.balance, null)
+})

@@ -54,6 +54,9 @@ const clientModules = [
   'providers/trae.js',      // TRAE provider 模块
   'providers/sensenova.js',
   'providers/workbuddy.js',
+  'providers/apikey.js',    // API Key 渠道的共用视图工厂
+  'providers/agnes.js',
+  'providers/unisound.js',
   'providers/index.js',     // 渠道注册表（顺序即卡片顺序）
   'settings.js',            // Settings 根组件与 settings.section 注册
 ]

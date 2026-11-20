@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 构建产物（lib/）不随仓库提交的状态不确定，CI 从源码全量构建。
+      # --legacy-peer-deps：peerDependencies 由宿主提供，本地不安装。
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Build and run tests
+        run: npm test
+
+      - name: Check bundle syntax
+        run: |
+          node --check lib/web-host.js
+          node --check lib/backend.js
+
+      - name: Pack and validate release asset
+        run: |
+          npm pack --ignore-scripts --json > pack.json
+          node --input-type=module <<'NODE'
+          import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+          import { basename, join } from 'node:path';
+          const info = JSON.parse(readFileSync('pack.json', 'utf8'));
+          if (!Array.isArray(info) || info.length !== 1) throw new Error('Expected exactly one npm package');
+          const pack = info[0];
+          if (pack?.name !== 'dsh-unified-router' || typeof pack.version !== 'string' || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(pack.version)) throw new Error('Unexpected package name/version');
+          if (basename(pack.filename) !== pack.filename || pack.filename !== `dsh-unified-router-${pack.version}.tgz`) throw new Error('Unexpected tarball filename');
+          const paths = new Set(pack.files.map(file => file.path));
+          for (const path of ['package.json', 'README.md', 'LICENSE', 'NOTICE.md', 'cordis.patch.yml', 'lib/web-host.js', 'lib/client.js', 'lib/backend.js', 'lib/qoder-auth-wasm.wasm', 'vendor/sensenova-token-plan/index.js', 'vendor/workbuddy/index.mjs', 'vendor/channel-pack/LICENSE']) {
+            if (!paths.has(path)) throw new Error(`Missing packaged file: ${path}`);
+          }
+          const excluded = pack.files.filter(file => /^(src|test|scripts)\//.test(file.path) || /\.tgz$/.test(file.path) || /\.log$/.test(file.path));
+          if (excluded.length) throw new Error(`Packaged files that must be excluded: ${excluded.map(file => file.path).join(', ')}`);
+          mkdirSync('dist', { recursive: true });
+          copyFileSync(pack.filename, join('dist', 'dsh-unified-router.tgz'));
+          console.log(`Verified ${pack.name}@${pack.version}: ${pack.files.length} files -> dist/dsh-unified-router.tgz`);
+          NODE
+
+      - name: Upload verified build artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-package
+          path: dist/dsh-unified-router.tgz
+          if-no-files-found: error
+          retention-days: 7

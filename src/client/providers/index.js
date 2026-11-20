@@ -1,4 +1,4 @@
-const registeredProviders = [loomy, raccoon, raccoonPro, qodercn, trae, sensenova, workbuddy]
+const registeredProviders = [loomy, raccoon, raccoonPro, qodercn, trae, sensenova, workbuddy, agnes, unisound]
 export const PROVIDERS = Object.freeze(registeredProviders.filter(provider => provider.card !== false)
   .map(provider => provider.pack ? packSettings(provider) : provider))
 export const PACK_PROVIDERS = Object.freeze(registeredProviders.filter(provider => provider.pack))

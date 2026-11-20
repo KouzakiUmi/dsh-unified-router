@@ -6,6 +6,8 @@
 export const MODEL_PAGE_SIZE = 15
 export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.setKey', 'plan.setModelEnabled', 'plan.setModelParams', 'plan.resetModels'])
 export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
+// API Key 渠道（Agnes、云知声）共用的宿主方法；渠道 id 在 payload.provider 里带。
+export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels'])
 export const METHODS = new Set(['provider.status', 'account.list', 'model.list', 'credits.permanentLock',
   'account.create', 'login.poll', 'account.update', 'account.delete', 'account.reorder', 'account.refresh',
   'account.reset', 'account.retest', 'provider.setEnabled', 'model.setDisabled', 'model.clearDead',
@@ -21,6 +23,8 @@ export const initial = provider => ({ provider, accounts: [], models: [], balanc
   locked: false, login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
   // WorkBuddy 是自管多账号快照：accounts 逐账号、models 全局、loginUrl 属登录窗口。
     workbuddy: { accounts: [], models: [], loginUrl: '' }, workbuddyReady: false, workbuddyStale: false, workbuddyError: false, workbuddyLoginUrl: null,
+  // API Key 渠道快照按渠道 id 存放：{ [id]: 快照 + ready / stale / error }。
+  apikeys: {},
   // 模型目录来源（按模型 provider）：'remote' = 真拉到上游目录，'fallback' = 离线兜底，
   // 缺省 = 未知（还没刷过）。设置页据此显示来源标识并决定是否自动补拉一次。
   modelSource: {},
@@ -144,6 +148,36 @@ export function planSnapshotFrom(value) {
 export function mergePlanSnapshot(value) {
   const plan = planSnapshotFrom(value)
   return { plan, stale: value?.snapshot?.stale === true || plan.catalogError }
+}
+
+// API Key 渠道快照：模型字段与商汤同形（planModelFields），另带目录来源与可选的用量。
+// 用量只收 { error } 或 { used, limit, unlimited, unit }；单位只认 USD / CNY。
+export function apikeyBalanceFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  if (value.error === true) return { error: true }
+  if (value.unit !== 'USD' && value.unit !== 'CNY') return null
+  return { used: number(value.used), limit: number(value.limit), unlimited: value.unlimited === true,
+    unit: value.unit, updatedAt: number(value.updatedAt) }
+}
+export function apikeySnapshotFrom(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const rows = Array.isArray(source.models) ? source.models : []
+  return {
+    hasApiKey: source.hasApiKey === true, registerProvider: source.registerProvider === true,
+    providerRegistered: source.providerRegistered === true,
+    catalogSource: ['remote', 'cached', 'fallback'].includes(source.catalogSource) ? source.catalogSource : 'fallback',
+    catalogError: source.catalogError === true, updatedAt: number(source.updatedAt),
+    models: rows.filter(model => typeof model?.id === 'string' && model.id.length <= 256 && model.id).slice(0, 512)
+      .map(model => ({ id: model.id, name: text(model.name), enabled: model.enabled !== false, ...planModelFields(model) })),
+    balance: apikeyBalanceFrom(source.balance),
+  }
+}
+// 重进设置页时恢复的渠道快照：按注册表里的渠道 id 逐个重建，未知 id 丢弃。
+export function apikeySnapshotsFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter(([id, entry]) => allowed(id) && providerById(id)?.rpcMethods === APIKEY_METHODS
+    && entry && typeof entry === 'object' && !Array.isArray(entry))
+    .map(([id, entry]) => [id, apikeySnapshotFrom(entry)]))
 }
 
 // WorkBuddy 用量快照：白名单字段收编（窗口、套餐、登录地址），凭据与上游
@@ -322,7 +356,9 @@ export function readChannelCache(storage) {
     if (clean) channels[provider] = clean
   }
   return { channels, statuses: statusFrom({ statuses: parsed.statuses }),
-    plan: cards.plan ?? null, workbuddy: cards.workbuddy ?? null }
+    plan: cards.plan ?? null, workbuddy: cards.workbuddy ?? null,
+    // 读回的快照是上次的结果：标记 ready 让首屏直接显示，随后由实时读取覆盖。
+    apikeys: Object.fromEntries(Object.entries(cards.apikeys).map(([id, entry]) => [id, { ...entry, ready: true, stale: false, error: false }])) }
 }
 /**
  * 写持久化缓存。存储不可用（隐私模式、配额满、宿主无 sessionStorage）时静默忽略：
@@ -339,7 +375,7 @@ export function sanitizeCardSnapshots(parsed) {
   const workbuddy = parsed?.workbuddy && workbuddySnapshotFrom({
     accounts: parsed.workbuddy.accounts, models: parsed.workbuddy.models,
   }).workbuddy
-  return { plan, workbuddy }
+  return { plan, workbuddy, apikeys: apikeySnapshotsFrom(parsed?.apikeys) }
 }
 
 export function writeChannelCache(storage, channels, statuses, cards = {}) {

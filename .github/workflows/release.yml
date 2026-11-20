@@ -1,0 +1,138 @@
+# 仅版本标签推送触发 GitHub Release 与 npm 发布；分支推送只运行 CI。
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    environment: npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    concurrency:
+      group: release-dsh-unified-router
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `v${version}`) throw new Error('Tag must match package.json version');
+          NODE
+
+      # --legacy-peer-deps：peerDependencies 由宿主提供，本地不安装。
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Build and run tests
+        run: npm test
+
+      - name: Pack and validate release asset
+        run: |
+          npm pack --ignore-scripts --json > pack.json
+          node --input-type=module <<'NODE'
+          import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+          import { basename, join } from 'node:path';
+          const info = JSON.parse(readFileSync('pack.json', 'utf8'));
+          if (!Array.isArray(info) || info.length !== 1) throw new Error('Expected exactly one npm package');
+          const pack = info[0];
+          if (pack?.name !== 'dsh-unified-router' || typeof pack.version !== 'string' || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(pack.version)) throw new Error('Unexpected package name/version');
+          if (basename(pack.filename) !== pack.filename || pack.filename !== `dsh-unified-router-${pack.version}.tgz`) throw new Error('Unexpected tarball filename');
+          const paths = new Set(pack.files.map(file => file.path));
+          for (const path of ['package.json', 'README.md', 'LICENSE', 'NOTICE.md', 'cordis.patch.yml', 'lib/web-host.js', 'lib/client.js', 'lib/backend.js', 'lib/qoder-auth-wasm.wasm', 'vendor/sensenova-token-plan/index.js', 'vendor/workbuddy/index.mjs', 'vendor/channel-pack/LICENSE']) {
+            if (!paths.has(path)) throw new Error(`Missing packaged file: ${path}`);
+          }
+          const excluded = pack.files.filter(file => /^(src|test|scripts)\//.test(file.path) || /\.tgz$/.test(file.path) || /\.log$/.test(file.path));
+          if (excluded.length) throw new Error(`Packaged files that must be excluded: ${excluded.map(file => file.path).join(', ')}`);
+          mkdirSync('dist', { recursive: true });
+          copyFileSync(pack.filename, join('dist', 'dsh-unified-router.tgz'));
+          console.log(`Verified ${pack.name}@${pack.version}: ${pack.files.length} files -> dist/dsh-unified-router.tgz`);
+          NODE
+
+      - name: Write release checksum
+        run: (cd dist && sha256sum dsh-unified-router.tgz > dsh-unified-router.tgz.sha256)
+
+      - name: Create versioned GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            dist/dsh-unified-router.tgz
+            dist/dsh-unified-router.tgz.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          # 由 GitHub 按版本和发布时间判定 latest。
+          make_latest: legacy
+
+      # npm Trusted Publisher 绑定本工作流：仅版本标签触发 OIDC 发布。
+      # PUBLISH_NPM 仓库变量控制是否实际推 npm；未开启时只产出 Release。
+      - uses: actions/setup-node@v4
+        if: vars.PUBLISH_NPM == 'true'
+        with:
+          node-version: 24
+
+      - name: Publish to npm (new versions only)
+        if: vars.PUBLISH_NPM == 'true'
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { existsSync, readFileSync } from 'node:fs';
+          const registry = 'https://registry.npmjs.org/';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (pkg.name !== 'dsh-unified-router' || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(pkg.version)) throw new Error('Unexpected package name/version');
+          if (!existsSync('dist/dsh-unified-router.tgz')) throw new Error('Missing verified artifact: dist/dsh-unified-router.tgz');
+          const spec = `${pkg.name}@${pkg.version}`;
+          const run = args => spawnSync('npm', args, { encoding: 'utf8', timeout: 120000 });
+          const lookup = () => run(['view', spec, 'version', '--json', '--prefer-online', `--registry=${registry}`]);
+          const found = lookup();
+          let data;
+          try { data = JSON.parse(found.stdout); } catch { /* 非 JSON 输出不得视为版本不存在 */ }
+          if (found.status === 0) {
+            if (data !== pkg.version) throw new Error('Registry returned an unexpected version');
+            console.log(`npm already has ${spec}; skipping publish.`);
+            process.exit(0);
+          }
+          if (data?.error?.code !== 'E404') throw new Error(`npm version lookup failed (${data?.error?.code || 'unknown error'}); refusing to publish.`);
+          if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw new Error('GitHub OIDC is unavailable; the release job needs id-token: write and an npm Trusted Publisher matching this workflow.');
+          const published = run(['publish', './dist/dsh-unified-router.tgz', '--access', 'public', '--ignore-scripts', '--json', `--registry=${registry}`]);
+          if (published.stdout?.trim()) console.log(published.stdout.trim());
+          if (published.status !== 0) {
+            let error;
+            try { error = JSON.parse(published.stdout)?.error; } catch {}
+            const duplicate = error?.code === 'E403' && error.summary?.includes(`You cannot publish over the previously published versions: ${pkg.version}.`);
+            if (!duplicate) throw new Error(`npm publish failed (${error?.code || `exit ${published.status ?? 'unknown'}`}); check npm Trusted Publisher workflow, environment and direct publish permission.`);
+            console.log('Registry reports this version already published; verifying visibility instead of republishing.');
+          }
+          for (let attempt = 0; attempt < 31; attempt++) {
+            if (attempt) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000);
+            const verified = lookup();
+            let version;
+            try { version = JSON.parse(verified.stdout); } catch { /* 核对失败不能报告发布成功 */ }
+            if (verified.status === 0 && version === pkg.version) {
+              console.log(`Published and verified ${spec}.`);
+              process.exit(0);
+            }
+            if (version?.error?.code !== 'E404') break;
+            if (attempt + 1 < 31) console.log(`Waiting for registry visibility (${attempt + 1}/31); retrying in 10s.`);
+          }
+          throw new Error(`Publication verification failed for ${spec}; check registry before retrying.`);
+          NODE

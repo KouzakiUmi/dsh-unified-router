@@ -34,6 +34,10 @@ attachments/
 # One-off local account migration, not part of the plugin
 scripts/import-qq.mjs
 
+# Build / release artifacts
+dist/
+pack.json
+
 # Editor and temporary files
 .DS_Store
 .idea/

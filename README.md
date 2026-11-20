@@ -1,98 +1,162 @@
-# Unified Router · Web 设置插件
+<div align="center">
 
-从 Our Free Model 2.8.0 提取 **Loomy、Raccoon、Qoder 中国版** 的账号渠道，并独立加入 **TRAE**、**SenseNova Token Plan** 与 **WorkBuddy**（腾讯 CodeBuddy 中国版，用量），提供与 Subusage 一样的 `settings.section` 设置入口。Raccoon（商汤小浣熊）是**一张卡片**：账号只有一个池，登录后按套餐自动分流到**免费/订阅两个模型提供方**；两侧的模型池完全独立——各用自己的账号凭据去上游拉目录，上游给这个账号什么模型就展示什么模型（不按倍率过滤）。只做 CN 版（WorkBuddy AI、Trae Global、Qoder 国际版不接）；Devin 已拆分为独立插件 `dsh-devin-provider`。没有输入框胶囊，不修改 dsh-go App 或 SDK。
+# Unified Router
 
-入口：**设置 → 能力 → Unified Router**。DSH 网页端在设置分区中显示；dsh-go 通过现有 Web 设置页/岛屿打开。支持账号备注、启停、优先级、删除二次确认、浏览器登录、积分查询与领取、模型搜索与显示开关、失效模型恢复、Loomy 永久积分锁定；另提供商汤 Token Plan 的控制台登录、独立 API Key、额度池监控、5 小时/7 天窗口、赠送额度、模型消耗和模型提供方开关，以及 WorkBuddy 的浏览器登录、积分余额、每日签到与模型目录。
+**八个国内渠道的模型、账号与额度，收在同一个设置页里。**
 
-## 设置界面
+[![license](https://img.shields.io/badge/license-MIT-64748b)](#来源与许可证)
+[![DSH Core](https://img.shields.io/badge/DSH_Core-0.2.x-64748b)](#兼容性)
+[![node](https://img.shields.io/badge/node-%3E%3D22.19-64748b)](#兼容性)
 
-- 六个渠道使用同一套「账号与额度」「模型」「渠道」分区。打开设置时恢复上次查看的渠道。
-- 账号行优先显示套餐、剩余额度与更新时间。「管理」展开额度明细、奖励和维护。退出或移除账号需二次确认。
-- 渠道状态和账号、额度快照由宿主每分钟更新并按 profile 持久化。页头「刷新」触发后台采集，界面读取现有快照并静默更新。
-- Raccoon 使用一个账号池，模型仍分免费与订阅两个目录。两个目录各用本侧凭据采集，并分别提供刷新、启停和模型参数设置。
-- Qoder 中国版的手动目录刷新使用官方 CLI。其余支持远端目录的账号池渠道进入模型分区时可后台补拉目录。
-- 颜色继承宿主主题。窄屏渠道网格保留两列，账号与模型行自动换行。
+[快速开始](#快速开始) · [支持清单](#支持清单) · [安装](#安装) · [配置](#配置) · [文档](#文档)
 
-## 模型列表与参数
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/overview-dark.png">
+  <img src="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/overview-light.png" width="560" alt="Unified Router 设置页：八个渠道卡片与 Agnes 的模型目录">
+</picture>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/channel-dark.png">
+  <img src="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/channel-light.png" width="560" alt="Agnes 渠道分区：模型提供方开关、API Key 与账户用量">
+</picture>
 
-- 默认进入模型目录，查看上游型号及本地启停状态。「恢复推荐」关闭有明确后继的旧版和有可比替代的低性价比型号。规则见 [设计规范](docs/DESIGN-STANDARDS.md#3-模型目录与命名)。
-- 可按模型名称或 ID 搜索。模型启停、保存参数后保留当前编辑位置。手动启用、上下文和图片偏好可持久保存。
-- 模型卡片及「默认」按钮显示实际默认参数，自定义值单独标注；未知默认值显示「上游决定」，不把能力上限当成默认值。
-- Qoder 中国版采用已确认的 CN 目录与官方档位，不混入国际版模型。上下文参考档位为 200K / 400K / 1M。
+<sub>真实组件 · 虚构数据 · 离线渲染，由 <code>scripts/render-preview.mjs</code> 生成</sub>
 
-## 后端模式
+</div>
 
-- `shared`：复用已运行的 Our Free Model 账号池。Web API 只允许操作上述 channel-pack 渠道，不重复启动适配器，不另开账号数据库。
-- `standalone`（本机安装配置）：本包独立后端注册 `loomy`、`raccoon`、`raccoon-pro`、`qodercn`、`trae` 五个 channel-pack 提供方，并由内置的商汤 Token Plan 控制器管理商汤渠道；WorkBuddy 用量面板与模型服务由独立控制器管理（已登录且启用模型时注册推理适配器）。先停用原 Our Free Model，再在安装补丁的 `backend` 中选 `standalone`；检测到原账号池仍在时会拒绝启动，避免两个实例覆盖同一状态。沿用主机凭据服务和已有 channel-pack 账号，不删除其它渠道历史记录。
+> **0.4.0**：在 Loomy、Raccoon、Qoder 中国版、TRAE、商汤 Token Plan、WorkBuddy 六个渠道之外，新增 **Agnes** 与 **云知声**两个 API Key 渠道。两者共用同一套 Key 管理、模型目录与模型参数设置，与账号池渠道共用同一套设置页骨架。
 
-后端模式在安装配置中选择。每日自动签到默认开启，支持 Loomy、Qoder 中国版、TRAE 和 WorkBuddy。账号行显示当轮签到结果，自动和手动签到共用持久记录。共用模式的账号池签到由原 Channel Pack 管理。设置 `autoCheckin: false` 可关闭 Unified Router 的自动签到。
+## 快速开始
 
-## 登录与积分
-
-点击「添加账号」准备授权地址，再点真正的「打开登录页面」链接。完成后点「检查登录」，成功后列表自动刷新，无需再手动刷新。Qoder 中国版为 HTTPS 授权页；Loomy、Raccoon 为主机本机 HTTP 扫码/短信页，应在同一手机或主机的浏览器打开。可复制链接，页面不填写或显示系统密钥。
-
-宿主启动后会定期刷新账号与额度，签到和任务奖励完成后会更新相应快照。Raccoon 的登录奖励、Loomy 的新手任务在对应账号的「管理」区域领取。重测限流会发送一次最小模型请求。
-
-## 商汤 Token Plan
-
-商汤使用 Token Plan API Key。「模型」显示 API 目录、启停、上下文、最大输出、默认思考档位和图片输入。「协议兼容性」可逐模型覆盖输出字段、推理字段、工具消息和流式用量等参数。会话显式选择的思考档位优先。
-
-在「渠道」保存 API Key 并启用提供方。原有 API Key、模型显示偏好和最大输出上限继续使用已有存储。目录刷新请求 API 的 `/v1/models`。
-
-## TRAE（字节 TRAE IDE）
-
-TRAE 走 channel-pack 现成实现：认证用 ExchangeToken（轮换 refreshToken），对话用 Cloud-IDE-JWT 鉴权，SSE 为自定义格式。登录是 TRAE 账号浏览器授权（本机回调，无需粘贴），凭据静默续期；支持每日签到领取（「全部领取」）与余额查询。模型目录默认全部启用（兜底表 28 条，无「其他模型」分组）。
-
-## WorkBuddy（腾讯 CodeBuddy）
-
-WorkBuddy 分区读取并展示用量：套餐、积分余额窗口（Credits/Extra credits 等）、每日签到；模型目录支持逐模型启停，启用的模型注册为推理适配器。凭据、余额窗口、签到结果均按白名单投影，上游响应原文不回显。
-
-- **多账号**（最多 8 个）：每个账号一行，显示套餐和剩余额度，展开可查看窗口、签到或退出；顶部「添加账号」可继续添加，签到/退出只作用于该账号。账号索引存 `UNIFIED_ROUTER_WORKBUDDY_ACCOUNTS`（`[{id, credentialRef, name, uid, createdAt}]`），每账号凭据单独存 `UNIFIED_ROUTER_WORKBUDDY_ACCOUNT_<6HEX大写>`；旧单账号引用 `UNIFIED_ROUTER_WORKBUDDY_AUTH` 会在首次读取时被采纳为第一个账号并清除。
-- **登录走 WorkBuddy 官方浏览器授权**：点「添加账号」后，主机向 WorkBuddy 申请登录页地址并持续轮询授权结果（最长约 5 分钟）；登录地址会显示在面板，点「打开登录页」在浏览器完成授权后这里自动继续。
-- 登录得到的令牌经 DSH 凭据服务加密保存，临期自动续期并只回写触发续期的那个账号；「退出登录」删除该账号的凭据与索引条目，其他账号不受影响。
-- **余额读取**走 WorkBuddy 计费接口，展示套餐名与各积分窗口（剩余/总额/重置时间，未读到的显示「未知」）；软失败保留上次窗口并标记过期。
-- **每日签到**领取当日积分（中国版计量接口；签到结果以 WorkBuddy 返回为准）。
-- **模型目录**优先读已登录账号的实时清单，失败回退站点内置清单；只读展示（免费模型标「免费」）。
-- WorkBuddy 的用量/登录接口为其客户端使用的接口，非公开 Web API，腾讯随时可能变更或限制；失败一律显示固定中文提示，不回显上游响应正文。
-
-内置协议组件位于 `vendor/workbuddy/`（上游 `@magpie-community/opencode-workbuddy-auth` 0.2.35，MIT），接入层驱动插件的公开 hooks（usage/checkin/浏览器授权/模型目录），不依赖其内部函数。
-
-## 安装与更新
-
-把目录长期保留在 `$DSH_HOME/dsh-go/plugins/` 下，执行：
-
-```sh
-dsh plugin --profile web add /path/to/dsh-unified-router
+```console
+dsh plugin --profile <profile> add <路径>
 ```
 
-新装后会被引擎加载。若替换已加载的宿主代码，应在插件详情里重新载入该插件；客户端界面需重新打开设置页或刷新网页。无需重新构建 APK，无需替代 Web 服务器。卸载用 `dsh plugin --profile web remove dsh-unified-router`，原账号数据保留。
+`<profile>` 是目标 Profile，请替换为实际值。**Desktop 使用桌面壳自带的 DSH Desktop CLI**，不要从独立公共 CLI 管理保留的 `desktop` Profile。
+
+1. **重载插件**：让 Host 与 Client 一起生效。只刷新页面不保证宿主侧代码已升级。
+2. **打开设置页**：进入 **设置 → 能力 → Unified Router**，在渠道卡片网格里选择要配置的渠道。
+3. **账号池渠道**（Loomy、Raccoon、Qoder 中国版、TRAE）：点「添加账号」准备授权地址，再点「打开登录页面」链接，在浏览器完成授权后回到设置页点「检查登录」，列表自动刷新，不需要再手动刷新。[凭据怎么拿](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md)
+4. **API Key 渠道**（商汤 Token Plan、Agnes、云知声）：进入该渠道的「渠道」分区，在 API Key 输入框填入 Key 并保存。Agnes 与云知声在保存 Key 时，若模型提供方仍是关闭状态，插件会顺手把它启用。
+5. **核对结果**：打开「模型」分区查看上游目录与模型开关，打开「账号与额度」查看套餐、剩余额度与更新时间。
+
+## 功能
+
+- **统一设置页与统一骨架**：八个渠道共用同一套分区。账号池渠道与自管账号渠道用「模型」「账号与额度」「渠道」，API Key 渠道用「模型」「渠道」；所有渠道的账号行、模型行与设置行使用同一套渲染器，操作入口在每个渠道都在同一个位置。
+- **账号池渠道的多账号轮换与每日签到**：Loomy、Raccoon、Qoder 中国版、TRAE 各自使用账号池，多账号按顺序轮换，提供方开关、额度与模型目录分渠道管理。Loomy、Qoder 中国版、TRAE、WorkBuddy 支持每日签到，自动签到与手动签到共用同一份记录。
+- **API Key 渠道的 Key 管理、模型目录、思考档位与参数**：Agnes 与云知声共用一套实现，设置页填 Key、开关模型、调整上下文与最大输出等参数，并按上游支持的档位配置思考深度。
+- **模型启停与「恢复推荐」**：模型目录只认上游，本地开关只做显隐标记。模型分区提供「刷新目录」「恢复推荐」，「恢复推荐」清除本地开关覆盖，按[设计规范 §3](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/DESIGN-STANDARDS.md#3-模型目录与命名)重置推荐列表。
+- **首屏恢复与后台静默刷新**：打开设置页先恢复上次查看的渠道与最近一次结果，页面可见时每 5 秒读取一次宿主快照，页头「刷新」触发后台采集，界面随下一次快照读取更新。
+- **凭据与上游原文不进界面**：账号与额度快照走公开字段投影，凭据只以引用名保存，上游响应原文不回显；退出或移除账号需二次确认。
+
+## 支持清单
+
+| 渠道 | 类型 | 登录或鉴权方式 | 额度或用量 | 签到 | 模型目录来源 |
+|---|---|---|---|---|---|
+| Loomy | 账号池 | 浏览器授权登录（本机 HTTP 扫码 / 短信页） | 账号积分与额度包 | 有 | 上游 `GET /api/v1/models`（`loomyad.xunfei.cn`） |
+| Raccoon（小浣熊） | 账号池 | 浏览器授权登录（登录后按套餐分流） | 账号积分与额度包 | 无（每日积分由上游发放） | 上游 `GET /api/web/llm/v2/model_catalog`，免费面与订阅面各用本侧账号凭据 |
+| Qoder 中国版 | 账号池 | 浏览器授权登录（HTTPS 授权页）；拉目录需本机官方 CLI 登录 | 账号积分 | 有（每日 10:00 UTC+8 进入新周期） | 官方 CLI `qoderclicn --list-models`；CLI 不可用时回落策展表 |
+| TRAE | 账号池 | 浏览器 OAuth 登录（本机回调） | 积分与余额 | 有 | 上游 `POST /api/ide/v1/batch_get_detail_param`（`solo_agent` 通道） |
+| 商汤 Token Plan | API Key | 渠道页填 API Key | 额度池、5 小时 / 7 天窗口、赠送额度 | 无 | 上游 `GET /v1/models`（`token.sensenova.cn`） |
+| WorkBuddy | 自管账号 | 官方浏览器授权（主机轮询授权结果，最长约 5 分钟） | 套餐与积分窗口（Credits / Extra credits） | 有 | 上游 `GET /v3/config` 的 `agents[cli].models` |
+| Agnes | API Key | 渠道页填 API Key | 读取 New API 账单接口（`hard_limit_usd` / `total_usage`），实测返回无限额度 | 无 | 上游 `GET /v1/models` |
+| 云知声 | API Key | 渠道页填 API Key | 官方文档没有公开余额接口，设置页不显示用量 | 无 | 上游 `GET /anthropic/v1/models`（Anthropic 兼容模型列表） |
+
+只做 CN 版：WorkBuddy AI、Trae Global、Qoder 国际版不接入。各渠道的目录来源、思考档位方言、模型参数与限制见 [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md)。
+
+## 安装
+
+**目录直装**（把目录长期保留在 `$DSH_HOME/dsh-go/plugins/` 下）：
+
+```sh
+dsh plugin --profile <profile> add <路径>
+```
+
+**GitHub Release 压缩包**：在仓库 [Releases](https://github.com/KouzakiUmi/dsh-unified-router/releases) 页下载资产 `dsh-unified-router.tgz`（配套 `dsh-unified-router.tgz.sha256`），用下载后的本地路径安装：
+
+```sh
+dsh plugin --profile <profile> add <解压后的路径>
+```
+
+新装后会被引擎加载。若替换了已加载的宿主代码，应在插件详情里重新载入该插件；客户端界面需重新打开设置页或刷新网页。无需重新构建 APK，无需替代 Web 服务器。
+
+**卸载**：
+
+```sh
+dsh plugin --profile <profile> remove dsh-unified-router
+```
+
+卸载只移除插件，原账号数据保留。**Desktop 请使用桌面壳自带的 DSH Desktop CLI**。
+
+### 后端模式
+
+后端模式在安装配置中选择。
+
+- **`shared`（共用）**：复用已运行的 Our Free Model 账号池。Web API 只操作本插件接入的 channel-pack 渠道，不重复启动适配器，不另开账号数据库。共用模式下账号池的签到由原 Channel Pack 后端调度，Unified Router 调度 WorkBuddy。
+- **`standalone`（独立）**：本包独立后端注册 `loomy`、`raccoon`、`raccoon-pro`、`qodercn`、`trae` 五个 channel-pack 提供方，商汤 Token Plan 由内置控制器管理，WorkBuddy 的用量面板与模型服务由独立控制器管理。先停用原 Our Free Model，再在安装补丁的 `backend` 中选 `standalone`；检测到原账号池仍在时会拒绝启动，避免两个实例覆盖同一状态。
+
+## 配置
+
+**设置页路径**：**设置 → 能力 → Unified Router**。渠道选择器是自动换行的小卡片网格，打开设置页会进入上次查看的渠道。
+
+**各渠道怎么配**：每个渠道的凭据获取位置、设置页填写位置与凭据引用名见 [凭据获取指引](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md)；各渠道的目录、档位、参数与额度语义见 [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md)。
+
+**自动签到开关**：宿主配置项 `autoCheckin: false` 关闭 Unified Router 的自动签到，手动签到仍使用同一份记录。独立模式下，自动签到包含 Loomy、Qoder 中国版、TRAE 和 WorkBuddy；账号行显示「已签到」「签到失败」「签到待确认」等实际状态。
+
+**状态与凭据的存放**：
+
+- 凭据经宿主 `credentials` 服务存取，引用名为 `UNIFIED_ROUTER_*`（如 `UNIFIED_ROUTER_AGNES_API_KEY`、`UNIFIED_ROUTER_UNISOUND_API_KEY`、`UNIFIED_ROUTER_SENSENOVA_API_KEY`、`UNIFIED_ROUTER_WORKBUDDY_ACCOUNTS`）。Key 不进入任何返回值、日志与错误文案。
+- 最近一次的账号、额度与状态投影以公开字段原子写入 profile 状态目录的 `dsh-unified-router/settings.json`，部分失败时保留对应账号上一次成功的额度与更新时间。
+- 商汤渠道的状态目录与凭据命名空间为 `dsh-unified-router-sensenova`。
+- 浏览器 `localStorage` 用于跨次渲染与记忆上次查看的渠道。
+
+## 兼容性
+
+| 项 | 要求 |
+|---|---|
+| Node.js | `>=22.19.0` |
+| DSH Core（`engines.dsh`） | `>=0.2.1-rc.2 <0.3.0-0` |
+| `@deepseek-ai/cordis` | `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-0 <0.2.2-0 \|\| >=0.2.2-0 <0.3.0-0` |
+| `@deepseek-ai/dsh-credentials` | `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-0 <0.2.2-0 \|\| >=0.2.2-0 <0.3.0-0` |
+| `@deepseek-ai/dsh-llm` | `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-0 <0.2.2-0 \|\| >=0.2.2-0 <0.3.0-0` |
+| `@deepseek-ai/dsh-llm-pi-ai` | `>=0.1.5 <0.3` |
+| `@deepseek-ai/schemastery` | `>=0.2.0-rc.1 <0.2.1-0 \|\| >=0.2.1-0 <0.2.2-0 \|\| >=0.2.2-0 <0.3.0-0` |
+| `@earendil-works/pi-ai` | `>=0.85.0 <2.0.0` |
+
+`package.json` 的 `dsh` 字段声明：`manifestVersion` 为 1，带 `cordis.patch.yml` 的 bundle 补丁；客户端平台为 `web`，注入 `@deepseek-ai/dsh-client-connection`、`@deepseek-ai/dsh-client-ui-settings` 与 `@deepseek-ai/dsh-client-ui-slots`。插件通过 `settings.section` 挂载设置页，不新增聊天、侧栏或原生设置胶囊入口。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [设计规范](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/DESIGN-STANDARDS.md) | 设置页信息架构、数据加载、模型目录与命名、文案与视觉的完整规则 |
+| [API Key 渠道契约](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/APIKEY-CHANNELS.md) | Agnes 与云知声的接口契约、实测与官方文档事实、管理器与 RPC 投影 |
+| [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md) | 各渠道的目录来源、思考档位方言、模型参数、额度 / 用量与限制 |
+| [凭据获取指引](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md) | 各渠道凭据的获取位置、设置页填写位置与引用名 |
+| [架构](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/architecture.md) | 模块分层、RPC 与数据流 |
+| [开发说明](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/development.md) | 构建、测试与验证约定 |
+| [发布说明](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/publish.md) | 打包与发布流程 |
+| [更新记录](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/changelog.md) | 版本变更记录 |
+| [目录审计](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/CATALOG-AUDIT.md) | 硬编码目录与上游真实目录的逐条核对记录 |
+| [Qoder CLI 接入](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/QODER-CLI.md) | Qoder 中国版借官方 CLI 拉目录的方案、降级链与风险 |
 
 ## 来源与许可证
 
-上游：[Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)，版本 2.8.0，提交 `999e9f784ea3ea7a11cae383b142697b1ff2c42f`。渠道原始作者 Jet（iJetLi），MIT。根许可证及 `vendor/channel-pack/LICENSE`、`vendor/channel-pack/NOTICE.md` 均保留。WorkBuddy 用量原语来自 `@magpie-community/opencode-workbuddy-auth` 0.2.35（MIT，见 `vendor/workbuddy/NOTICE.md`）。
+MIT，见 [`package.json`](package.json) 的 `license` 字段。
 
-本地变更：从上游入口提取三个认证服务和适配器；管理模块加入进程内调用、渠道白名单与无网页挂载模式；新增 TRAE 接线（channel-pack 现成实现的浏览器 OAuth + 每日签到 + 余额）、独立商汤 Token Plan 控制器（内置 MIT 协议组件）、WorkBuddy 用量控制器（内置 MIT 协议组件，驱动 `@magpie-community/opencode-workbuddy-auth` 的公开 hooks）、受鉴权的 `/api/unified-router`、公开字段投影与独立 Web 设置客户端（provider 注册表驱动、无核心渠道白名单）；移除 Devin（拆分为独立插件 `dsh-devin-provider`）。入口装配参考已安装的 dsh-subusage 0.21.1。`test/kernel.mjs` 来自上游离线测试工具。
+上游：[Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)，版本 2.8.0，提交 `999e9f784ea3ea7a11cae383b142697b1ff2c42f`。渠道原始作者 Jet（iJetLi），MIT。根许可证及 `vendor/channel-pack/LICENSE`、`vendor/channel-pack/NOTICE.md` 均保留。WorkBuddy 用量原语来自 `@magpie-community/opencode-workbuddy-auth` 0.2.35（MIT，见 `vendor/workbuddy/NOTICE.md`）。SenseNova Token Plan 的认证、用量与 Pi-AI 适配器来自 [eghrhegpe/dsh-connect-sensenova-token-plan](https://github.com/eghrhegpe/dsh-connect-sensenova-token-plan) 0.8.5（MIT）。完整第三方组件、版本与许可证清单见 [NOTICE.md](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/NOTICE.md)。
 
-## 改名说明
+本地变更：从上游入口提取 Loomy、Raccoon、Qoder 中国版的认证服务与适配器；加入 TRAE 接线（channel-pack 现成实现的浏览器 OAuth + 每日签到 + 余额）、独立商汤 Token Plan 控制器、WorkBuddy 用量控制器、受鉴权的 `/api/unified-router` 服务、公开字段投影与独立 Web 设置客户端；新增 Agnes 与云知声两个 API Key 渠道，共用一套 Key 管理、目录与参数实现。
 
-项目由 `dsh-eac-router` 改名为 `dsh-unified-router`：包名与插件 id、RPC 服务名与 `/api/unified-router` 路由、设置命名空间 `dsh-unified-router`、商汤状态目录与凭据命名空间 `dsh-unified-router-sensenova`、凭据引用 `UNIFIED_ROUTER_*` 全部同步更新。
+## 从旧版本迁移
 
-兼容处理：改名前的凭据引用（`EAC_SENSENOVA_*`）、商汤凭据命名空间（`dsh-eac-router-sensenova` 及其更早的 `-legacy`）和旧状态目录都保留回退读取，新值一律只写入新名字。旧名字下只发生两类写动作，都用于让旧数据退出：一是登录令牌/密码/Key 被采纳到新命名空间后删除旧记录（vendor 迁移约定，各执行一次），二是退出登录、忘记 Key、重设密码时连旧名残留一并清除——否则「退出」之后旧令牌会立刻复活。旧状态目录在新目录不存在时整体搬迁一次；搬迁失败（目标路径被占用、权限不足、跨设备等）时本次继续读写旧目录并留下告警，不会静默丢弃旧状态——这是「新值只写新名字」的唯一例外，下一轮启动会再尝试搬迁。Devin 的旧凭据引用（`EAC_DEVIN_API_KEY`、`UNIFIED_ROUTER_DEVIN_API_KEY`）已随 Devin 移除，不再读写；需要 Devin 时安装独立插件 `dsh-devin-provider`。宿主 profile 里指向旧包名或旧路径的安装条目需要在安装侧同步更新，否则插件不会被加载。
+项目由 `dsh-eac-router` 改名为 `dsh-unified-router`：包名与插件 id、RPC 服务名与 `/api/unified-router` 路由、设置命名空间 `dsh-unified-router`、商汤状态目录与凭据命名空间、凭据引用 `UNIFIED_ROUTER_*` 全部同步更新。
 
-界面样式变量（`--eac-*`）与 DOM 测试钩子沿用既有命名，未随本次改名调整。
+**旧名称与旧目录会被读取并迁移**：
 
-## 构建与验证
+- 改名前的凭据引用（`EAC_SENSENOVA_*`）、商汤凭据命名空间（`dsh-eac-router-sensenova` 及其更早的 `-legacy`）与旧状态目录保留回退读取。
+- 旧单账号引用 `UNIFIED_ROUTER_WORKBUDDY_AUTH` 在账号索引缺失或为空时，被采纳为第一个账号，随后清除。
+- 旧状态目录在新目录不存在时整体搬迁一次；搬迁失败时本次运行继续读写旧目录，下一轮启动再尝试搬迁。
 
-Node 22.19+；构建需 esbuild 0.25.12、undici 8.11.2，核心包由 DSH 提供。`scripts/build.mjs` 使用 `UNIFIED_ROUTER_BUILD_TOOLS`（兼容旧名 `EAC_BUILD_TOOLS`）指定的工具目录，默认同级 `unified-router-build`；从 `/opt/dsh/node_modules` 解析宿主依赖。产物 `lib/backend.js` 与 Qoder WASM 已提供，安装无需构建。
+**新值只写入新名字**。旧名字下只发生两类写动作，都用于让旧数据退出而不是复活：登录令牌 / 密码 / Key 被采纳到新命名空间后删除旧记录；退出登录、忘记 Key、重设密码时连旧名残留一并清除。
 
-接入新渠道时复用共用账号、模型和渠道视图，按 provider 模块注册数据与动作。后台快照和前端接口详见 [设计规范](docs/DESIGN-STANDARDS.md#7-provider-设置接口)。
-
-客户端源码位于 `src/client/`，独立后端渠道位于 `src/backend/providers/`。运行 `npm test` 会重新生成 `lib/client.js` 与 `lib/backend.js` 并执行测试。
-
-```sh
-node scripts/build.mjs
-node --check lib/client.js
-npm test
-```
-
-测试覆盖 channel-pack 渠道（含 TRAE）注册与限制、模型分组/分页/启停及参数持久化、连续编辑和保存失败、账号与积分操作、取消请求、商汤模型设置与发布、额度窗口和未知状态、WorkBuddy 多账号（登录新增、旧单账号采纳、逐账号快照/签到/退出、续期按账号回写、索引损坏容错）与模型目录、敏感字段投影、来源防护与失败回滚。测试使用临时目录、虚构账号和离线网络桩，不调用真实上游、不读写真实凭据。真实账号授权和厂商服务可用性仍需用户登录后确认。
+宿主 profile 里指向旧包名或旧路径的安装条目需要在安装侧同步更新，否则插件不会被加载。Devin 已拆分为独立插件 `dsh-devin-provider`，本插件不再读写其凭据。界面样式变量（`--eac-*`）与 DOM 测试钩子沿用既有命名，未随改名调整。
