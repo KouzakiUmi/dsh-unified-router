@@ -666,9 +666,12 @@ export function resolveReasoningLoopGuardFlag(raw: string | undefined): boolean 
   return !(value === '0' || value === 'false' || value === 'no' || value === 'off')
 }
 
-/** 思考死循环检测是否启用（读环境变量）。 */
+/**
+ * 旧适配器内思考死循环检测已由宿主统一模块 `lib/cot-loop-guard` 接管（覆盖全部 provider），
+ * 这里恒返回 false，避免与统一模块产生双重判定与语义冲突。
+ */
 export function isReasoningLoopGuardEnabled(): boolean {
-  return resolveReasoningLoopGuardFlag(process.env.DSH_REASONING_LOOP_GUARD)
+  return false
 }
 
 /**

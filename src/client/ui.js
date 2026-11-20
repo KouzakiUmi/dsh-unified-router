@@ -45,7 +45,7 @@ export const OUTPUT_TIERS = Object.freeze([
 // - Raccoon 新目录用托管档位 level_1..level_5（名字与
 //   `raccoon-product.ts` 的 RACCOON_THINKING_LEVEL_NAMES 保持一致，两处都要有）。
 export const EFFORT_LABELS = Object.freeze({
-  none: '不思考', minimal: '极少', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大',
+  none: '不思考', minimal: '极少', light: '轻', low: '低', medium: '中', high: '高', extra_high: '极高', xhigh: '极高', max: '最大',
   on: '开启', off: '关闭',
   level_1: '极少', level_2: '低', level_3: '中', level_4: '高', level_5: '最大',
 })
@@ -176,6 +176,25 @@ export function PlanKeyForm({ disabled, onSave }) {
   } },
     h('label', { className: 'eac-field' }, h('span', null, 'API Key'), h('input', { className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled, value: apiKey, onChange: e => setApiKey(e.target.value) })),
     h('div', { className: 'eac-form-actions' }, primary('保存 API Key', undefined, disabled, { type: 'submit' })))
+}
+export function CredentialImportForm({ disabled, hint, onSave, onCancel }) {
+  const [credential, setCredential] = React.useState('')
+  return h('form', { className: 'eac-account-form', onSubmit: async event => {
+    event.preventDefault()
+    const raw = credential
+    setCredential('')
+    await onSave(raw)
+  } },
+    h('label', { className: 'eac-field' },
+      h('span', null, '凭据内容'),
+      h('input', {
+        className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled,
+        placeholder: hint || '粘贴 Token、Cookie 或 JSON 凭据', value: credential,
+        onChange: e => setCredential(e.target.value),
+      })),
+    h('div', { className: 'eac-form-actions' },
+      primary('导入凭据', undefined, disabled, { type: 'submit' }),
+      onCancel ? button('取消', onCancel, disabled) : null))
 }
 export function PlanModelParams({ model, disabled, value, setValue, onSave }) {
   const [error, setError] = React.useState('')

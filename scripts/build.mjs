@@ -41,24 +41,32 @@ const clientModules = [
   '../../lib/sensenova-params.js', // 商汤参数与 compat 白名单
   '../../lib/model-catalog.js',
   'core.js',                 // 共享常量、输入校验、wire 归一化
-  'store.js',                // createRouterStore：RPC 校验与请求生命周期
+  'store/pending.js',        // 局部非阻塞状态锁
+  'store/cache.js',          // 首屏轻量恢复缓存
+  'store/sync.js',           // Host 快照增量同步
+  'store/index.js',          // createRouterStore：RPC 校验与请求生命周期
   'styles.js',               // CLIENT_STYLES 与样式安装
   'ui.js',                   // UI 原语、格式化与表单组件
   'kit/index.js',            // 共用设置原语
   'panels-core.js',          // 账号、模型、渠道视图
-  'providers/pack.js',      // 账号池渠道的共用视图适配器
-  'providers/loomy.js',     // Loomy provider 模块
+  'providers/pack.js',       // 账号池渠道的共用视图适配器
+  'providers/managed.js',    // 自管多账号渠道的共用视图工厂
+  'providers/loomy.js',      // Loomy provider 模块
   'providers/raccoon.js',    // Raccoon provider 模块
   'providers/raccoon-pro.js', // Raccoon 订阅版 provider 模块
-  'providers/qodercn.js',   // Qoder 中国版 provider 模块
-  'providers/trae.js',      // TRAE provider 模块
+  'providers/qodercn.js',    // Qoder 中国版 provider 模块
+  'providers/trae.js',       // TRAE provider 模块
   'providers/sensenova.js',
   'providers/workbuddy.js',
-  'providers/apikey.js',    // API Key 渠道的共用视图工厂
+  'providers/apikey.js',     // API Key 渠道的共用视图工厂
   'providers/agnes.js',
   'providers/unisound.js',
-  'providers/index.js',     // 渠道注册表（顺序即卡片顺序）
-  'settings.js',            // Settings 根组件与 settings.section 注册
+  'providers/astudio.js',    // AStudio（科大讯飞 Astron Studio）
+  'providers/doubaowork.js', // 豆包工作
+  'providers/coze.js',       // Coze 桌面端
+  'providers/codearts.js',   // CodeArts（华为云码道）
+  'providers/index.js',      // 渠道注册表（顺序即卡片顺序）
+  'settings.js',             // Settings 根组件与 settings.section 注册
 ]
 const stripExports = source => source.replace(/^export /gm, '')
 const clientBody = clientModules.map(name => {

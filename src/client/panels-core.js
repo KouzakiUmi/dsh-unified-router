@@ -8,19 +8,21 @@ function renderTags(tags = []) {
   return tags.filter(Boolean).map(([label, tone, title]) => tag(label, tone, title))
 }
 
-function renderActions(actions = [], ui) {
+function renderActions(actions = [], ui, scope) {
+  const locked = scope ? (ui.loading || ui.isPending(scope)) : ui.disabled
   return actions.filter(Boolean).map(({ label, call, panel, open, primary: main, danger: destructive, disabled, accessible }) => {
     const run = panel ? () => ui.setPanel(panel, open) : () => ui.act(...call)
     const makeButton = main ? primary : destructive ? danger : button
-    return makeButton(label, run, ui.disabled || disabled, { key: label, 'aria-label': accessible })
+    return makeButton(label, run, locked || disabled, { key: label, 'aria-label': accessible })
   })
 }
 
 const SETTINGS_FORMS = { account: AccountForm, key: PlanKeyForm }
-function renderForm(form, ui, key) {
+function renderForm(form, ui, key, scope) {
   if (!form) return null
   const save = (...args) => ui.invoke(...form.call, ...args)
-  return h(SETTINGS_FORMS[form.kind], { key, account: form.account, disabled: ui.disabled, save, onSave: save })
+  const formScope = scope || `channel:${ui.providerId}`
+  return h(SETTINGS_FORMS[form.kind], { key, account: form.account, disabled: ui.loading || ui.isPending(formScope), save, onSave: save })
 }
 
 function renderQuotaGroup(group) {
@@ -70,28 +72,43 @@ function AccountsPanel(view, ui) {
   if (typeof view.autoCheckin === 'boolean') {
     summary.push(tag(view.autoCheckin ? '自动签到已开启' : '自动签到已关闭'))
   }
+  const showImport = view.importForm && ui.importOpen === ui.providerId
   return Section({
     title: '账号与额度',
     summary: summary.length ? summary : null,
-    actions: renderActions(view.actions, ui),
+    actions: renderActions(view.actions, ui, `login:${ui.providerId}`),
     children: [
       renderLogin(view.login, ui),
+      showImport ? h('div', { className: 'eac-callout' },
+        h(CredentialImportForm, {
+          key: `import:${ui.providerId}`,
+          hint: view.importForm.hint,
+          disabled: ui.loading || ui.isPending(`login:${ui.providerId}`),
+          onSave: async raw => {
+            const ok = await ui.invoke(...view.importForm.call, raw)
+            if (ok) ui.act('toggleImportForm', '')
+            return ok
+          },
+          onCancel: () => ui.act('toggleImportForm', ''),
+        })) : null,
       rows.length ? ListBox({ children: rows.map(row => {
         const key = `${ui.providerId}:account:${row.id}`
+        const accountScope = `account:${row.id}`
+        const rowDisabled = ui.loading || ui.isPending(accountScope)
         const manageable = !!(row.groups?.length || row.form || row.actions?.length)
         return Row({
           key, name: row.name, avatar: avatarText(row.name), tags: renderTags(row.tags),
           meta: row.updatedAt ? `更新于 ${displayTime(row.updatedAt)}` : undefined,
           metric: row.metric ? Metric({ ...row.metric, label: row.name }) : undefined,
           tone: row.enabled === false ? 'off' : undefined,
-          switchControl: row.toggle ? Switch({ checked: row.enabled, disabled: ui.disabled,
+          switchControl: row.toggle ? Switch({ checked: row.enabled, disabled: rowDisabled,
             label: `启用账号 ${row.name}`, onChange: () => ui.act(...row.toggle) }) : undefined,
           moreLabel: manageable ? '管理' : undefined, expanded: ui.more[key] === true,
           onToggle: () => ui.act('toggleMore', key),
           detail: [
             ...(row.groups ?? []).map(renderQuotaGroup),
-            row.form ? h('div', { key: 'form' }, renderForm(row.form, ui, `${ui.providerId}:${row.id}`)) : null,
-            row.actions?.length ? h('div', { className: 'eac-row-links', key: 'actions' }, ...renderActions(row.actions, ui)) : null,
+            row.form ? h('div', { key: 'form' }, renderForm(row.form, ui, `${ui.providerId}:${row.id}`, accountScope)) : null,
+            row.actions?.length ? h('div', { className: 'eac-row-links', key: 'actions' }, ...renderActions(row.actions, ui, accountScope)) : null,
             row.confirmation ? h('div', { key: 'confirm' }, renderConfirmation(row.confirmation, ui)) : null,
           ],
         })
@@ -101,14 +118,14 @@ function AccountsPanel(view, ui) {
   })
 }
 
-function renderModelEditor(model, ui) {
+function renderModelEditor(model, ui, modelDisabled) {
   const { editor, key } = model
   const onSave = value => ui.invoke(...editor.call, value)
-  if (editor.kind === 'tiers') return h(ModelParams, { key, model, value: editor.value, disabled: ui.disabled, onSave })
+  if (editor.kind === 'tiers') return h(ModelParams, { key, model, value: editor.value, disabled: modelDisabled, onSave })
   const draft = ui.drafts[key]
   const value = draft ?? model.params
   return h(PlanModelParams, {
-    key, model, disabled: ui.disabled, value,
+    key, model, disabled: modelDisabled, value,
     setValue: value => ui.setDrafts(current => ({ ...current, [key]: value })),
     async onSave(value) {
       const ok = await onSave(value)
@@ -121,13 +138,13 @@ function renderModelEditor(model, ui) {
   })
 }
 
-function ModelRow(model, ui) {
+function ModelRow(model, ui, modelDisabled) {
   const name = modelDisplayName(model)
   const editing = ui.editParams === model.key
   const editorId = 'eac-params-' + encodeURIComponent(model.key)
   return h('article', { className: 'eac-model', key: model.key, 'data-disabled': model.enabled === false ? 'true' : undefined },
     h('div', { className: 'eac-model-head' },
-      model.toggle ? Switch({ checked: model.enabled, disabled: ui.disabled, label: `${model.dead ? '恢复' : '启用'}模型 ${name}`,
+      model.toggle ? Switch({ checked: model.enabled, disabled: modelDisabled, label: `${model.dead ? '恢复' : '启用'}模型 ${name}`,
         onChange: () => ui.act(...model.toggle) }) : null,
       h('div', { className: 'eac-model-copy' },
         h('div', { className: 'eac-model-name', title: name }, name),
@@ -135,9 +152,9 @@ function ModelRow(model, ui) {
       model.defaults ? h('p', { className: 'eac-model-defaults', title: model.defaults }, model.defaults) : null,
       h('div', { className: 'eac-model-aside' },
         h('span', { className: 'eac-model-tags' }, ...renderTags(model.tags)),
-        model.editor ? button(editing ? '收起' : '参数', () => ui.act('toggleParams', model.key), ui.disabled,
+        model.editor ? button(editing ? '收起' : '参数', () => ui.act('toggleParams', model.key), modelDisabled,
           { className: 'is-quiet', 'aria-label': `${name} 的参数`, 'aria-expanded': editing, 'aria-controls': editorId }) : null)),
-    editing ? h('div', { id: editorId }, renderModelEditor(model, ui)) : null)
+    editing ? h('div', { id: editorId }, renderModelEditor(model, ui, modelDisabled)) : null)
 }
 
 function catalogSourceTag(source) {
@@ -158,13 +175,15 @@ function ModelsPanel({ groups }, ui) {
   const shown = grouped ? found : found.slice(page * MODEL_PAGE_SIZE, (page + 1) * MODEL_PAGE_SIZE)
   const activeCount = all.filter(model => model.enabled).length
   const primaryGroup = groups[0]
+  const modelScope = `models:${ui.providerId}`
+  const modelDisabled = ui.loading || ui.isPending(modelScope)
   return Section({
     title: '模型目录',
     summary: [
       all.some(model => model.toggle) ? `${activeCount} / ${all.length} 已启用` : `${all.length} 个模型`,
       !grouped ? catalogSourceTag(primaryGroup?.source) : null,
     ],
-    actions: grouped ? null : renderActions(primaryGroup?.actions, ui),
+    actions: grouped ? null : renderActions(primaryGroup?.actions, ui, modelScope),
     children: [
       h('div', { className: 'eac-model-tools' },
         h('input', { className: 'eac-input eac-model-search', type: 'search', value: ui.query, 'aria-label': '搜索全部模型',
@@ -177,11 +196,13 @@ function ModelsPanel({ groups }, ui) {
         const rows = shown.filter(model => group.rows.includes(model))
         const exclusions = modelRecommendationExclusions(group.rows, group.id)
         const byId = new Map(group.rows.map(model => [model.id, model]))
+        const groupScope = `models:${group.id}`
+        const groupDisabled = ui.loading || ui.isPending(groupScope) || ui.isPending(modelScope)
         return h('div', { className: 'eac-group', key: group.id, 'data-model-provider': grouped ? group.id : undefined },
           grouped ? h('div', { className: 'eac-group-head' },
             h('p', { className: 'eac-group-title' }, `${group.title} · ${group.rows.length}`, catalogSourceTag(group.source)),
-            h('div', { className: 'eac-group-actions' }, ...renderActions(group.actions, ui))) : null,
-          group.hint ? h('div', null, ...renderActions([group.hint], ui)) : null,
+            h('div', { className: 'eac-group-actions' }, ...renderActions(group.actions, ui, groupScope))) : null,
+          group.hint ? h('div', null, ...renderActions([group.hint], ui, groupScope)) : null,
           group.notice ? h('p', { className: 'eac-muted', role: 'status' }, group.notice) : null,
           rows.length ? h('div', { className: 'eac-model-list' }, ...rows.map(model => {
             const reason = exclusions.get(model.id)
@@ -190,7 +211,7 @@ function ModelsPanel({ groups }, ui) {
               alternative ? `同目录已有 ${modelDisplayName(alternative)}。` : model.staleReason]
               : reason?.kind === 'value' ? ['性价比偏低', 'warn',
                 `${modelDisplayName(alternative)} 的渠道倍率更低，可用于同类任务。`] : null
-            return ModelRow({ ...model, tags: [...(model.tags ?? []), tag] }, ui)
+            return ModelRow({ ...model, tags: [...(model.tags ?? []), tag] }, ui, groupDisabled)
           }))
             : grouped ? h('p', { className: 'eac-empty' }, ui.query.trim() ? '没有匹配的模型。' : '暂无模型。') : null)
       }),
@@ -203,16 +224,85 @@ function ModelsPanel({ groups }, ui) {
   })
 }
 
-function ChannelPanel(rows, ui) {
+function automationRowsFor(provider, state) {
+  const id = provider.id
+  const supportsCheckin = provider.pack
+    ? provider.caps?.dailyReward !== false
+    : (id === WORKBUDDY_ID || provider.caps?.dailyReward === true)
+  const supportsRewards = provider.caps?.onboarding === true || provider.caps?.claimRewards === true
+  const supportsTasks = provider.caps?.completeTasks === true
+  const overrides = state.automation?.config?.providers?.[id] ?? {}
+  const scope = 'automation'
+  const rows = []
+  const guardEnabled = automationEffective(state, id, 'cotLoopGuard')
+  rows.push({
+    id: 'cot-loop-guard', name: '思考循环保护', scope,
+    meta: typeof overrides.cotLoopGuard === 'boolean' ? '本渠道单独设置 · 命中重复思考自动切断并续跑' : '跟随全局设置 · 命中重复思考自动切断并续跑',
+    enabled: guardEnabled,
+    toggle: ['setAutomationConfig', { provider: id, cotLoopGuard: !guardEnabled }],
+    toggleLabel: `${provider.title} 思考循环保护`,
+    actions: typeof overrides.cotLoopGuard === 'boolean'
+      ? [{ label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, cotLoopGuard: null }] }] : undefined,
+  })
+  if (supportsCheckin) {
+    const enabled = automationEffective(state, id, 'autoCheckin')
+    rows.push({
+      id: 'auto-checkin', name: '自动每日签到', scope,
+      meta: typeof overrides.autoCheckin === 'boolean' ? '本渠道单独设置' : '跟随全局设置',
+      enabled,
+      toggle: ['setAutomationConfig', { provider: id, autoCheckin: !enabled }],
+      toggleLabel: `${provider.title} 自动每日签到`,
+      actions: typeof overrides.autoCheckin === 'boolean'
+        ? [{ label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCheckin: null }] }] : undefined,
+    })
+  }
+  if (supportsRewards) {
+    const enabled = automationEffective(state, id, 'autoClaimRewards')
+    rows.push({
+      id: 'auto-claim-rewards', name: '自动领取奖励', scope,
+      meta: typeof overrides.autoClaimRewards === 'boolean' ? '本渠道单独设置' : '跟随全局设置',
+      enabled,
+      toggle: ['setAutomationConfig', { provider: id, autoClaimRewards: !enabled }],
+      toggleLabel: `${provider.title} 自动领取奖励`,
+      actions: [
+        { label: '立即领取', call: ['runAutomationTask', id, 'claimRewards'] },
+        typeof overrides.autoClaimRewards === 'boolean'
+          ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoClaimRewards: null }] } : null,
+      ],
+    })
+  }
+  if (supportsTasks) {
+    const enabled = automationEffective(state, id, 'autoCompleteTasks')
+    rows.push({
+      id: 'auto-complete-tasks', name: '自动执行完成任务', scope,
+      meta: '默认关闭；开启后将自动触发该平台的任务执行动作',
+      enabled,
+      toggle: ['setAutomationConfig', { provider: id, autoCompleteTasks: !enabled }],
+      toggleLabel: `${provider.title} 自动执行完成任务`,
+      actions: [
+        { label: '立即执行', call: ['runAutomationTask', id, 'completeTasks'] },
+        typeof overrides.autoCompleteTasks === 'boolean'
+          ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCompleteTasks: null }] } : null,
+      ],
+    })
+  }
+  return rows
+}
+
+function ChannelPanel(rows, ui, provider, state) {
+  const autoRows = provider ? automationRowsFor(provider, state) : []
+  const allRows = [...rows, ...autoRows]
   return Section({
     title: '渠道设置',
-    children: ListBox({ children: rows.map(row => {
+    children: ListBox({ children: allRows.map(row => {
       const key = `${ui.providerId}:channel:${row.id}`
+      const scope = row.scope || `channel:${ui.providerId}`
+      const rowDisabled = ui.loading || ui.isPending(scope)
       return Row({
         key, name: row.name, meta: row.meta, tags: renderTags(row.tags),
-        switchControl: row.toggle ? Switch({ checked: row.enabled ?? false, disabled: ui.disabled || row.enabled === undefined,
+        switchControl: row.toggle ? Switch({ checked: row.enabled ?? false, disabled: rowDisabled || row.enabled === undefined,
           label: row.toggleLabel || row.name, onChange: () => ui.act(...row.toggle) }) : undefined,
-        controls: renderActions(row.actions, ui),
+        controls: renderActions(row.actions, ui, scope),
         moreLabel: row.form ? '配置' : undefined, expanded: ui.more[key] === true,
         onToggle: () => ui.act('toggleMore', key), detail: row.form && renderForm(row.form, ui),
       })
@@ -223,5 +313,5 @@ function ChannelPanel(rows, ui) {
 export function renderSettingsPanel(panel, provider, state, ui) {
   if (panel === 'accounts') return AccountsPanel(provider.accounts(state), ui)
   if (panel === 'models') return ModelsPanel(provider.models(state), ui)
-  return ChannelPanel(provider.channel(state), ui)
+  return ChannelPanel(provider.channel(state), ui, provider, state)
 }

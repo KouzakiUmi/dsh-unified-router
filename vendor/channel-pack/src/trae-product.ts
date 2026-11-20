@@ -33,6 +33,14 @@ export interface TraeFallbackModel {
   id: string
   name: string
   contextWindow: number
+  /** 实测的思考档位配置（离线或未刷新远端时兜底）。 */
+  reasoningConfig?: {
+    options: readonly string[]
+    defaultLevel?: string
+    supportThinking?: boolean
+  }
+  /** 实测的图片多模态支持（离线或未刷新远端时兜底）。 */
+  multimodal?: boolean
   /** 已知的上游内部/隐藏条目（远端不可用时也不该出现在目录里）。 */
   isHidden?: boolean
   stale?: boolean
@@ -216,29 +224,33 @@ export const TRAE_CONSOLE_HOST = 'https://www.trae.cn'
  * ⚠️ 输出上限（`model_detail_list[__dev].max_tokens`）实测全部为 32000，
  * 由产品级 `fallbackMaxOutputTokens` 表达，不逐条重复。
  */
+const TRAE_EFFORTS_2 = Object.freeze({ options: ['light', 'high'], defaultLevel: 'high', supportThinking: true })
+const TRAE_EFFORTS_3_HIGH = Object.freeze({ options: ['light', 'high', 'extra_high'], defaultLevel: 'high', supportThinking: true })
+const TRAE_EFFORTS_3_XHIGH = Object.freeze({ options: ['light', 'high', 'extra_high'], defaultLevel: 'extra_high', supportThinking: true })
+
 const TRAE_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
-  { id: 'Doubao-Seed-2.1-Turbo', name: 'Seed-2.1-Turbo', contextWindow: 256_000 },
-  { id: 'Doubao-Seed-2.1-Pro', name: 'Seed-2.1-Pro-0915', contextWindow: 256_000 },
-  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000 },
-  { id: 'Doubao-Seed-Code', name: 'Seed-Code', contextWindow: 256_000 },
-  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', contextWindow: 200_000 },
-  { id: 'glm-5.3-flashx', name: 'GLM-5.3-FlashX', contextWindow: 200_000 },
-  { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200_000 },
-  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000 },
-  { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro', contextWindow: 200_000 },
-  { id: 'kimi-k3.1-pro-highspeed', name: 'Kimi-K3.1-Pro-Highspeed', contextWindow: 200_000 },
-  { id: 'kimi-k3.1-pro', name: 'Kimi-K3.1-Pro', contextWindow: 200_000 },
+  { id: 'Doubao-Seed-2.1-Turbo', name: 'Seed-2.1-Turbo', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
+  { id: 'Doubao-Seed-2.1-Pro', name: 'Seed-2.1-Pro-0915', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
+  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000, multimodal: true },
+  { id: 'Doubao-Seed-Code', name: 'Seed-Code', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
+  { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
+  { id: 'glm-5.3-flashx', name: 'GLM-5.3-FlashX', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
+  { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200_000, multimodal: false, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
+  { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro', contextWindow: 200_000, multimodal: false, reasoningConfig: TRAE_EFFORTS_3_HIGH },
+  { id: 'kimi-k3.1-pro-highspeed', name: 'Kimi-K3.1-Pro-Highspeed', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
+  { id: 'kimi-k3.1-pro', name: 'Kimi-K3.1-Pro', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
   // 同族已有更新一代（kimi-k3.1-pro / -highspeed）在同一目录里，故默认不选。
-  { id: 'kimi-k3', name: 'Kimi-K3', contextWindow: 200_000, stale: true, staleReason: '同目录已有 Kimi-K3.1-Pro。' },
-  { id: 'mimo-v2.6-flash', name: 'MiMo-V2.6-Flash', contextWindow: 200_000 },
-  { id: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro', contextWindow: 200_000 },
-  { id: 'minimax-m3.1-flash', name: 'MiniMax-M3.1-Flash', contextWindow: 200_000 },
+  { id: 'kimi-k3', name: 'Kimi-K3', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH, stale: true, staleReason: '同目录已有 Kimi-K3.1-Pro。' },
+  { id: 'mimo-v2.6-flash', name: 'MiMo-V2.6-Flash', contextWindow: 200_000, multimodal: true },
+  { id: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro', contextWindow: 200_000, multimodal: true },
+  { id: 'minimax-m3.1-flash', name: 'MiniMax-M3.1-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
   // 同族已有 MiniMax-M3.1-Flash。
-  { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 200_000, stale: true, staleReason: '同目录已有 MiniMax-M3.1-Flash。' },
-  { id: 'step-5-preview', name: 'Step-5-Preview', contextWindow: 200_000 },
-  { id: 'qwen4-max', name: 'Qwen4-Max', contextWindow: 200_000 },
-  { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', contextWindow: 200_000 },
-  { id: 'qwen3.8-max', name: 'Qwen3.8-Max', contextWindow: 200_000 },
+  { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 200_000, multimodal: true, stale: true, staleReason: '同目录已有 MiniMax-M3.1-Flash。' },
+  { id: 'step-5-preview', name: 'Step-5-Preview', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
+  { id: 'qwen4-max', name: 'Qwen4-Max', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
+  { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
+  { id: 'qwen3.8-max', name: 'Qwen3.8-Max', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
 ]
 
 /**
@@ -333,8 +345,9 @@ export const TRAE: TraeProduct = {
   consoleHost: TRAE_CONSOLE_HOST,
   clientId: 'en1oxy7wnw8j9n',
   appId: '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
-  ideVersion: '0.1.52',
-  ideVersionCode: '20260811',
+  // 对齐 TRAE SOLO CN 0.1.69 (20260917)：老版本 0.1.52 会导致上游省略部分新模型与思考档位。
+  ideVersion: '0.1.69',
+  ideVersionCode: '20260917',
   deviceBrand: 'Apple',
   osVersion: 'macOS 15.7.4',
   function: 'solo_work_lite',
@@ -345,6 +358,6 @@ export const TRAE: TraeProduct = {
   hideInternalModels: isTruthyFlag(process.env.DSH_TRAE_HIDE_INTERNAL),
   pluginVersion: '2.3.62834',
   defaultCredentialRef: 'TRAE_ACCESS_TOKEN',
-  userAgent: 'Trae/0.1.52',
+  userAgent: 'Trae/0.1.69',
   fallbackModels: TRAE_FALLBACK_MODELS,
 }

@@ -80,7 +80,7 @@ test('客户端只注册 settings.section，不声明聊天或侧栏入口；实
   // （商汤 plan.snapshot、WorkBuddy snapshot + models），否则那两张渠道 tab 在
   // 「点进去之前」永远是「未添加账号 / 状态未读取」（用户反复报障）。API Key 渠道
   // （Agnes、云知声）各预热一份 apikey.snapshot，同样不计入基础读取。
-  const coreReads = transport.filter(args => !['plan.snapshot', 'workbuddy.snapshot', 'workbuddy.models', 'apikey.snapshot'].includes(args[2].method))
+  const coreReads = transport.filter(args => !['plan.snapshot', 'workbuddy.snapshot', 'workbuddy.models', 'apikey.snapshot', 'managed.snapshot', 'managed.models'].includes(args[2].method))
   assert.equal(coreReads.length, 7)
   assert.ok(coreReads.some(args => args[2].method === 'settings.snapshot'))
   assert.deepEqual(transport.map(args => args[2].method).filter(m => ['plan.snapshot', 'workbuddy.snapshot', 'workbuddy.models'].includes(m)).sort(),
@@ -190,17 +190,17 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   react.dispose()
 })
 
-test('渠道卡片八张：Raccoon 只有一张卡片（两个模型面合并）；无每日签到但登录奖励可用', async () => {
+test('渠道卡片十二张：Raccoon 只有一张卡片（两个模型面合并）；无每日签到但登录奖励可用', async () => {
   const { module, react } = loadClient(); const host = hostFixture(); let Settings
   const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
   module.apply(ctx)
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   render(); await tick()
   const tabs = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  // 八张卡片：Loomy、Raccoon（家族卡）、Qoder 中国版、TRAE、商汤、WorkBuddy、Agnes、云知声。
+  // 十二张卡片：原八张 + AStudio、豆包工作、Coze、CodeArts。
   // `raccoon-pro` 是模型层的第二个 provider，不是一张卡片。
   assert.deepEqual(tabs.map(n => n.props['aria-label'].replace('切换到 ', '')),
-    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声'])
+    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'AStudio', '豆包工作', 'Coze', 'CodeArts'])
 
   const store = module.createRouterStore(host.call)
   try {
@@ -822,7 +822,7 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   render(); await tick()
   // 卡片：一张家族卡，副行是「账号数（单池）· 模型数（两侧之和）」。
   const cards = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  assert.equal(cards.length, 8)
+  assert.equal(cards.length, 12)
   assert.ok(hasText(render(), '3 账号 · 6 模型'))
   // 默认进入模型页，切换渠道前先配置该渠道的补拉响应。
   host.overrides.set('model.refresh', async payload => ({ ok: true, value: payload.provider === 'raccoon'

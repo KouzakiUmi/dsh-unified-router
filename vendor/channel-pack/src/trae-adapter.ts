@@ -63,14 +63,28 @@ export const PROVIDER = 'trae'
  * 未登记的取值回退原样显示，避免远端新增档位时显示空白。
  */
 const TRAE_EFFORT_NAMES: Readonly<Record<string, string>> = {
-  light: 'Light',
-  minimal: 'Minimal',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  extra_high: 'Extra High',
-  xhigh: 'XHigh',
-  max: 'Max',
+  light: '轻',
+  minimal: '极少',
+  low: '低',
+  medium: '中',
+  high: '高',
+  extra_high: '极高',
+  xhigh: '极高',
+  max: '最大',
+}
+
+/** 将外部规范档位名（如 low / xhigh / max）兼容映射到该模型实际接受的 TRAE wire 值。 */
+function resolveTraeWireEffort(
+  requested: string | undefined,
+  options: readonly string[] | undefined,
+): string | undefined {
+  if (typeof requested !== 'string' || requested.length === 0) return undefined
+  if (!options || options.length === 0) return requested
+  if (options.includes(requested)) return requested
+  if (requested === 'low' && options.includes('light')) return 'light'
+  if (requested === 'xhigh' && options.includes('extra_high')) return 'extra_high'
+  if (requested === 'max' && !options.includes('max') && options.includes('extra_high')) return 'extra_high'
+  return undefined
 }
 
 /**
@@ -543,7 +557,11 @@ function httpErrorCode(status: number): string {
  * 不做无依据的解释。
  */
 function traeStreamErrorMessage(code: number, message: string, model: string): string {
-  const base = `trae: ${message} (code=${code})`
+  const detail = message.trim()
+  if (code === 1005) {
+    return `trae: ${detail || '套餐权益不足或额度受限'} (code=1005)`
+  }
+  const base = detail ? `trae: ${detail} (code=${code})` : `trae: (code=${code})`
   if (code !== 4001) return base
   return `${base} —— 模型「${model}」不被上游接受：它通常是「仅可见但不可调用」的`
     + '自定义模型（需先在 TRAE IDE 内自行配置供应商），请改用模型列表中的其它模型'
@@ -710,7 +728,8 @@ export class TraeAdapter extends LlmAdapter {
    */
   private inputModalitiesFor(model: string): readonly ('text' | 'image')[] {
     const override = this.options.accountPool?.modelParamsFor?.(this.product.id, model)?.supportsImage
-    return (override ?? this.remoteMeta.get(model)?.multimodal) === true ? ['text', 'image'] : ['text']
+    const declared = this.remoteMeta.get(model)?.multimodal ?? this.fallbackIndex.get(model)?.multimodal
+    return (override ?? declared) === true ? ['text', 'image'] : ['text']
   }
 
   private rateBadgeFor(model: string) {
@@ -803,7 +822,7 @@ export class TraeAdapter extends LlmAdapter {
    * 不一致时退化为不声明默认值。
    */
   private reasoningFor(model: string): LlmResolvedModelInfo['reasoning'] {
-    const config = this.remoteMeta.get(model)?.reasoningConfig
+    const config = this.remoteMeta.get(model)?.reasoningConfig ?? this.fallbackIndex.get(model)?.reasoningConfig
     if (config === undefined) return undefined
     if (config.supportThinking === false) return undefined
     if (config.options.length === 0) return undefined
@@ -896,12 +915,14 @@ export class TraeAdapter extends LlmAdapter {
     return source.map((model) => {
       const curated = this.fallbackIndex.get(model.id)
       const reasoning = this.reasoningFor(model.id)
+      const maxOutput = this.maxOutputTokensFor(model.id)
+      const supportsImage = this.remoteMeta.get(model.id)?.multimodal ?? curated?.multimodal
       return {
         id: model.id,
         name: readableModelName(model.id, traeDisplayName(model)),
         contextWindow: this.contextWindowFor(model.id),
-        defaultMaxTokens: this.maxOutputTokensFor(model.id),
-        supportsImage: this.remoteMeta.get(model.id)?.multimodal,
+        ...(maxOutput !== undefined ? { maxTokens: maxOutput, defaultMaxTokens: maxOutput } : {}),
+        ...(supportsImage !== undefined ? { supportsImage } : {}),
         rateBadge: this.rateBadgeFor(model.id),
         ...(reasoning?.efforts?.length ? {
           efforts: reasoning.efforts.map(effort => effort.id), defaultEffort: reasoning.defaultEffort,
@@ -1113,7 +1134,9 @@ export class TraeAdapter extends LlmAdapter {
     // 取值来自 `resolveModel` 声明的 `reasoning.efforts`（即远端
     // `reasoning_effort_config.options` 的字符串），故这里不做白名单校验 ——
     // 校验只会把「远端新增档位」变成静默丢弃。
-    const effort = options.reasoningEffort ?? this.reasoningFor(options.model)?.defaultEffort
+    const reasoningCfg = this.remoteMeta.get(options.model)?.reasoningConfig ?? this.fallbackIndex.get(options.model)?.reasoningConfig
+    const requestedEffort = options.reasoningEffort ?? this.reasoningFor(options.model)?.defaultEffort
+    const effort = resolveTraeWireEffort(requestedEffort, reasoningCfg?.options)
     if (effort !== undefined) {
       openaiBody.reasoning_effort = effort
     }
@@ -1124,37 +1147,40 @@ export class TraeAdapter extends LlmAdapter {
     // ⚠️ 必须在 `clampTraeMaxTokens` **之后**执行：Max 会话的输出上限由远端
     // `__max` 明细声明（可能高于 64K 安全线），被 clamp 覆盖会让 Max 请求
     // 与常规请求的输出预算相同、失去意义。
-    if (this.maxModeFor(options.model)) {
-      const meta = this.remoteMeta.get(options.model)
-      Object.assign(
-        openaiBody,
-        traeMaxModeFields(
-          meta?.maxContextWindow ?? TRAE_MAX_CONTEXT_TOKENS,
-          meta?.maxModeOutputTokens,
-        ),
-      )
+    // 组装不同模式/通道的 SOLO 请求体（用于 1005 Max 降级或备用 function 回退，不改写原始 openaiBody）。
+    const buildSoloBody = (useMaxMode: boolean, channel: string): string => {
+      const payload: Record<string, unknown> = { ...openaiBody }
+      if (useMaxMode) {
+        const meta = this.remoteMeta.get(options.model)
+        Object.assign(
+          payload,
+          traeMaxModeFields(
+            meta?.maxContextWindow ?? TRAE_MAX_CONTEXT_TOKENS,
+            meta?.maxModeOutputTokens,
+          ),
+        )
+      }
+      if (options.system !== undefined && options.system.length > 0) {
+        payload.messages = [
+          { role: 'system', content: options.system },
+          ...wireMessages,
+        ]
+      }
+      const solo = transformToSOLOBody(payload, undefined, channel)
+      if (!solo.request_id) solo.request_id = crypto.randomUUID()
+      if (!solo.session_id) {
+        const sid = (options as { sessionId?: unknown }).sessionId
+        solo.session_id = typeof sid === 'string' && sid ? sid : crypto.randomUUID()
+      }
+      return JSON.stringify(solo)
     }
 
-    // system 提示并入 messages 顶部（同样要在转换之前，以便 content 被规范化）。
-    if (options.system !== undefined && options.system.length > 0) {
-      openaiBody.messages = [
-        { role: 'system', content: options.system },
-        ...wireMessages,
-      ]
-    }
-
-    // ⚠️ **这里刻意没有本地历史闸门**（2026-10-04 删除，此前是一道字符预算裁剪）。
-    // 唯一的限制是 **DSH 自己的压缩点**（`声明的窗口 × 0.8`）—— 与其余 13 个
-    // provider 同形。删掉的理由、被删代码的来历与「若有人想加回来必须先读什么」
-    // 都在下方 `TRAE 历史闸门（已删除）` 那段注释里；改动前务必先读它。
-    // 序列化之后不再对 `openaiBody.messages` 做任何长度相关的删改。
-
-    // 一次性完成 OpenAI → SOLO 转换（含 messages 规范化、tools 序列化、
-    // tool_choice 归一化、config_name 注入），并**按模型路由通道** ——
-    // 同一模型只在列出它的通道里可调用（发错通道会得到流内 4001）。
-    const bodyObj = transformToSOLOBody(openaiBody, undefined, this.channelFor(options.model))
-
-    const body = JSON.stringify(bodyObj)
+    let usingMaxMode = this.maxModeFor(options.model)
+    let activeChannel = this.channelFor(options.model)
+    const fallbackChannels = ['solo_agent', 'chat_v3', 'solo_work_lite', 'solo_coder']
+      .filter((fn) => fn !== activeChannel)
+    let fallbackChannelIndex = 0
+    let body = buildSoloBody(usingMaxMode, activeChannel)
 
     // 4. 发送请求（401/403 时刷新一次凭据后重试）
     let response = await this.send(credential, body, options)
@@ -1173,7 +1199,20 @@ export class TraeAdapter extends LlmAdapter {
       let lastStatus = response.status
       let lastKind = classifyTraeError(response.status, errorText)
 
-      if (this.options.accountPool && shouldRotateTraeAccount(lastKind)) {
+      // code=1005 且开启了 Max 模式：先在同一账号降级关闭 Max 模式重试一次。
+      if (usingMaxMode && (lastKind === 'hard-plan' || errorText.includes('1005'))) {
+        usingMaxMode = false
+        body = buildSoloBody(false, activeChannel)
+        const downgraded = await this.send(credential, body, options)
+        response = downgraded
+        if (!downgraded.ok) {
+          errorText = await downgraded.text().catch(() => '')
+          lastStatus = downgraded.status
+          lastKind = classifyTraeError(downgraded.status, errorText)
+        }
+      }
+
+      if (!response.ok && this.options.accountPool && shouldRotateTraeAccount(lastKind)) {
         const tried = new Set<string>()
         if (currentAccountId) tried.add(currentAccountId)
 
@@ -1210,10 +1249,12 @@ export class TraeAdapter extends LlmAdapter {
         )
       }
 
-      if (lastKind === 'quota-exceeded') {
-        throw new LlmError(`trae: 积分不足（${errorDetail(errorText)}）`, 'QUOTA_EXCEEDED', { status: lastStatus })
+      if (!response.ok) {
+        if (lastKind === 'quota-exceeded' || lastKind === 'hard-plan') {
+          throw new LlmError(`trae: 套餐权益或积分不足（${errorDetail(errorText)}）`, 'QUOTA_EXCEEDED', { status: lastStatus })
+        }
+        throw new LlmError(`trae: ${errorDetail(errorText)}`, httpErrorCode(lastStatus), { status: lastStatus })
       }
-      throw new LlmError(`trae: ${errorDetail(errorText)}`, httpErrorCode(lastStatus), { status: lastStatus })
     }
 
     // 5. 消费 SSE 流（SOLO → OpenAI 转换）
@@ -1237,13 +1278,37 @@ export class TraeAdapter extends LlmAdapter {
         yield* this.consumeSse(response, options)
         return
       } catch (error) {
-        // ② 流内可换号错误 → 标记当前账号 + 取下一个账号重发。
+        // ② 流内可换号错误 → 1005 先在同账号降级关闭 Max / 换备用 function，再换号重发。
         if (error instanceof LlmError && error.code === TRAE_ROTATABLE_STREAM_ERROR) {
+          if (options.signal?.aborted) throw error
+          const isCode1005 = error.message.includes('code=1005')
+          const trySameAccountFallback = async (nextBody: string): Promise<boolean> => {
+            const candidate = await this.send(credential, nextBody, options)
+            if (candidate.ok) {
+              response = candidate
+              return true
+            }
+            const errBody = await candidate.text().catch(() => '')
+            const kind = classifyTraeError(candidate.status, errBody)
+            if (!shouldRotateTraeAccount(kind) && !errBody.includes('1005')) {
+              throw new LlmError(`trae: ${errorDetail(errBody)}`, httpErrorCode(candidate.status), { status: candidate.status })
+            }
+            return false
+          }
+          if (isCode1005 && usingMaxMode) {
+            usingMaxMode = false
+            body = buildSoloBody(false, activeChannel)
+            if (await trySameAccountFallback(body)) continue
+          }
+          if (isCode1005 && fallbackChannelIndex < Math.min(2, fallbackChannels.length)) {
+            activeChannel = fallbackChannels[fallbackChannelIndex++]!
+            body = buildSoloBody(usingMaxMode, activeChannel)
+            if (await trySameAccountFallback(body)) continue
+          }
           // 无账号池、或换号预算用尽 → 如实抛出（去掉哨兵码，换真实语义）。
           if (this.options.accountPool === undefined || rotateBudget <= 0) {
             throw new LlmError(error.message, 'QUOTA_EXCEEDED')
           }
-          if (options.signal?.aborted) throw error
 
           rotateBudget -= 1
           // 标记当前账号在本模型上受限（UI 据此亮「限额重置」徽章）。

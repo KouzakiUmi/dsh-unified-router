@@ -1,0 +1,372 @@
+// 通用自管多账号渠道前端视图与动作工厂（供 AStudio、豆包工作、Coze、CodeArts 共用）。
+// 新增同类渠道只需提供 5 行声明（id / title / authMethods / capabilities），不再手写 UI 或状态流。
+const EMPTY_MANAGED = Object.freeze({
+  enabled: true, registered: false, authMethods: ['browser'], credentialHint: '',
+  accounts: [], models: [], modelSource: undefined, loginUrl: '',
+})
+
+function managedRemaining(window) {
+  return window.used !== null ? Math.min(1, Math.max(0, 1 - window.used / 100)) : null
+}
+
+const SOURCE_LABELS = { local: '本机导入', credential: '凭据导入', browser: '浏览器登录' }
+
+export function managedChannel({ id, title, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false }) {
+  const entry = state => state.managed?.[id]
+  const withEntry = (state, next) => ({ managed: { ...state.managed, [id]: next } })
+
+  const provider = {
+    id,
+    title,
+    rpcMethods: MANAGED_METHODS,
+    caps: {
+      dailyReward: checkin,
+      claimRewards,
+      completeTasks,
+      authMethods,
+    },
+    createActions: context => createManagedActions(provider, context),
+    managedAccount: (state, accountId) => (entry(state)?.accounts ?? []).find(account => account.id === accountId),
+    removeAction: `${id}Logout`,
+    snapshot: {
+      methods: ['managed.snapshot', 'managed.models'],
+      keep: ['managed'],
+      ready: state => entry(state)?.ready === true,
+      failed: state => entry(state)?.error === true,
+      readFailed: state => withEntry(state, { ...(entry(state) ?? EMPTY_MANAGED), ready: entry(state)?.ready === true, stale: true, error: true }),
+      fromRead([snapshot, models], state) {
+        const previous = entry(state) ?? EMPTY_MANAGED
+        const { managed, stale } = managedSnapshotFrom({ ...snapshot, models: models?.models, modelSource: models?.source }, previous)
+        return withEntry(state, { ...managed, ready: true, stale: stale || snapshot?.snapshot?.stale === true, error: false })
+      },
+      apply(get, state) {
+        const usage = get('managed.snapshot')
+        const models = get('managed.models')
+        if (!usage && !models?.value) return {}
+        const previous = entry(state) ?? EMPTY_MANAGED
+        const { managed } = managedSnapshotFrom({
+          ...(usage?.value ?? previous),
+          accounts: usage?.value?.accounts ?? previous.accounts,
+          models: models?.value?.models,
+          modelSource: models?.value?.source,
+          loginUrl: previous.loginUrl,
+        }, previous)
+        return {
+          ...withEntry(state, {
+            ...managed,
+            stale: usage?.stale === true,
+            error: usage?.stale === true && !usage.value,
+            ready: !!usage?.value || previous.ready === true,
+          }),
+          ...(usage && state.provider === id ? { loading: false } : {}),
+        }
+      },
+    },
+    statusFrom(state) {
+      const current = entry(state)
+      if (!current?.ready && !(current?.accounts?.length)) return null
+      const accounts = current.accounts ?? []
+      const signedIn = accounts.filter(account => account.signedIn && account.enabled !== false).length
+      const closed = current.enabled === false
+      const label = closed ? '渠道已关闭' : signedIn ? (current.registered ? '渠道运行中' : '已连接') : '待添加账号'
+      return {
+        closed,
+        accounts: signedIn,
+        totalAccounts: accounts.length,
+        models: (current.models ?? []).length,
+        label,
+        tone: !closed && signedIn && !accounts.some(account => account.error) ? 'success' : 'warn',
+      }
+    },
+    accounts(state) {
+      const current = entry(state) ?? EMPTY_MANAGED
+      const methods = current.authMethods?.length ? current.authMethods : authMethods
+      const loginUrl = current.loginUrl || ''
+      return {
+        ready: current.ready === true || current.accounts.length > 0,
+        failed: current.error === true,
+        autoCheckin: checkin ? automationEffective(state, id, 'autoCheckin') : undefined,
+        login: loginUrl ? { url: loginUrl } : null,
+        importForm: methods.includes('credential') ? {
+          hint: current.credentialHint || credentialHint,
+          call: [`${id}ImportCredential`],
+        } : null,
+        actions: [
+          methods.includes('local') && { label: '导入本机登录', call: [`${id}ImportLocal`], primary: !methods.includes('browser') },
+          methods.includes('browser') && { label: '浏览器登录', call: [`${id}Login`], primary: true },
+          methods.includes('credential') && { label: '粘贴凭据', call: ['toggleImportForm', id] },
+        ],
+        rows: current.accounts.map(account => {
+          const name = account.name || account.uid || account.id
+          const remaining = account.windows.map(managedRemaining).filter(value => value !== null)
+          const lowest = remaining.length ? Math.min(...remaining) : null
+          const confirmation = state.pendingDelete?.accountId === account.id && state.pendingDelete.provider === id
+          const ck = checkin ? checkinEntry(state, id, account.id) : null
+          const rw = claimRewards ? taskEntry(state, id, 'claimRewards', account.id) : null
+          const metric = account.balance !== null
+            ? { value: account.balance, unit: account.unit || '积分' }
+            : lowest !== null
+              ? { value: Math.round(lowest * 100), unit: '% 剩余', fraction: lowest }
+              : { value: '额度待更新' }
+          return {
+            id: account.id,
+            name,
+            enabled: account.enabled !== false,
+            toggle: [`${id}UpdateAccount`, account.id, name, account.enabled === false],
+            updatedAt: account.updatedAt,
+            tags: [
+              account.plan && [account.plan, 'info'],
+              account.source && SOURCE_LABELS[account.source] && [SOURCE_LABELS[account.source]],
+              account.enabled === false && ['已停用'],
+              !account.signedIn && ['凭据失效', 'warn'],
+              (account.error || current.stale) && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
+              ck?.tag,
+              rw?.tag,
+            ],
+            metric,
+            groups: account.windows.length ? [{
+              title: '额度窗口',
+              items: account.windows.map(window => {
+                const fraction = managedRemaining(window)
+                return {
+                  label: window.name, fraction,
+                  value: fraction === null ? window.balance : Math.round(fraction * 100),
+                  unit: fraction === null ? window.unit : '% 剩余',
+                  notes: [
+                    window.amount !== null && `已用 ${displayNumber(window.amount)} ${window.unit}`.trim(),
+                    window.resetsAt && `重置 ${displayTime(window.resetsAt)}`,
+                    window.runsOutAt && `预计用尽 ${displayTime(window.runsOutAt)}`,
+                  ],
+                }
+              }),
+            }] : [],
+            form: { kind: 'account', account: { id: account.id, nickname: name, enabled: account.enabled !== false }, call: [`${id}UpdateAccount`] },
+            actions: [
+              checkin && account.signedIn && { label: '签到', accessible: `为 ${name} 签到`, call: [`${id}Checkin`, account.id], disabled: ck?.locked },
+              claimRewards && account.signedIn && { label: '领奖励', accessible: `为 ${name} 领取奖励`, call: [`${id}ClaimRewards`, account.id] },
+              completeTasks && account.signedIn && { label: '执行任务', accessible: `为 ${name} 执行任务`, call: [`${id}CompleteTasks`, account.id] },
+              { label: '移除账号', accessible: `移除 ${name}`, call: ['requestDelete', account.id], danger: true },
+            ],
+            confirmation: confirmation ? {
+              label: `移除「${name}」？`,
+              confirmLabel: '移除',
+              call: ['confirmDelete', state.pendingDelete],
+              cancel: ['cancelDelete'],
+            } : null,
+          }
+        }),
+      }
+    },
+    models(state) {
+      const current = entry(state) ?? EMPTY_MANAGED
+      const models = current.models ?? []
+      return {
+        groups: [{
+          id,
+          source: current.modelSource,
+          actions: [
+            { label: '刷新目录', call: [`${id}RefreshModels`] },
+            { label: '恢复推荐', call: [`${id}ResetModels`], disabled: !models.length },
+          ],
+          rows: models.map(model => ({
+            ...model,
+            key: modelKey(id, model.id),
+            toggle: [`${id}SetModelEnabled`, model.id, !model.enabled],
+            defaults: currentModelSummary(model),
+            tags: [model.rate ? [model.rate.label, model.rate.tone] : model.free && ['免费', 'success']],
+            editor: { kind: 'numeric', call: [`${id}SetModelParams`, model.id] },
+          })),
+        }],
+      }
+    },
+    channel(state) {
+      const current = entry(state) ?? EMPTY_MANAGED
+      const connected = current.accounts.some(account => account.signedIn && account.enabled !== false)
+      return [
+        {
+          id: 'models', name: '模型提供方',
+          enabled: current.enabled !== false,
+          toggle: [`${id}SetEnabled`, current.enabled === false],
+          tags: [current.enabled !== false && connected && !current.registered && ['待注册', 'warn']],
+        },
+        {
+          id: 'accounts', name: '账号连接',
+          tags: [[connected ? `已连接 ${current.accounts.filter(a => a.signedIn).length} 个` : '待添加账号', connected ? 'success' : undefined]],
+          actions: [{ label: '管理账号', panel: 'accounts' }],
+        },
+      ]
+    },
+  }
+  return provider
+}
+
+function createManagedActions(provider, { getState, isDisposed, hasSnapshots, request, publish, mutate, loadManaged, loginUrlTimers, writes, persistCards }) {
+  const { id, title } = provider
+  const patchEntry = update => {
+    const state = getState()
+    const current = state.managed?.[id] ?? EMPTY_MANAGED
+    publish({ managed: { ...state.managed, [id]: update(current) } })
+    persistCards?.()
+  }
+  const saveModels = (method, payload, message) => mutate(method, { provider: id, ...payload }, {
+    refresh: false,
+    scope: `models:${id}`,
+    message,
+    result(value) {
+      if (Array.isArray(value?.models)) {
+        patchEntry(cur => ({ ...cur, models: workbuddyModelsFrom(value.models), modelSource: value.source || cur.modelSource }))
+      }
+    },
+  })
+  return {
+    [`${id}SetModelEnabled`](modelId, enabled) {
+      return saveModels('managed.setModelEnabled', { modelId, enabled }, '模型开关已保存。')
+    },
+    [`${id}SetModelParams`](modelId, params) {
+      return saveModels('managed.setModelParams', { modelId, params }, '模型参数已保存。')
+    },
+    [`${id}ResetModels`]() {
+      return saveModels('managed.resetModels', {}, '已恢复推荐模型。')
+    },
+    [`${id}RefreshModels`]() {
+      return saveModels('managed.refreshModels', {}, '模型目录已刷新。')
+    },
+    [`${id}SetEnabled`](enabled) {
+      return mutate('managed.setEnabled', { provider: id, enabled: enabled === true }, {
+        refresh: false,
+        scope: `channel:${id}`,
+        progress: enabled ? `正在启用 ${title}…` : `正在关闭 ${title}…`,
+        message: enabled ? `${title} 模型提供方已启用。` : `${title} 模型提供方已关闭。`,
+        result(value) {
+          patchEntry(cur => ({ ...cur, enabled: value?.enabled !== false, registered: value?.registered === true }))
+        },
+      })
+    },
+    [`${id}Login`]() {
+      const options = {
+        scope: `login:${id}`,
+        progress: `正在准备 ${title} 浏览器登录…`,
+        message: value => value?.signedIn === true ? `已添加 ${title} 账号。` : `${title} 登录未完成，请重试。`,
+      }
+      const login = mutate('managed.login', { provider: id }, options)
+      let polling = true, timer = null
+      const controller = new AbortController()
+      writes.add(controller)
+      const fetchUrl = async () => {
+        if (!polling || getState().provider !== id) return
+        try {
+          const value = await request('managed.snapshot', { provider: id, ...(hasSnapshots() ? { localOnly: true } : {}) }, controller.signal)
+          if (polling && value?.loginUrl && !isDisposed() && getState().provider === id) {
+            patchEntry(cur => ({ ...cur, loginUrl: value.loginUrl }))
+          }
+        } catch {}
+      }
+      const schedule = () => {
+        if (!polling || isDisposed() || typeof setTimeout !== 'function' || typeof clearTimeout !== 'function') return
+        timer = setTimeout(async () => {
+          loginUrlTimers.delete(timer)
+          timer = null
+          await fetchUrl()
+          schedule()
+        }, 1500)
+        loginUrlTimers.add(timer)
+      }
+      schedule()
+      return login.finally(() => {
+        polling = false
+        controller.abort()
+        writes.delete(controller)
+        if (timer !== null) { clearTimeout(timer); loginUrlTimers.delete(timer) }
+        if (!isDisposed()) patchEntry(cur => ({ ...cur, loginUrl: '' }))
+      })
+    },
+    [`${id}ImportLocal`]() {
+      return mutate('managed.importLocal', { provider: id }, {
+        scope: `login:${id}`,
+        progress: `正在读取本机 ${title} 登录态…`,
+        message: value => value?.signedIn ? `已导入本机 ${title} 账号。` : `未检测到本机 ${title} 登录态。`,
+      })
+    },
+    [`${id}ImportCredential`](credential) {
+      if (typeof credential !== 'string' || !credential.trim()) {
+        publish({ notice: '请输入凭据内容。' })
+        return Promise.resolve(false)
+      }
+      return mutate('managed.importCredential', { provider: id, credential: credential.trim() }, {
+        scope: `login:${id}`,
+        progress: `正在验证 ${title} 凭据…`,
+        message: `已导入 ${title} 账号。`,
+      })
+    },
+    [`${id}UpdateAccount`](accountId, nickname, enabled) {
+      if (typeof nickname !== 'string' || !nickname.trim() || [...nickname.trim()].length > 80) {
+        publish({ notice: '请填写 1–80 个字的账号备注。' })
+        return Promise.resolve(false)
+      }
+      return mutate('managed.updateAccount', { provider: id, accountId, patch: { nickname: nickname.trim(), enabled: enabled !== false } }, {
+        refresh: false,
+        scope: `account:${accountId}`,
+        message: '账号设置已保存。',
+        result(value) {
+          patchEntry(cur => ({
+            ...cur,
+            accounts: cur.accounts.map(a => a.id === accountId ? { ...a, name: value?.name ?? nickname.trim(), enabled: value?.enabled !== false } : a),
+          }))
+        },
+      })
+    },
+    [`${id}Logout`](accountId) {
+      if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
+      return mutate('managed.logout', { provider: id, accountId }, {
+        scope: `account:${accountId}`,
+        message: `已移除该 ${title} 账号。`,
+      })
+    },
+    [`${id}Checkin`](accountId) {
+      if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
+      return mutate('managed.checkin', { provider: id, accountId }, {
+        refresh: false,
+        scope: `account:${accountId}`,
+        progress: '正在签到领取当日积分…',
+        message: value => {
+          const outcome = text(value?.outcome, 40)
+          if (outcome === 'claimed') return `签到成功${typeof value?.credit === 'number' ? `，领取 ${value.credit} 积分` : ''}。`
+          if (outcome === 'done' || outcome === 'already-claimed') return '今日已签到。'
+          if (outcome === 'inactive') return '今日签到活动未开启。'
+          if (outcome === 'ineligible') return '当前账号暂不支持签到。'
+          if (outcome === 'pending') return '签到待确认。'
+          return '签到未完成。'
+        },
+        async result() { if (getState().provider === id) await loadManaged(id) },
+      })
+    },
+    [`${id}ClaimRewards`](accountId) {
+      if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
+      return mutate('managed.claimRewards', { provider: id, accountId }, {
+        refresh: false,
+        scope: `account:${accountId}`,
+        progress: '正在领取可领奖励…',
+        message: value => {
+          if (value?.kind === 'claimed') return `领取成功${typeof value?.points === 'number' ? `，获得 ${value.points} 积分` : ''}。`
+          if (value?.kind === 'done' || value?.kind === 'empty') return '当前无可领奖励。'
+          return '奖励领取未完成。'
+        },
+        async result() { if (getState().provider === id) await loadManaged(id) },
+      })
+    },
+    [`${id}CompleteTasks`](accountId) {
+      if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
+      return mutate('managed.completeTasks', { provider: id, accountId }, {
+        refresh: false,
+        scope: `account:${accountId}`,
+        progress: '正在执行平台任务…',
+        message: value => {
+          if (value?.kind === 'completed') return `已完成 ${value?.completed ?? 1} 项任务。`
+          if (value?.kind === 'done' || value?.kind === 'empty') return '今日任务均已完成。'
+          return '任务执行未完成。'
+        },
+        async result() { if (getState().provider === id) await loadManaged(id) },
+      })
+    },
+  }
+}

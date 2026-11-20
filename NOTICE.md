@@ -8,6 +8,7 @@
 | SenseNova Token Plan 认证 / 用量 / Pi-AI 适配器 | [eghrhegpe/dsh-connect-sensenova-token-plan](https://github.com/eghrhegpe/dsh-connect-sensenova-token-plan) | 0.8.5 | MIT（`vendor/sensenova-token-plan/LICENSE`） | `vendor/sensenova-token-plan/` |
 | WorkBuddy 登录与用量原语 | [`@magpie-community/opencode-workbuddy-auth`](https://github.com/magpie-community/plugins) | 0.2.35 | MIT（上游 package.json `license` 字段，见 `vendor/workbuddy/NOTICE.md`） | `vendor/workbuddy/` |
 | Qoder 中国版加密推理 WASM | 上游 Qoder 运行时随渠道包带入 | 与 channel-pack 同一上游提交 | 见 `vendor/channel-pack/NOTICE.md` | `lib/qoder-auth-wasm.wasm`（构建时自 `vendor/channel-pack/` 复制） |
+| 思维链死循环保护（`dsh-cot-loop-guard`） | 本地仓库 `dsh-cot-loop-guard`（周期 + 子句池三态滞回检测与有界续跑） | 2026 | MIT | `lib/cot-loop-guard/` |
 
 ## 构建期捆绑进 `lib/backend.js` 的组件
 

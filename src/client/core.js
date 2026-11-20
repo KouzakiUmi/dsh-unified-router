@@ -8,11 +8,21 @@ export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.s
 export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
 // API Key 渠道（Agnes、云知声）共用的宿主方法；渠道 id 在 payload.provider 里带。
 export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels'])
+// 自管多账号渠道（AStudio / 豆包工作 / Coze / CodeArts 等）共用的宿主方法。
+export const MANAGED_METHODS = new Set([
+  'managed.snapshot', 'managed.models', 'managed.refreshModels',
+  'managed.login', 'managed.importLocal', 'managed.importCredential',
+  'managed.updateAccount', 'managed.logout', 'managed.setEnabled',
+  'managed.checkin', 'managed.claimRewards', 'managed.completeTasks',
+  'managed.setModelEnabled', 'managed.setModelParams', 'managed.resetModels',
+])
+export const AUTOMATION_METHODS = new Set(['automation.status', 'automation.setConfig', 'automation.run'])
 export const METHODS = new Set(['provider.status', 'account.list', 'model.list', 'credits.permanentLock',
   'account.create', 'login.poll', 'account.update', 'account.delete', 'account.reorder', 'account.refresh',
   'account.reset', 'account.retest', 'provider.setEnabled', 'model.setDisabled', 'model.clearDead',
   'model.setAllDisabled', 'model.resetDefaults', 'model.refresh', 'model.params', 'model.setParams',
-  'credits.balances', 'credits.claimAll', 'onboarding.claim', 'settings.snapshot', 'settings.refresh', ...PLAN_METHODS])
+  'credits.balances', 'credits.claimAll', 'onboarding.claim', 'settings.snapshot', 'settings.refresh',
+  ...PLAN_METHODS, ...AUTOMATION_METHODS])
 export const WORKBUDDY_ID = 'workbuddy'
 export const allowed = id => PROVIDERS.some(p => p.id === id)
 export const packAllowed = id => PACK_PROVIDERS.some(p => p.id === id)
@@ -20,14 +30,19 @@ export const text = (value, max = 160) => typeof value === 'string' ? value.slic
 export const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null
 export const initial = provider => ({ provider, accounts: [], models: [], balances: [], statuses: {}, selected: '', loadFailed: false,
   checkin: null,
+  automation: null,
   locked: false, login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
   // WorkBuddy 是自管多账号快照：accounts 逐账号、models 全局、loginUrl 属登录窗口。
     workbuddy: { accounts: [], models: [], loginUrl: '' }, workbuddyReady: false, workbuddyStale: false, workbuddyError: false, workbuddyLoginUrl: null,
   // API Key 渠道快照按渠道 id 存放：{ [id]: 快照 + ready / stale / error }。
   apikeys: {},
+  // 自管多账号渠道快照按渠道 id 存放：{ [id]: 快照 + ready / stale / error / loginUrl }。
+  managed: {},
   // 模型目录来源（按模型 provider）：'remote' = 真拉到上游目录，'fallback' = 离线兜底，
   // 缺省 = 未知（还没刷过）。设置页据此显示来源标识并决定是否自动补拉一次。
   modelSource: {},
+  // 局部非阻塞进行中标记：{ [scope]: true }；busy 为是否有在途写操作的兼容汇总。
+  pending: {},
   loading: false, busy: false, notice: '正在读取渠道状态…' })
 
 export function safeLoginUrl(value) {
@@ -239,6 +254,129 @@ export function workbuddySnapshotFrom(value, previous) {
   const modelSource = ['remote', 'cached', 'fallback'].includes(source.modelSource) ? source.modelSource : previous?.modelSource
   return { workbuddy: { accounts: merged, models, modelSource, loginUrl: text(source.loginUrl, 4096) }, stale }
 }
+
+// 自管多账号渠道快照收编（与 WorkBuddy 同构，额外支持 balance / source / authMethods / enabled / registered）。
+export const MANAGED_ERROR_CODES = new Set(['not_configured', 'credential_error', 'auth_expired', 'auth_error', 'upstream_error', 'checkin_error', 'task_error', 'import_error', 'unsupported'])
+export function managedAccountFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const id = text(value.id, 64)
+  if (!id) return null
+  const rawError = text(value.error, 40)
+  return {
+    id, name: text(value.name, 80) || id, uid: text(value.uid, 120),
+    enabled: value.enabled !== false,
+    source: ['browser', 'local', 'credential'].includes(value.source) ? value.source : 'browser',
+    signedIn: value.signedIn === true, plan: text(value.plan, 120),
+    balance: number(value.balance), unit: text(value.unit, 24),
+    windows: Array.isArray(value.windows) ? value.windows.slice(0, 16).map(workbuddyWindowFrom).filter(Boolean) : [],
+    updatedAt: number(value.updatedAt),
+    error: MANAGED_ERROR_CODES.has(rawError) ? rawError : '',
+  }
+}
+export function managedSnapshotFrom(value, previous) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const accounts = (Array.isArray(source.accounts) ? source.accounts : []).slice(0, 8)
+    .map(managedAccountFrom).filter(Boolean)
+  const models = Array.isArray(source.models) ? workbuddyModelsFrom(source.models) : (previous?.models ?? [])
+  let stale = false
+  const merged = accounts.map(account => {
+    const softFailed = account.error === 'upstream_error' || account.error === 'auth_error'
+    const old = (previous?.accounts ?? []).find(row => row.id === account.id)
+    if (softFailed && old?.signedIn && account.signedIn && (old.windows.length || old.balance !== null)) {
+      stale = true
+      return {
+        ...account,
+        plan: account.plan || old.plan,
+        windows: old.windows.length ? old.windows : account.windows,
+        balance: old.balance !== null ? old.balance : account.balance,
+        unit: old.unit || account.unit,
+      }
+    }
+    return account
+  })
+  const modelSource = ['remote', 'cached', 'fallback'].includes(source.modelSource) ? source.modelSource : previous?.modelSource
+  return {
+    managed: {
+      enabled: typeof source.enabled === 'boolean' ? source.enabled : (previous?.enabled !== false),
+      registered: typeof source.registered === 'boolean' ? source.registered : (previous?.registered === true),
+      authMethods: Array.isArray(source.authMethods) ? source.authMethods.filter(m => ['browser', 'local', 'credential'].includes(m)) : (previous?.authMethods ?? ['browser']),
+      credentialHint: text(source.credentialHint, 160) || (previous?.credentialHint ?? ''),
+      accounts: merged,
+      models,
+      modelSource,
+      loginUrl: text(source.loginUrl, 4096),
+    },
+    stale,
+  }
+}
+export function managedSnapshotsFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value)
+    .filter(([id, entry]) => allowed(id) && providerById(id)?.rpcMethods === MANAGED_METHODS && entry && typeof entry === 'object' && !Array.isArray(entry))
+    .map(([id, entry]) => [id, managedSnapshotFrom({ ...entry, loginUrl: '' }).managed]))
+}
+
+// 自动化配置与任务状态收编
+export function automationFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const cfg = value.config && typeof value.config === 'object' ? value.config : {}
+  const providers = {}
+  if (cfg.providers && typeof cfg.providers === 'object' && !Array.isArray(cfg.providers)) {
+    for (const [id, entry] of Object.entries(cfg.providers)) {
+      if (!entry || typeof entry !== 'object') continue
+      const clean = {}
+      if (typeof entry.autoCheckin === 'boolean') clean.autoCheckin = entry.autoCheckin
+      if (typeof entry.autoClaimRewards === 'boolean') clean.autoClaimRewards = entry.autoClaimRewards
+      if (typeof entry.autoCompleteTasks === 'boolean') clean.autoCompleteTasks = entry.autoCompleteTasks
+      if (typeof entry.cotLoopGuard === 'boolean') clean.cotLoopGuard = entry.cotLoopGuard
+      if (Object.keys(clean).length) providers[id] = clean
+    }
+  }
+  const tasks = {}
+  if (value.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks)) {
+    for (const [id, entry] of Object.entries(value.tasks)) {
+      if (!entry || typeof entry !== 'object') continue
+      tasks[id] = {
+        date: text(entry.date, 16),
+        capabilities: {
+          claimRewards: entry.capabilities?.claimRewards === true,
+          completeTasks: entry.capabilities?.completeTasks === true,
+        },
+        claimRewards: Array.isArray(entry.claimRewards) ? entry.claimRewards : [],
+        completeTasks: Array.isArray(entry.completeTasks) ? entry.completeTasks : [],
+      }
+    }
+  }
+  return {
+    config: {
+      autoCheckin: cfg.autoCheckin !== false,
+      autoClaimRewards: cfg.autoClaimRewards !== false,
+      autoCompleteTasks: cfg.autoCompleteTasks === true,
+      cotLoopGuard: cfg.cotLoopGuard !== false,
+      providers,
+    },
+    tasks,
+  }
+}
+export function automationEffective(state, providerId, field) {
+  const cfg = state.automation?.config
+  if (!cfg) return field === 'autoCompleteTasks' ? false : true
+  const override = cfg.providers?.[providerId]?.[field]
+  if (typeof override === 'boolean') return override
+  return cfg[field] === true
+}
+const TASK_LABELS = {
+  claimed: '奖励已领', completed: '任务已完成', done: '今日已完成',
+  empty: '暂无可领', failed: '任务失败', pending: '处理中',
+}
+export function taskEntry(state, providerId, mode, accountId) {
+  const row = state.automation?.tasks?.[providerId]?.[mode]?.find(item => item.accountId === accountId)
+  if (!row) return null
+  const label = Object.hasOwn(TASK_LABELS, row.kind) ? TASK_LABELS[row.kind] : null
+  if (!label) return null
+  const ok = row.kind === 'claimed' || row.kind === 'completed' || row.kind === 'done'
+  return { tag: [label, ok ? 'success' : row.kind === 'empty' ? undefined : 'warn'], row }
+}
 export function claimMessage(value, provider) {
   const results = Array.isArray(value?.results) ? value.results : []
   if (!results.length) return '没有可领取的账号。'
@@ -358,24 +496,24 @@ export function readChannelCache(storage) {
   return { channels, statuses: statusFrom({ statuses: parsed.statuses }),
     plan: cards.plan ?? null, workbuddy: cards.workbuddy ?? null,
     // 读回的快照是上次的结果：标记 ready 让首屏直接显示，随后由实时读取覆盖。
-    apikeys: Object.fromEntries(Object.entries(cards.apikeys).map(([id, entry]) => [id, { ...entry, ready: true, stale: false, error: false }])) }
+    apikeys: Object.fromEntries(Object.entries(cards.apikeys).map(([id, entry]) => [id, { ...entry, ready: true, stale: false, error: false }])),
+    managed: Object.fromEntries(Object.entries(cards.managed).map(([id, entry]) => [id, { ...entry, ready: true, stale: false, error: false, loginUrl: '' }])) }
 }
 /**
  * 写持久化缓存。存储不可用（隐私模式、配额满、宿主无 sessionStorage）时静默忽略：
  * 缓存只是体验优化，写失败不该影响任何一次读取。
  */
 /**
- * 卡片快照的**白名单收编**（商汤 plan / WorkBuddy workbuddy）。
+ * 卡片快照的**白名单收编**（商汤 plan / WorkBuddy / API Key / 自管多账号渠道）。
  *
- * 这两份快照里没有任何凭据（登录令牌在凭据服务里），但为了不把上游原文或未来新增
- * 字段直接回灌界面，读回时逐字段重建。
+ * 快照里没有任何凭据（登录令牌在凭据服务里），读回时逐字段重建。
  */
 export function sanitizeCardSnapshots(parsed) {
   const plan = parsed?.plan && planSnapshotFrom(parsed.plan)
   const workbuddy = parsed?.workbuddy && workbuddySnapshotFrom({
     accounts: parsed.workbuddy.accounts, models: parsed.workbuddy.models,
   }).workbuddy
-  return { plan, workbuddy, apikeys: apikeySnapshotsFrom(parsed?.apikeys) }
+  return { plan, workbuddy, apikeys: apikeySnapshotsFrom(parsed?.apikeys), managed: managedSnapshotsFrom(parsed?.managed) }
 }
 
 export function writeChannelCache(storage, channels, statuses, cards = {}) {

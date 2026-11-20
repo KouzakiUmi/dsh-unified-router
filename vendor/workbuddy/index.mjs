@@ -1667,7 +1667,7 @@ function reportBase(site, a, code) {
     ideName: "WorkBuddy",
     ideType: "WorkBuddy",
     ideVersion: site.app,
-    machineId: machineOf(),
+    machineId: a.machineId || (a.uid ? createHash("sha256").update(`workbuddy-account-machine|${a.uid}`).digest("hex") : machineOf()),
     sessionId: reportSession,
     extName: site.appName,
     extVersion: site.cli,

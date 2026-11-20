@@ -37,6 +37,7 @@ export function Settings({ ctx }) {
   const [more, setMore] = React.useState({})
   const [drafts, setDrafts] = React.useState({})
   const [editParams, setEditParams] = React.useState('')
+  const [importOpen, setImportOpen] = React.useState('')
   const panels = panelsFor(state.provider)
   const panel = selection.provider === state.provider && panels.some(item => item.id === selection.panel) ? selection.panel : panels[0].id
   const setPanel = (tab, open) => {
@@ -80,22 +81,24 @@ export function Settings({ ctx }) {
   const act = (method, ...args) => {
     if (method === 'toggleParams') return setEditParams(previous => previous === args[0] ? '' : args[0])
     if (method === 'toggleMore') return setMore(previous => ({ ...previous, [args[0]]: !previous[args[0]] }))
+    if (method === 'toggleImportForm') return setImportOpen(previous => previous === args[0] ? '' : (args[0] || ''))
     void invoke(method, ...args)
   }
   function selectProvider(id) {
     try { globalThis.localStorage?.setItem(LAST_PROVIDER_KEY, id) } catch { /* Storage unavailable. */ }
-    setQuery(''); setPage(0); setEditParams(''); setSelection({ provider: id, panel: panelsFor(id)[0].id })
+    setQuery(''); setPage(0); setEditParams(''); setImportOpen(''); setSelection({ provider: id, panel: panelsFor(id)[0].id })
     void invoke('load', id)
   }
   const provider = providerById(state.provider)
   const status = provider.statusFrom(state)
   const disabled = state.busy || state.loading
+  const isPending = scope => !!(scope ? state.pending?.[scope] : state.busy)
   const toneFor = value => value?.tone ?? (value ? value.closed || value.accounts === 0 ? 'warn' : 'success' : undefined)
   const statusLabel = status?.label ?? (status ? status.closed ? '渠道已关闭'
     : status.accounts === 0 ? (status.totalAccounts > 0 ? '账号已停用' : '待添加账号') : '渠道运行中'
     : state.loading ? '读取中…' : '状态未知')
-  const ui = { providerId: provider.id, invoke, act, disabled, loading: state.loading,
-    failed: state.loadFailed || provider.snapshot?.failed(state),
+  const ui = { providerId: provider.id, invoke, act, disabled, isPending, loading: state.loading,
+    failed: state.loadFailed || provider.snapshot?.failed(state), importOpen,
     query, setQuery, page, setPage, enabledFirst, setEnabledFirst, more, drafts, setDrafts, editParams, setPanel }
   return h('div', { className: 'eac-settings' },
     h('nav', { className: 'eac-providers', role: 'tablist', 'aria-label': '选择渠道' },
