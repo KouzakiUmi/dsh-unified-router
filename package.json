@@ -1,6 +1,6 @@
 {
   "name": "dsh-unified-router",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "main": "lib/web-host.js",
   "license": "MIT",

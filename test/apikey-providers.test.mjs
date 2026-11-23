@@ -310,7 +310,30 @@ test('云知声 parse：字段映射、校验、去重', () => {
   assert.equal(doubao.output, 0)
   // 官方模型页「输入模态」声明：u2-flash / u2-med 为「文本、图片」，
   // u2-radimed 为影像与文本混合输入；u2 只声明文本输入。
+  // u2 系列按官方文档；转售第三方模型按「同 id 在其它渠道上游目录的声明」
+  //（大小写归一）。未列出的保守判不支持。
   assert.deepEqual(rows.filter(row => row.attachment).map(row => row.id), ['u2-flash', 'u2-med', 'u2-radimed'])
+  // 转售第三方模型按 pi-ai 内置目录（@earendil-works/pi-ai providers/data）逐 provider
+  // 全票判定；大小写归一后匹配。
+  const cross = unisound.catalog.parse({ data: [
+    { id: 'Qwen3.8-Max', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'qwen3.7-plus', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'glm-5.3-flash', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'doubao-seed-2.1-turbo', context_window: 262_144, max_output: 262_144 },
+    { id: 'GLM-5.3', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'deepseek-v4-pro', context_window: 1_048_576, max_output: 393_216 },
+    { id: 'qwen3.7-max', context_window: 1_048_576, max_output: 131_072 },
+    { id: 'hy3', context_window: 262_144, max_output: 131_072 },
+  ] })
+  assert.equal(cross.find(r => r.id === 'Qwen3.8-Max').attachment, true, '大小写归一到 pi-ai 判定')
+  assert.equal(cross.find(r => r.id === 'qwen3.7-plus').attachment, true)
+  // pi-ai 无条目时按官方文档：阿里云百炼「原生视觉语言模型」，输入 Image/Text/Video。
+  assert.equal(unisound.catalog.parse({ data: [{ id: 'Qwen3.6-35B-A3B' }] })[0].attachment, true)
+  assert.equal(cross.find(r => r.id === 'glm-5.3-flash').attachment, true, 'pi-ai 多数 provider 判支持')
+  assert.equal(cross.find(r => r.id === 'doubao-seed-2.1-turbo').attachment, true, '无 pi-ai 条目时按渠道上游声明')
+  // pi-ai 全部 provider 判纯文本的模型不得放开（WorkBuddy 声明支持也不改云知声口径）。
+  for (const id of ['GLM-5.3', 'deepseek-v4-pro', 'qwen3.7-max', 'hy3'])
+    assert.equal(cross.find(r => r.id === id).attachment, false, id + ' 应判纯文本')
   assert.deepEqual(doubao.efforts, [])
   assert.equal(doubao.reasoning, false)
   for (const bad of [undefined, null, 'x', [], { data: {} }, { data: 'list' }]) {

@@ -610,17 +610,31 @@ export const RACCOON_PRO_FALLBACK_MODELS: readonly RaccoonFallbackModel[] = [
  * （`TASK_TAG_PATTERNS` 给消息打 vision 标记后，挑一个带 `vision` 的模型）——
  * 它回答的是「该模型适不适合处理这类任务」，**不是**「能不能吃图」。
  *
- * ### ⚠️ 顺带发现：`sn-glm-5-3` 节点不一致（provider 侧缺陷，不归我们）
+ * ### ⚠️ `sn-glm-5-3` 的两个问题（2026-11-23 更新口径）
  *
- * 它 3 次里只对 1 次，两次回「当前模型不支持图片或视频输入」。错误体暴露网关有
- * 3 个 fallback 组（`raccoon-4eb26a` / `raccoon-0c119c` / `raccoon-ecc5fd`），
- * **部分节点是纯文本的**。它本来就带 `vision` 标签、我们一直在发图，
- * **本次修复不改变它的行为**，故按「已知 provider 缺陷」记录而不特殊处理。
+ * 1. **节点不一致（provider 侧缺陷，不归我们）**：它 3 次里只对 1 次，两次回
+ *    「当前模型不支持图片或视频输入」。错误体暴露网关有 3 个 fallback 组
+ *    （`raccoon-4eb26a` / `raccoon-0c119c` / `raccoon-ecc5fd`），**部分节点是纯文本**。
+ * 2. **目录标签缺失（我方判定分叉，已修）**：2026-11-23 审计发现这一版远端目录里
+ *    它**没有** `vision` 标签（早期记录说「本来就带」，已与现状不符），于是兜底表说
+ *    支持、远端路径判不支持。现已进白名单，两个真相源重新一致。
  */
 export const RACCOON_IMAGE_CAPABILITY_OVERRIDES: ReadonlySet<string> = new Set([
+  // 白名单 = **兜底表里声明支持图片的全部模型**。两者的关系是「兜底表是真值来源，
+  // 白名单保证远端目录丢了标签也不退化」，由 `test/raccoon-thinking.test.mjs`
+  // 「兜底表声明支持 ⇒ 空标签下也判支持」一条正向锁死。
+  //
+  // `sn-glm-5-3` 是 2026-11-23 审计发现的真实分叉：兜底表说支持、远端这一版目录的
+  // tags 却没有 `vision`，导致远端路径判为不支持（它实测能看图，3 次里 1 次成功，
+  // 另两次落在纯文本 fallback 节点，属 provider 侧缺陷）。
+  'sn-sensenova-6-8-flash',
+  'sn-sensenova-6-8-flash-lite',
+  'sn-qwen4-max',
+  'sn-glm-5-3',
+  'sn-kimi-k3-1-pro',
+  'sn-glm-5-3-flash',
   'sn-deepseek-v4-1-flash',
   'sn-deepseek-v4-1-flash-1017',
-  'sn-glm-5-3-flash',
 ])
 
 /**

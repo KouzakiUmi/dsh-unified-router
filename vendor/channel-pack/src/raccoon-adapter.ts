@@ -689,7 +689,7 @@ export class RaccoonAdapter extends LlmAdapter {
         if (next === undefined || tried.has(next.accountId)) throw error
         accountId = next.accountId
         credential = next.credential
-          wireModel = wireModelOf(accountId)
+        wireModel = wireModelOf(accountId)
         if (isRaccoonExpired(credential)) {
           credential = await this.options.refresh(accountId) ?? credential
         }

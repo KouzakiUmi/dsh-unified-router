@@ -350,3 +350,37 @@ test('档位名双向翻译：私有 id → DSH 规范名，出站再翻译回�
   assert.equal(privateEffortFor('max', ['light', 'high']), undefined)
   assert.equal(privateEffortFor(undefined, ['light']), undefined)
 })
+
+test('图片能力两个真相源不分叉：白名单必须与兜底表一致，且已知实测支持者不漏', async () => {
+  const { RACCOON_FREE_FALLBACK_MODELS, RACCOON_PRO_FALLBACK_MODELS, RACCOON_IMAGE_CAPABILITY_OVERRIDES, raccoonSupportsImage } =
+    await import('../vendor/channel-pack/src/raccoon-product.ts')
+  const freeById = new Map(RACCOON_FREE_FALLBACK_MODELS.map(m => [m.id, m]))
+  // ① 白名单只放兜底表声明支持图片的模型：白名单写错会让纯文本模型被放行。
+  for (const id of RACCOON_IMAGE_CAPABILITY_OVERRIDES) {
+    // 白名单可覆盖只在远端目录出现的 id（如早于当前兜底表的
+    // `sn-deepseek-v4-1-flash`）；只要进了兜底表就必须声明支持图片。
+    const entry = freeById.get(id)
+    if (entry !== undefined) assert.equal(entry.supportsImage, true, `白名单 ${id} 在兜底表里声明为不支持图片`)
+    // 订阅侧同 id 去 `-p` 后必须同样命中（远端路径先剥后缀再比对）。
+    assert.equal(raccoonSupportsImage(`${id}-p`, []), true, `订阅侧 ${id}-p 未命中白名单`)
+  }
+  // ② 正向：兜底表声明支持图片的模型，**即使远端目录没给任何标签**也必须判支持。
+  //   这是本次真实分叉的方向（兜底表 true / 远端空标签 false），旧断言只覆盖了
+  //   反向且因全表皆 true 而空转。要求：兜底表 true ⇒ 必须命中白名单。
+  let checked = 0
+  for (const model of [...RACCOON_FREE_FALLBACK_MODELS, ...RACCOON_PRO_FALLBACK_MODELS]) {
+    assert.equal(typeof model.supportsImage, 'boolean', `${model.id} 兜底表缺 supportsImage`)
+    if (model.supportsImage !== true) {
+      assert.equal(raccoonSupportsImage(model.id, []), false, `${model.id} 声明不支持却被空标签放行`)
+      continue
+    }
+    checked += 1
+    assert.equal(raccoonSupportsImage(model.id, []), true,
+      `${model.id} 兜底表说支持图片，空标签下却判不支持 —— 需加入 RACCOON_IMAGE_CAPABILITY_OVERRIDES`)
+  }
+  assert.ok(checked >= 7, '兜底表应至少 7 条声明支持图片，实际 ' + checked)
+  // ③ 定向回归：`sn-glm-5-3` 远端这版目录不带 `vision` 标签，但实测能看图，
+  //    必须靠白名单兜住 —— 2026-11-23 审计发现的真实分叉。
+  assert.equal(raccoonSupportsImage('sn-glm-5-3', []), true)
+  assert.equal(raccoonSupportsImage('sn-glm-5-3-p', []), true)
+})
