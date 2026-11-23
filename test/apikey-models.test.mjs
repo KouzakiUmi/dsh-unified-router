@@ -23,8 +23,8 @@ const row = (id, extra = {}) => ({
 })
 const catalog = () => [
   row('agnes-3.0-flash'),
-  row('agnes-2.5-pro', { context: 1_048_576 }),
-  row('agnes-2.5-lite', { context: 0, output: 0, attachment: false, reasoning: false, efforts: [], defaultEffort: undefined }),
+  row('agnes-3.0-pro', { context: 1_048_576 }),
+  row('agnes-3.0-lite', { context: 0, output: 0, attachment: false, reasoning: false, efforts: [], defaultEffort: undefined }),
 ]
 
 async function fixture() {
@@ -48,14 +48,16 @@ test('list 推导默认值：开关全开、能力默认值与 reasoning 标记'
   try {
     const settings = f.create()
     const models = await settings.list(catalog())
-    assert.deepEqual(models.map(model => model.id), ['agnes-3.0-flash', 'agnes-2.5-pro', 'agnes-2.5-lite'])
+    assert.deepEqual(models.map(model => model.id), ['agnes-3.0-flash', 'agnes-3.0-pro', 'agnes-3.0-lite'])
     assert.ok(models.every(model => model.enabled === true), '空白偏好下全部启用')
     const flash = models[0]
     assert.equal(flash.contextWindow, 524_288)
     assert.equal(flash.maxOutputLength, 65_536)
     assert.equal(flash.vision, true)
-    assert.equal(flash.effectiveEffort, 'off')
-    assert.equal(flash.defaultEffort, 'off')
+    // 上游声明的默认档是 `off`（Agnes 实测默认不思考），但默认档策略把
+    // 「关闭/低档」提到该模型支持的中档：默认不得落在 off/low/minimal。
+    assert.equal(flash.effectiveEffort, 'medium')
+    assert.equal(flash.defaultEffort, 'medium')
     assert.equal(flash.reasoning, true)
     assert.deepEqual(flash.params, {})
     // context/output 为 0 的行：上下文回退 128K、输出回退 32K，无思考档位
@@ -79,11 +81,11 @@ test('setModelEnabled 开关落盘，新实例能读回', async () => {
     const restored = f.create()
     const models = await restored.list(catalog())
     assert.equal(models.find(model => model.id === 'agnes-3.0-flash').enabled, false)
-    assert.equal(models.find(model => model.id === 'agnes-2.5-pro').enabled, true)
+    assert.equal(models.find(model => model.id === 'agnes-3.0-pro').enabled, true)
     await restored.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-flash', enabled: true }, getter(catalog()))
     assert.equal((await f.create().list(catalog()))[0].enabled, true)
     await assert.rejects(
-      settings.change('apikey.setModelEnabled', { modelId: 'agnes-2.5-pro', enabled: 'yes' }, getter(catalog())),
+      settings.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-pro', enabled: 'yes' }, getter(catalog())),
       /模型开关无效/,
     )
   } finally { await f.cleanup() }
@@ -132,7 +134,7 @@ test('setModelParams 拒绝未知档位、compat 与非法数值', async () => {
     }
     // 无思考档位的模型连合法档位也拒绝
     await assert.rejects(
-      settings.change('apikey.setModelParams', { modelId: 'agnes-2.5-lite', params: { reasoningEffort: 'low' } }, getter(rows)),
+      settings.change('apikey.setModelParams', { modelId: 'agnes-3.0-lite', params: { reasoningEffort: 'low' } }, getter(rows)),
       /模型参数无效/,
     )
     assert.equal(await f.saved(), null, '非法写入不得产生落盘文件')
@@ -145,7 +147,7 @@ test('resetModels 清空 disabled，参数保留', async () => {
     const settings = f.create()
     const rows = catalog()
     await settings.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-flash', enabled: false }, getter(rows))
-    await settings.change('apikey.setModelEnabled', { modelId: 'agnes-2.5-pro', enabled: false }, getter(rows))
+    await settings.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-pro', enabled: false }, getter(rows))
     await settings.change('apikey.setModelParams', { modelId: 'agnes-3.0-flash', params: { maxTokens: 1234 } }, getter(rows))
     const models = await settings.change('apikey.resetModels', {}, getter(rows))
     assert.ok(models.every(model => model.enabled === true))
@@ -197,7 +199,7 @@ test('损坏的落盘文件按空偏好处理', async () => {
     assert.ok(models.every(model => model.enabled === true))
     assert.deepEqual(models[0].params, {})
     // 结构损坏但 JSON 合法的内容同样只取合法字段
-    await writeFile(f.file, JSON.stringify({ disabled: { 'agnes-3.0-flash': 'yes', 'agnes-2.5-pro': true }, params: { 'agnes-3.0-flash': { maxTokens: 'bad' } } }))
+    await writeFile(f.file, JSON.stringify({ disabled: { 'agnes-3.0-flash': 'yes', 'agnes-3.0-pro': true }, params: { 'agnes-3.0-flash': { maxTokens: 'bad' } } }))
     const second = f.create()
     const restored = await second.list(catalog())
     assert.equal(restored[0].enabled, true, '非布尔 disabled 项被丢弃')
@@ -213,18 +215,18 @@ test('并发写入串行化，最终状态一致', async () => {
     const rows = catalog()
     await Promise.all([
       settings.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-flash', enabled: false }, getter(rows)),
-      settings.change('apikey.setModelEnabled', { modelId: 'agnes-2.5-pro', enabled: false }, getter(rows)),
+      settings.change('apikey.setModelEnabled', { modelId: 'agnes-3.0-pro', enabled: false }, getter(rows)),
       settings.change('apikey.setModelParams', { modelId: 'agnes-3.0-flash', params: { maxTokens: 1111 } }, getter(rows)),
-      settings.change('apikey.setModelParams', { modelId: 'agnes-2.5-pro', params: { maxTokens: 2222 } }, getter(rows)),
+      settings.change('apikey.setModelParams', { modelId: 'agnes-3.0-pro', params: { maxTokens: 2222 } }, getter(rows)),
     ])
     const saved = await f.saved()
-    assert.deepEqual(saved.disabled, { 'agnes-3.0-flash': true, 'agnes-2.5-pro': true })
-    assert.deepEqual(saved.params, { 'agnes-3.0-flash': { maxTokens: 1111 }, 'agnes-2.5-pro': { maxTokens: 2222 } })
+    assert.deepEqual(saved.disabled, { 'agnes-3.0-flash': true, 'agnes-3.0-pro': true })
+    assert.deepEqual(saved.params, { 'agnes-3.0-flash': { maxTokens: 1111 }, 'agnes-3.0-pro': { maxTokens: 2222 } })
     const restored = await f.create().list(rows)
     assert.deepEqual(restored.map(model => [model.id, model.enabled, model.maxOutputLength]), [
       ['agnes-3.0-flash', false, 1111],
-      ['agnes-2.5-pro', false, 2222],
-      ['agnes-2.5-lite', true, 32_768],
+      ['agnes-3.0-pro', false, 2222],
+      ['agnes-3.0-lite', true, 32_768],
     ])
   } finally { await f.cleanup() }
 })

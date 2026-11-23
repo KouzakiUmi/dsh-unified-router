@@ -63,10 +63,11 @@ const clientModules = [
   'providers/agnes.js',
   'providers/unisound.js',
   'providers/astudio.js',    // AStudio（科大讯飞 Astron Studio）
-  'providers/doubaowork.js', // 豆包工作
-  'providers/coze.js',       // Coze 桌面端
   'providers/codearts.js',   // CodeArts（华为云码道）
   'providers/index.js',      // 渠道注册表（顺序即卡片顺序）
+  'context-pill.js',         // 会话输入栏上下文窗口药丸（conversation.input.right）
+  'store/quota.js',           // 输入栏额度快照订阅与投影
+  'quota-pill.js',            // 当前渠道的额度药丸
   'settings.js',             // Settings 根组件与 settings.section 注册
 ]
 const stripExports = source => source.replace(/^export /gm, '')

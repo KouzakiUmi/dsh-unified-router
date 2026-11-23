@@ -6,6 +6,7 @@ import type { makeReadImage, makeReadImageRequest } from '../../backend.js'
 export interface ProviderContext {
   ctx: Context
   pool: AccountPool
+  noteQuotaAccount?: (provider: string, accountId: string, model?: string) => void
   catalogFile(provider: string): string | undefined
   readImage: ReturnType<typeof makeReadImage>
   readImageRequest: ReturnType<typeof makeReadImageRequest>

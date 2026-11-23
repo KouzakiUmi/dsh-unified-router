@@ -35,6 +35,8 @@
 
 **凭据存在哪**：引用名 `UNIFIED_ROUTER_SENSENOVA_API_KEY`。改名前的 `EAC_SENSENOVA_API_KEY` 仅作回退读取，新值只写入 `UNIFIED_ROUTER_SENSENOVA_API_KEY`。
 
+**读取积分池**：同一「渠道」分区的「控制台额度」行提供「浏览器登录」。授权在商汤官网完成，控制台会话单独存入宿主凭据引用 `UNIFIED_ROUTER_SENSENOVA_CONSOLE_TOKEN`，授权允许时自动续期。模型调用仍使用上面的 API Key。
+
 ## 二、Agnes
 
 **去哪里获得凭据**：国内站 [api.agnes-ai.cn](https://api.agnes-ai.cn) 申请 API Key。站点是 New API 分支，OpenAI 兼容端点 `POST /v1/chat/completions`，Bearer 鉴权。

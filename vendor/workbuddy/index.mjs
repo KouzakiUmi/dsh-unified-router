@@ -2631,7 +2631,7 @@ async function meter(site, a, path, body = {}) {
 // upstream failures are asked again twice (the bounded retry quota-hub
 // observed on the billing endpoint; callers may shorten the waits for a
 // test).
-async function checkinOf(site, a, { waits = [0, 0] } = {}) {
+async function checkinOf(site, a, { waits = [0, 0], statusOnly = false } = {}) {
   let status
   try {
     status = await meter(site, a, "/v2/billing/meter/checkin-activity-status")
@@ -2649,6 +2649,7 @@ async function checkinOf(site, a, { waits = [0, 0] } = {}) {
     const credit = Number(status.today_credit ?? status.daily_credit)
     return { outcome: "done", ...(Number.isFinite(credit) && credit > 0 ? { credit } : {}) }
   }
+  if (statusOnly) return { outcome: "pending" }
   const paths = ["/v2/billing/meter/daily-checkin"]
   for (let attempt = 0; ; attempt++) {
     let i = 0
@@ -4495,13 +4496,13 @@ function makePlugin(site) {
       // full 30 minutes (magpie-community/plugins#149). checkinOf returns
       // an outcome only for answers it read and classified.
       ...(site.ai ? {} : {
-        async checkin(getAuth, { waits = [2000, 4000] } = {}) {
+        async checkin(getAuth, { waits = [2000, 4000], statusOnly = false } = {}) {
           const auth = await getAuth()
           // an API key reads no credits (see usage), so it has no day to claim
           if (auth?.type === "api") return { outcome: "ineligible", message: "check-in needs a signed-in account, not an API key" }
           if (auth?.type !== "oauth" || !(auth.access || auth.source)) return { outcome: "failed", message: "not signed in" }
           const a = await current(site, client, auth)
-          return await checkinOf(site, a, { waits })
+          return await checkinOf(site, a, { waits, statusOnly })
         },
       }),
       options: [

@@ -1,4 +1,4 @@
-// 通用自管多账号渠道前端视图与动作工厂（供 AStudio、豆包工作、Coze、CodeArts 共用）。
+// 通用自管多账号渠道前端视图与动作工厂（供 AStudio、CodeArts 共用）。
 // 新增同类渠道只需提供 5 行声明（id / title / authMethods / capabilities），不再手写 UI 或状态流。
 const EMPTY_MANAGED = Object.freeze({
   enabled: true, registered: false, authMethods: ['browser'], credentialHint: '',
@@ -45,7 +45,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
       fromRead([snapshot, models], state) {
         const previous = entry(state) ?? EMPTY_MANAGED
         const { managed, stale } = managedSnapshotFrom({ ...snapshot, models: models?.models, modelSource: models?.source }, previous)
-        return withEntry(state, { ...managed, ready: true, stale: stale || snapshot?.snapshot?.stale === true, error: false, liveAt: Date.now() })
+        return withEntry(state, { ...managed, loginUrl: previous.loginUrl || managed.loginUrl, ready: true, stale: stale || snapshot?.snapshot?.stale === true, error: false, liveAt: Date.now() })
       },
       apply(get, state) {
         const usage = get('managed.snapshot')
@@ -93,13 +93,27 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
     },
     accounts(state) {
       const current = entry(state) ?? EMPTY_MANAGED
+      const isAStudio = id === 'astudio'
       const methods = current.authMethods?.length ? current.authMethods : authMethods
       const loginUrl = current.loginUrl || ''
+      const pool = summarizePoolCredits(
+        current.accounts
+          .filter(account => account.enabled !== false && account.signedIn && (isAStudio || account.balance !== null))
+          .map(account => ({
+            amount: account.balance,
+            unit: account.unit || '积分',
+            packages: isAStudio
+              ? account.windows
+              : account.windows.filter(w => w.name !== '总积分包' && w.name !== '免费日额度'),
+          })),
+        id,
+      )
       return {
         ready: current.ready === true || current.accounts.length > 0,
         failed: current.error === true,
+        poolSummary: pool.known ? `总计 ${pool.summary}` : '',
         autoCheckin: checkin ? automationEffective(state, id, 'autoCheckin') : undefined,
-        login: loginUrl ? { url: loginUrl } : null,
+        login: loginUrl ? { url: loginUrl, cancel: state.pending?.[`login:${id}`] ? [`${id}CancelLogin`] : null } : null,
         importForm: methods.includes('credential') ? {
           hint: current.credentialHint || credentialHint,
           call: [`${id}ImportCredential`],
@@ -112,16 +126,14 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
         ],
         rows: current.accounts.map(account => {
           const name = account.name || account.uid || account.id
-          const remaining = account.windows.map(managedRemaining).filter(value => value !== null)
+          const remaining = isAStudio ? [] : account.windows.map(managedRemaining).filter(value => value !== null)
           const lowest = remaining.length ? Math.min(...remaining) : null
           const confirmation = state.pendingDelete?.accountId === account.id && state.pendingDelete.provider === id
           const ck = checkin ? checkinEntry(state, id, account.id) : null
           const rw = claimRewards ? taskEntry(state, id, 'claimRewards', account.id) : null
           const metric = account.balance !== null
             ? { value: account.balance, unit: account.unit || '积分' }
-            : lowest !== null
-              ? { value: Math.round(lowest * 100), unit: '% 剩余', fraction: lowest }
-              : { value: '额度待更新' }
+            : percentMetric(lowest) ?? { value: '额度待更新' }
           return {
             id: account.id,
             name,
@@ -129,26 +141,29 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
             toggle: [`${id}UpdateAccount`, account.id, name, account.enabled === false],
             updatedAt: account.updatedAt,
             tags: [
-              account.plan && [account.plan, 'info'],
+               account.plan && [account.plan, 'info'],
               account.source && SOURCE_LABELS[account.source] && [SOURCE_LABELS[account.source]],
               account.enabled === false && ['已停用'],
-              !account.signedIn && ['凭据失效', 'warn'],
-              (account.error || current.stale) && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
+               !account.signedIn && ['凭据失效', 'warn'],
+               (account.error || current.stale) && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
               ck?.tag,
               rw?.tag,
             ],
             metric,
             groups: account.windows.length ? [{
-              title: '额度窗口',
+              title: isAStudio ? '额度包' : '额度窗口',
               items: account.windows.map(window => {
-                const fraction = managedRemaining(window)
+                const fraction = isAStudio ? null : managedRemaining(window)
+                const unitLabel = window.unit || (isAStudio ? '积分' : '')
                 return {
                   label: window.name, fraction,
-                   value: fraction === null ? window.display || window.balance : Math.round(fraction * 100),
-                  unit: fraction === null ? window.unit : '% 剩余',
+                  value: fraction === null ? (window.balance ?? window.display) : Math.round(fraction * 100),
+                  unit: fraction === null ? (window.unit || (isAStudio ? '积分' : undefined)) : '% 剩余',
                   notes: [
+                    fraction !== null && windowRemainingNote(window, unitLabel),
                     window.amount !== null && `已用 ${displayNumber(window.amount)} ${window.unit}`.trim(),
-                    window.resetsAt && `重置 ${displayTime(window.resetsAt)}`,
+                    (window.expiresAt || isAStudio && window.resetsAt) && `到期 ${displayTime(window.expiresAt || window.resetsAt)}`,
+                    !isAStudio && window.resetsAt && `${id === 'codearts' ? '周期结束' : '重置'} ${displayTime(window.resetsAt)}`,
                     window.runsOutAt && `预计用尽 ${displayTime(window.runsOutAt)}`,
                   ],
                 }
@@ -157,7 +172,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
             form: { kind: 'account', account: { id: account.id, nickname: name, enabled: account.enabled !== false }, call: [`${id}UpdateAccount`] },
             actions: [
               checkin && account.signedIn && { label: '签到', accessible: `为 ${name} 签到`, call: [`${id}Checkin`, account.id], disabled: ck?.locked },
-              claimRewards && account.signedIn && { label: '领奖励', accessible: `为 ${name} 领取奖励`, call: [`${id}ClaimRewards`, account.id] },
+               claimRewards && account.signedIn && { label: '领奖励', accessible: `为 ${name} 领取奖励`, call: [`${id}ClaimRewards`, account.id], disabled: account.enabled === false || rw?.locked },
               completeTasks && account.signedIn && { label: '执行任务', accessible: `为 ${name} 执行任务`, call: [`${id}CompleteTasks`, account.id] },
               { label: '移除账号', accessible: `移除 ${name}`, call: ['requestDelete', account.id], danger: true },
             ],
@@ -186,7 +201,9 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
             ...model,
             key: modelKey(id, model.id),
             toggle: [`${id}SetModelEnabled`, model.id, !model.enabled],
-            defaults: currentModelSummary(model),
+            defaults: id === 'codearts' ? [baseModelSummary(model),
+              model.output > 0 && model.output !== model.defaultMaxOutputLength ? `目录输出 ${formatTokens(model.output)}` : ''].filter(Boolean).join(' · ')
+              : baseModelSummary(model),
             tags: [model.rate ? [model.rate.label, model.rate.tone] : model.free && ['免费', 'success']],
             editor: { kind: 'numeric', call: [`${id}SetModelParams`, model.id] },
           })),
@@ -201,7 +218,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
           id: 'models', name: '模型提供方',
           enabled: current.enabled !== false,
           toggle: [`${id}SetEnabled`, current.enabled === false],
-          tags: [current.enabled !== false && connected && !current.registered && ['待注册', 'warn']],
+           tags: [current.enabled !== false && current.accounts.some(a => a.signedIn && a.enabled !== false) && !current.registered && ['待注册', 'warn']],
         },
         {
           id: 'accounts', name: '账号连接',
@@ -216,6 +233,7 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
 
 function createManagedActions(provider, { getState, isDisposed, hasSnapshots, request, publish, mutate, loadManaged, loginUrlTimers, writes, persistCards }) {
   const { id, title } = provider
+  let activeLogin = null
   const patchEntry = update => {
     const state = getState()
     const current = state.managed?.[id] ?? EMPTY_MANAGED
@@ -256,9 +274,15 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
         },
       })
     },
+    [`${id}CancelLogin`]() { activeLogin?.abort() },
     [`${id}Login`]() {
+      if (activeLogin) return Promise.resolve(false)
+      const controller = new AbortController()
+      activeLogin = controller
+      writes.add(controller)
       const options = {
         scope: `login:${id}`,
+        controller,
         progress: `正在打开 ${title} 浏览器登录…`,
         message: value => value?.signedIn === true ? `已添加 ${title} 账号。` : `${title} 登录未完成，请重试。`,
         result(value) {
@@ -278,14 +302,13 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
       }
       const login = mutate('managed.login', { provider: id }, options)
       let polling = true, timer = null
-      const controller = new AbortController()
-      writes.add(controller)
       const fetchUrl = async () => {
         if (!polling || getState().provider !== id) return
         try {
           const value = await request('managed.snapshot', { provider: id, ...(hasSnapshots() ? { localOnly: true } : {}) }, controller.signal)
-          if (polling && value?.loginUrl && !isDisposed() && getState().provider === id) {
-            patchEntry(cur => ({ ...cur, loginUrl: value.loginUrl }))
+          const loginUrl = safeLoginUrl(value?.loginUrl)
+          if (polling && loginUrl && !isDisposed() && getState().provider === id) {
+            patchEntry(cur => ({ ...cur, loginUrl }))
           }
         } catch {}
       }
@@ -302,6 +325,7 @@ function createManagedActions(provider, { getState, isDisposed, hasSnapshots, re
       schedule(250)
       return login.finally(() => {
         polling = false
+        activeLogin = null
         controller.abort()
         writes.delete(controller)
         if (timer !== null) { clearTimeout(timer); loginUrlTimers.delete(timer) }

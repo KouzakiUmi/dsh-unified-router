@@ -1,3 +1,27 @@
+const senseNovaQuotaStatus = {
+  'needs-console': '未登录', expired: '登录已失效', error: '额度读取失败',
+}
+
+function senseNovaQuotaPools(quota, model) {
+  if (quota?.status !== 'ready' || !Array.isArray(quota.pools)) return []
+  if (!model) return quota.pools
+  const matches = quota.pools.filter(pool => Array.isArray(pool?.modelIds) && pool.modelIds.includes(model))
+  const dedicated = matches.filter(pool => ['dedicated', 'flash'].includes(String(pool.poolType ?? '').toLowerCase()))
+  return dedicated.length ? dedicated : matches
+}
+
+function senseNovaQuotaDetails(pool) {
+  const windows = [[pool.window5h, '5 小时积分'], [pool.window7d, '7 天积分']].flatMap(([row, label]) => !row ? [] : [{
+    label, fraction: remainingFraction(row.remaining, row.limit),
+    value: row.limit > 0 ? `${displayNumber(row.remaining)} / ${displayNumber(row.limit)} 积分` : `${displayNumber(row.remaining)} 积分`,
+    reset: row.resetAt ? row.resetAt * 1000 : null,
+  }])
+  if (Number.isFinite(pool.grantBalance)) windows.push({ label: '赠送积分', value: `${displayNumber(pool.grantBalance)} 积分`,
+    expires: pool.nearestGrantExpiry && pool.grantBalance > 0 ? pool.nearestGrantExpiry * 1000 : null,
+    expiringAmount: pool.nearestGrantExpiringBalance > 0 ? `${displayNumber(pool.nearestGrantExpiringBalance)} 积分` : '' })
+  return windows
+}
+
 export const sensenova = {
   id: 'sensenova-token-plan',
   title: '商汤 Token Plan',
@@ -44,23 +68,58 @@ export const sensenova = {
       rows: (plan?.models ?? []).map(model => ({
         ...model, key: modelKey('sensenova-token-plan', model.id),
         toggle: ['planSetModelEnabled', model.id, !model.enabled],
-        defaults: currentModelSummary(model),
+         defaults: baseModelSummary(model),
         editor: { kind: 'numeric', call: ['planSetModelParams', model.id] },
       })),
     }] }
   },
-  channel({ plan }) {
+  channel({ plan, pending }) {
+    const signingIn = pending?.['console-login:sensenova-token-plan'] === true
+    const pools = senseNovaQuotaPools(plan?.quota)
+    const quotaRows = pools.flatMap((pool, index) => senseNovaQuotaDetails(pool).map((detail, detailIndex) => ({
+      id: `pool-${index}-${detailIndex}`,
+      name: pools.length === 1 ? detail.label : `${pool.name || '积分池'} · ${detail.label}`,
+      meta: [
+        Number.isFinite(detail.fraction) ? `剩余 ${detail.value}` : detail.value,
+        displayTime(detail.reset) !== '—' ? `重置 ${displayTime(detail.reset)}` : '',
+        displayTime(detail.expires) !== '—' ? `到期 ${displayTime(detail.expires)}${detail.expiringAmount ? ` · ${detail.expiringAmount}` : ''}` : '',
+      ].filter(Boolean).join(' · '),
+      metric: percentMetric(detail.fraction),
+    })))
     return [
       { id: 'models', name: '模型提供方', enabled: plan?.registerProvider, toggle: ['planSetEnabled', !plan?.registerProvider],
         tags: [plan?.registerProvider && !plan.providerRegistered && ['待注册', 'warn']] },
       { id: 'key', name: '模型 API Key', tags: [[plan?.hasApiKey ? '已配置' : '待配置', plan?.hasApiKey ? 'success' : undefined]],
         form: { kind: 'key', call: ['planSetKey'] } },
+      { id: 'console-quota', name: '控制台额度', scope: 'console-actions:sensenova-token-plan',
+        meta: signingIn ? '等待浏览器授权' : plan?.quota?.status === 'ready' ? `${pools.length} 个积分池${plan?.quota?.plan ? ` · ${plan.quota.plan}` : ''}` : senseNovaQuotaStatus[plan?.quota?.status],
+        actions: signingIn ? [{ label: '取消登录', call: ['planCancelConsoleLogin'] }] : [
+          { label: plan?.quota?.status === 'ready' ? '重新登录' : '浏览器登录', call: ['planConsoleLogin'], primary: plan?.quota?.status !== 'ready' },
+          { label: '打开控制台', href: 'https://platform.sensenova.cn/' },
+        ] },
+      ...quotaRows,
     ]
   },
 }
 
 function createSenseNovaActions({ getState, publish, planMutate }) {
+  let consoleLogin
   return {
+    planConsoleLogin() {
+      if (consoleLogin) return Promise.resolve(false)
+      const controller = new AbortController()
+      consoleLogin = controller
+      return planMutate('plan.consoleLogin', {}, {
+        controller, scope: 'console-login:sensenova-token-plan',
+        progress: '正在等待商汤控制台浏览器授权…', failure: '商汤控制台登录失败。',
+        message: value => value?.quota?.status === 'ready' ? '商汤控制台已连接。' : '登录成功，额度暂未读取。',
+        result(value) {
+          const plan = getState().plan
+          if (plan) publish({ plan: { ...plan, quota: value.quota ?? null } })
+        },
+      }).finally(() => { consoleLogin = null })
+    },
+    planCancelConsoleLogin() { consoleLogin?.abort() },
     planResetModels() {
       return planMutate('plan.resetModels', {}, { message: '已恢复推荐模型。', result(value) {
         const plan = getState().plan

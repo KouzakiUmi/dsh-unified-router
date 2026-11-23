@@ -43,6 +43,15 @@ export interface QoderFallbackModel {
   /** 是否免费额度模型（远端 `is_free`）。 */
   isFree?: boolean
   /**
+   * 订阅限定：仅付费订阅账号可调用，免费账号不可用。
+   *
+   * ⚠️ 与 {@link isFree} / {@link priceFactor} 独立。Qoder 的会员门槛由上游目录
+   * `strategies[].tag`（对照账号 `tags`/`soft_status`）表达，CLI `--list-models`
+   * 只回 id/name、不下发该标志，故策展表暂无已核实的订阅限定条目；待富目录
+   * （`--sdk daemon.get_models`）接入后按 strategies 填充，不凭倍率推断。
+   */
+  subscriptionOnly?: boolean
+  /**
    * 计费倍率（目录 `price_factor`）。
    *
    * ⚠️ 字段名是 **`price_factor`**，不是 `cost_multiplier`（后者不存在于
@@ -382,7 +391,7 @@ const QODER_CN_FALLBACK_MODELS: readonly QoderFallbackModel[] = [
   { id: 'auto', name: 'Auto', contextWindow: 200_000, supportsImage: true, supportsThinking: true, priceFactor: 0.5 },
   { id: 'fast', name: 'Fast', contextWindow: 200_000, supportsImage: true, supportsThinking: false, priceFactor: 0.8 },
   // 2026-11-19 --list-models lists these titles without publishing their backend keys or capabilities.
-  { id: 'Qwen4-Max', name: 'Qwen4-Max', contextWindow: 1_000_000, supportsImage: true, priceFactor: 0.4 },
+  { id: 'Qwen4-Max', name: 'Qwen4-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.4, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true },
   { id: 'Qwen4-Max-Preview', name: 'Qwen4-Max-Preview', contextWindow: 0 },
   {
     id: 'qmodel_38max', name: 'Qwen3.8-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true,

@@ -4,6 +4,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSenseNovaManager, adoptStateDir } from '../lib/sensenova.js'
+import { readSenseNovaQuota, SENSENOVA_CONSOLE_REF, projectSenseNovaQuota } from '../lib/sensenova-quota.js'
+import { createSenseNovaConsole } from '../lib/sensenova-console.js'
+import { createHash } from 'node:crypto'
+import { captureRedirect } from '../lib/browser-login.js'
 import { m as parsePools, s as exhaustedModelIds, h as parseTrend } from '../vendor/sensenova-token-plan/llm-models.js'
 
 function context(credentials, llm = {}) {
@@ -23,6 +27,114 @@ function credentialsFixture() {
     async deleteRecord(key) { operations.push(['deleteRecord', key]); records.delete(key) },
   }
 }
+
+test('商汤仅用独立控制台令牌，兼容 Magpie 的两种响应包裹', async () => {
+  const creds = credentialsFixture()
+  creds.values.set('UNIFIED_ROUTER_SENSENOVA_API_KEY', 'inference-fixture')
+  let requests = 0
+  assert.deepEqual(await readSenseNovaQuota(creds, async () => { requests++; return Response.json({}) }), { status: 'needs-console' })
+  assert.equal(requests, 0)
+  creds.values.set(SENSENOVA_CONSOLE_REF, 'Bearer console-fixture')
+  const payload = { plan: { name: 'Token Plan' }, pools: [{ name: '专属池', pool_type: 'dedicated', model_ids: ['flash-lite'],
+    window_5h: { limit: '100', remaining: '20', reset_at: '1795500000' }, window_7d: { limit: '200', used: '200' },
+    grant_balance: '8', nearest_grant_expiry: '1796100000' }], apiKey: 'SECRET_NEVER_DISPLAY' }
+  for (const body of [payload, { data: payload }]) {
+    let sent
+    const value = await readSenseNovaQuota(creds, async (url, init) => { sent = { url, init }; return Response.json(body) })
+    assert.equal(sent.url, 'https://platform.sensenova.cn/lite/console/v1/tokenplan/pool-usage')
+    assert.equal(sent.init.headers.authorization, 'Bearer console-fixture')
+    assert.equal(sent.init.redirect, 'error')
+    assert.equal(value.status, 'ready')
+    assert.deepEqual(value.pools[0].window5h, { remaining: 20, limit: 100, resetAt: 1795500000 })
+    assert.equal(value.pools[0].window7d.remaining, 0)
+    assert.equal(value.pools[0].nearestGrantExpiry, 1796100000)
+    assert.deepEqual(projectSenseNovaQuota(value), value)
+    assert.doesNotMatch(JSON.stringify(value), /SECRET_NEVER_DISPLAY|console-fixture/)
+  }
+  assert.deepEqual(await readSenseNovaQuota(creds, async () => new Response(null, { status: 401 })), { status: 'expired' })
+  assert.deepEqual(await readSenseNovaQuota(creds, async () => Response.json({ message: 'upstream error' })), { status: 'error' })
+})
+
+test('商汤 OAuth 回调验证 PKCE，续期令牌轮换与模型 Key 分离', async () => {
+  const creds = credentialsFixture()
+  creds.values.set('UNIFIED_ROUTER_SENSENOVA_API_KEY', 'model-fixture')
+  let challenge, sent = 0
+  const session = createSenseNovaConsole(() => creds, {
+    browserLogin: async ({ url, matchRedirect }) => {
+      const u = new URL(url)
+      assert.equal(u.pathname, '/oauth2/auth')
+      challenge = u.searchParams.get('code_challenge')
+      const state = u.searchParams.get('state')
+      assert.equal(matchRedirect(`https://invalid.test/?code=fixture&state=${state}`), null)
+      assert.equal(matchRedirect('https://platform.sensenova.cn/?code=fixture&state=invalid'), null)
+      return matchRedirect(`https://platform.sensenova.cn/?code=fixture&state=${state}`)
+    },
+    fetchOAuth: async (url, { body }) => {
+      assert.equal(url, 'https://signin.sensecore.cn/oauth2/token')
+      sent++
+      if (body.get('grant_type') === 'authorization_code') {
+        assert.equal(body.get('code'), 'fixture')
+        assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), challenge)
+        return Response.json({ access_token: 'access-fixture', refresh_token: 'first-fixture', expires_in: 30 })
+      }
+      assert.equal(body.get('refresh_token'), 'first-fixture')
+      return Response.json({ access_token: 'rotated-fixture', refresh_token: 'second-fixture', expires_in: 3600 })
+    },
+    fetchQuota: async (_url, init) => {
+      assert.match(init.headers.authorization, /^Bearer (access|rotated)-fixture$/)
+      return Response.json({ pools: [] })
+    },
+  })
+  try {
+    assert.equal((await session.login()).status, 'ready')
+    assert.deepEqual((await Promise.all([session.read(), session.read()])).map(quota => quota.status), ['ready', 'ready'])
+    assert.equal(sent, 2)
+    assert.equal(JSON.parse(creds.values.get(SENSENOVA_CONSOLE_REF)).refreshToken, 'second-fixture')
+    assert.equal(creds.values.get('UNIFIED_ROUTER_SENSENOVA_API_KEY'), 'model-fixture')
+  } finally { session.dispose() }
+})
+
+test('独立浏览器先订阅回调，阻断回调页请求后才把授权码交给宿主', async () => {
+  const messages = []
+  let ws
+  class BrowserSocket {
+    constructor() { ws = this }
+    send(data) { messages.push(JSON.parse(data)) }
+    close() { this.closed = true }
+  }
+  const signal = new AbortController().signal
+  const callbackOrigin = 'https://platform.sensenova.cn'
+  const auth = `${callbackOrigin}/oauth2/auth`
+  const result = captureRedirect('ws://127.0.0.1:1234/devtools/page/browser', auth, callbackOrigin,
+    url => new URL(url).searchParams.get('code'), signal, BrowserSocket)
+  const emit = value => ws.onmessage({ data: JSON.stringify(value) })
+  ws.onopen()
+  assert.equal(messages[0].method, 'Fetch.enable')
+  emit({ id: 1, result: {} })
+  assert.equal(messages[1].method, 'Page.navigate')
+  emit({ method: 'Fetch.requestPaused', params: { requestId: 'initial', request: { url: auth } } })
+  assert.equal(messages[2].method, 'Fetch.continueRequest')
+  emit({ method: 'Fetch.requestPaused', params: { requestId: 'callback', request: { url: `${callbackOrigin}/?code=fixture` } } })
+  assert.deepEqual(messages[3].params, { requestId: 'callback', errorReason: 'Aborted' })
+  assert.equal(ws.closed, undefined)
+  emit({ id: 2, result: { errorText: 'net::ERR_ABORTED' } })
+  emit({ id: 4, result: {} })
+  assert.equal(await result, 'fixture')
+  assert.equal(ws.closed, true)
+})
+
+test('商汤取消授权不会写入凭据或请求换取令牌', async () => {
+  const creds = credentialsFixture()
+  const controller = new AbortController()
+  const session = createSenseNovaConsole(() => creds, {
+    browserLogin: async () => { controller.abort(); return 'fixture' },
+    fetchOAuth: () => assert.fail('取消后不应请求令牌'),
+  })
+  try {
+    await assert.rejects(session.login(controller.signal), { name: 'AbortError' })
+    assert.equal(creds.values.size, 0)
+  } finally { session.dispose() }
+})
 
 test('缺失或无效的窗口数值保持未知，不把模型误判为额度耗尽', () => {
   const parsed = parsePools({ plan: { id: 'plan' }, pools: [
@@ -85,6 +197,36 @@ test('商汤 API Key 只写凭据服务，RPC 返回不含 Key', async () => {
     assert.equal(creds.values.get('UNIFIED_ROUTER_SENSENOVA_API_KEY'), 'sk-SECRET_NEVER_DISPLAY')
     assert.equal(creds.values.has('SENSENOVA_API_KEY'), false, '不得覆盖参考插件的 Key')
     assert.doesNotMatch(JSON.stringify(result), /SECRET_NEVER_DISPLAY/)
+  } finally {
+    manager.dispose()
+    if (originalHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = originalHome
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test('商汤图像工具随已配置 Key 的提供方启停', async () => {
+  const originalHome = process.env.DSH_HOME
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-sensenova-image-'))
+  process.env.DSH_HOME = scratch
+  const creds = credentialsFixture()
+  creds.values.set('UNIFIED_ROUTER_SENSENOVA_API_KEY', 'sk-test-key')
+  const dir = path.join(scratch, 'state', 'dsh-unified-router-sensenova')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'provider.json'), JSON.stringify({ version: 1, enabled: true }))
+  let current
+  let ready
+  const registered = new Promise(resolve => { ready = resolve })
+  const host = context(creds)
+  host.tools = { register(tool) { current = tool; ready(); return () => { current = undefined } } }
+  host.attachments = { async readImage() {}, async saveImage() {} }
+  const manager = createSenseNovaManager(host, {}, { loadToolsRuntime: async () => ({ defineTool: x => x }) })
+  try {
+    let timer
+    await Promise.race([registered, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('图像工具未注册')), 1000) })]).finally(() => clearTimeout(timer))
+    assert.equal(current.name, 'sensenova_image_generate')
+    await manager.call('plan.setEnabled', { provider: 'sensenova-token-plan', enabled: false })
+    assert.equal(current, undefined)
   } finally {
     manager.dispose()
     if (originalHome === undefined) delete process.env.DSH_HOME

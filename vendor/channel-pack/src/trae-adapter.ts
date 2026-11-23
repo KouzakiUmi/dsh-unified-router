@@ -15,8 +15,9 @@ import { LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { AccountPool, providerCatalogVisible } from './account-pool.js'
-import { reasoningRankOf } from './reasoning-ladder.js'
+import { canonicalEffortId, privateEffortFor, reasoningRankOf, uniqueCanonicalEfforts } from './reasoning-ladder.js'
 import { readCatalogCache, saveCatalogCache } from '../../../lib/catalog-cache.js'
+import { defaultModelEffort } from '../../../lib/model-catalog.js'
 import { isModelDisabled } from './model-selection.js'
 import { RemoteCatalogGate } from './remote-catalog-gate.js'
 import { settingsNamespaceFor } from './settings-compat.js'
@@ -32,6 +33,7 @@ import {
   readStringField,
   readNumberField,
   isTraeModelCallable,
+  TRAE_INTERNAL_MODEL_IDS,
   traeMaxModeFields,
   traeSOLOHeaders,
   transformToSOLOBody,
@@ -81,8 +83,9 @@ function resolveTraeWireEffort(
   if (typeof requested !== 'string' || requested.length === 0) return undefined
   if (!options || options.length === 0) return requested
   if (options.includes(requested)) return requested
-  if (requested === 'low' && options.includes('light')) return 'light'
-  if (requested === 'xhigh' && options.includes('extra_high')) return 'extra_high'
+  // 界面暴露的是 DSH 规范档位名（light→low、extra_high→xhigh），出站翻译回上游私有名。
+  const translated = privateEffortFor(requested, options)
+  if (translated !== undefined) return translated
   if (requested === 'max' && !options.includes('max') && options.includes('extra_high')) return 'extra_high'
   return undefined
 }
@@ -739,8 +742,8 @@ export class TraeAdapter extends LlmAdapter {
     const canUseDiscount = this.catalogSource === 'remote'
       && (remote?.discountEndsAtSec === undefined || remote.discountEndsAtSec > Date.now() / 1000)
     const rate = hasDiscount && !canUseDiscount ? base : remote?.creditsRate
-    if (rate === undefined || this.catalogSource === 'cached') {
-      return modelRateBadge(TRAE_REFERENCE_RATES[model] ?? rate, { reference: true })
+    if (rate === undefined) {
+      return modelRateBadge(TRAE_REFERENCE_RATES[model], { reference: true })
     }
     return modelRateBadge(rate, {
       status: canUseDiscount && base !== undefined && base > rate ? 'discount' : 'normal',
@@ -825,10 +828,13 @@ export class TraeAdapter extends LlmAdapter {
     const config = this.remoteMeta.get(model)?.reasoningConfig ?? this.fallbackIndex.get(model)?.reasoningConfig
     if (config === undefined) return undefined
     if (config.supportThinking === false) return undefined
-    if (config.options.length === 0) return undefined
-    const efforts = config.options.map((option) => ({
-      id: ReasoningEffortId(option),
-      name: TRAE_EFFORT_NAMES[option] ?? option,
+    const available = uniqueCanonicalEfforts(config.options)
+    if (available.length === 0) return undefined
+    // id 必须是 DSH 规范档位名（light→low、extra_high→xhigh）：宿主聚合时会丢弃
+    // 不认识的 id，直接用私有名会让选择器只剩 high 一个档。wire 值在出站时翻译回去。
+    const efforts = available.map(({ id, wire }) => ({
+      id: ReasoningEffortId(id),
+      name: TRAE_EFFORT_NAMES[wire] ?? id,
     }))
     // ⚠️ 默认档**优先采信上游 `default_level`**（见 {@link defaultTraeEffort}）。
     // 早期实现一律取最强档（用户当时要求「所有模型默认用 max」），代价是思考
@@ -836,8 +842,12 @@ export class TraeAdapter extends LlmAdapter {
     // 实测 6 个模型里 4 个上游给的就是次高档 `high`，而 `glm-5.3` / `kimi-k3`
     // 上游自己选的是 `extra_high` —— 机械取「次高档」会把后两者无谓降档，
     // 故以**上游的判断**为准，而不是自己定一条规则。
+    // 但**默认档不得落在关闭/低档**：上游给 `light` 时会被提到该模型支持的
+    // 中/高档（`defaultModelEffort` 的统一策略，与 Loomy / Raccoon / API Key
+    // 渠道同一套）；上游给 `high` / `extra_high` 时原样保留。
     const fallback = strongestTraeEffort(config.options)
-    const chosen = defaultTraeEffort(config, fallback)
+    const declared = defaultTraeEffort(config, fallback)
+    const chosen = defaultModelEffort(available.map(effort => effort.id), declared === undefined ? undefined : canonicalEffortId(declared))
     return {
       efforts,
       ...chosen !== undefined ? { defaultEffort: ReasoningEffortId(chosen) } : {},
@@ -905,11 +915,13 @@ export class TraeAdapter extends LlmAdapter {
 
   listAllModels() {
     // 过滤逻辑与 `listModels` 的第一、二层一致（usage / config_switch /
-    // is_invisible_to_user 已在解析器里剔除；这里再挡 isHidden 与 is_custom_model），
-    // **唯一区别是不套用户黑名单**。
+    // is_invisible_to_user / TRAE_INTERNAL_MODEL_IDS 已在解析器里剔除；这里再挡
+    // isHidden 与 is_custom_model），**唯一区别是不套用户黑名单**。
+    // 内部 id 在这里同样复查：测试可以绕过解析器直接喂 `TraeRemoteModel[]`。
     const source = this.remoteModels === undefined
       ? this.staticFallbackModels()
-      : this.remoteModels.filter((model) => isTraeModelCallable(model) && model.isHidden !== true)
+      : this.remoteModels.filter((model) => isTraeModelCallable(model)
+        && model.isHidden !== true && !TRAE_INTERNAL_MODEL_IDS.has(model.id))
     // 「同族旧版」标记来自兜底表（`kimi-k3` / `minimax-m3` 在同目录有更新一代），
     // 远端目录同样适用：它描述的是同一份目录里的世代关系，不是本地偏好。
     return source.map((model) => {
@@ -925,8 +937,11 @@ export class TraeAdapter extends LlmAdapter {
         ...(supportsImage !== undefined ? { supportsImage } : {}),
         rateBadge: this.rateBadgeFor(model.id),
         ...(reasoning?.efforts?.length ? {
-          efforts: reasoning.efforts.map(effort => effort.id), defaultEffort: reasoning.defaultEffort,
+          efforts: reasoning.efforts.map(effort => effort.id),
         } : {}),
+        ...(reasoning?.defaultEffort !== undefined ? { defaultEffort: reasoning.defaultEffort } : {}),
+        // 订阅限定来自策展表的官方会员门槛声明（远端目录不下发该标志）。
+        ...curated?.subscriptionOnly === true ? { subscriptionOnly: true } : {},
         ...curated?.stale === true ? { stale: true } : {},
         ...curated?.staleReason === undefined ? {} : { staleReason: curated.staleReason },
       }

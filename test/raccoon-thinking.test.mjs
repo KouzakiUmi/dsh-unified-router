@@ -5,9 +5,10 @@
  *
  * 1. **解析**：只认 `managed === true`、`supported !== false`；`display_levels`
  *    只采纳 `level_1`…`level_5`（去重、按强度重排）；`can_disable` 为真才多一个 `off`。
- * 2. **默认档**：上游 `default_level` 是具体档位时照抄；是 `off` 时取最低思考档
- *    （理由见 `raccoon-product.ts` 文件头：关思考会让这类模型把规划写进正文，
- *    即用户报的「CoT 泄漏到 assistant」）。
+ * 2. **默认档**：上游 `default_level` 是有效中/高档（`level_3` 及以上）时照抄；
+ *    是 `off` / 缺失 / 低档时取该模型支持的中档或更强档（`defaultModelEffort`
+ *    的统一策略）。既不落到「关思考」（关思考会让这类模型把规划写进正文，
+ *    即用户报的「CoT 泄漏到 assistant」），也不落到最低档。
  * 3. **请求字段**：有托管档位 → **顶层** `raccoon_thinking_level`（实测放进
  *    `extra_body` 会 400 invalid），且**不发** `extra_body`；没有托管档位的模型
  *    继续用旧方言 `extra_body.thinking.type`。两套方言互斥。
@@ -70,7 +71,8 @@ test('parseRaccoonThinking：只认 managed 目录，档位去重按强度重排
   // managed 但没有可选档位、又不允许关闭 → 没有任何可选项，不编造。
   assert.equal(parseRaccoonThinking({ managed: true, can_disable: false }), undefined)
 
-  // 五档 + 不允许关闭：没有 `off`。
+  // 五档 + 不允许关闭：没有 `off`。上游 `default_level: level_1`（最低档）
+  // 不算「有效默认」→ 按默认档策略提到该模型支持的中档 `level_3`。
   assert.deepEqual(
     parseRaccoonThinking({
       managed: true,
@@ -78,7 +80,7 @@ test('parseRaccoonThinking：只认 managed 目录，档位去重按强度重排
       display_levels: ['level_1', 'level_2', 'level_3', 'level_4', 'level_5'].map(value => ({ value })),
       default_level: 'level_1',
     }),
-    { levels: ['level_1', 'level_2', 'level_3', 'level_4', 'level_5'], defaultLevel: 'level_1' },
+    { levels: ['level_1', 'level_2', 'level_3', 'level_4', 'level_5'], defaultLevel: 'level_3' },
   )
 
   // 允许关闭 → `off` 置首；未知 value 丢弃；重复去重；乱序按强度重排。
@@ -95,7 +97,8 @@ test('parseRaccoonThinking：只认 managed 目录，档位去重按强度重排
     { levels: ['off', 'level_1', 'level_3', 'level_5'], defaultLevel: 'level_3' },
   )
 
-  // 上游默认 off → 改取最低思考档（避免关思考导致正文 CoT 泄漏）。
+  // 上游默认 off → 不取「关思考」（否则正文 CoT 泄漏），也不取最低档，
+  // 而取该模型支持的中档（`defaultModelEffort` 的默认档策略）。
   assert.deepEqual(
     parseRaccoonThinking({
       managed: true,
@@ -103,12 +106,12 @@ test('parseRaccoonThinking：只认 managed 目录，档位去重按强度重排
       display_levels: [{ value: 'level_1' }, { value: 'level_3' }, { value: 'level_5' }],
       default_level: 'off',
     }),
-    { levels: ['off', 'level_1', 'level_3', 'level_5'], defaultLevel: 'level_1' },
+    { levels: ['off', 'level_1', 'level_3', 'level_5'], defaultLevel: 'level_3' },
   )
-  // 默认档缺失/不认识 → 同样取最低思考档。
+  // 默认档缺失 → 取该模型支持的较强档（level_4 = high；没有 level_3 时不上编）。
   assert.deepEqual(
     parseRaccoonThinking({ managed: true, display_levels: [{ value: 'level_2' }, { value: 'level_4' }] }),
-    { levels: ['level_2', 'level_4'], defaultLevel: 'level_2' },
+    { levels: ['level_2', 'level_4'], defaultLevel: 'level_4' },
   )
   // 只允许关闭、没有任何档位：只剩 `off`（不编造档位）。
   assert.deepEqual(
@@ -242,17 +245,20 @@ test('托管档位模型只发顶层 raccoon_thinking_level，旧模型只发 ex
 
     // ---- 目录默认值：逐模型档位 + 默认档 ----
     const listed = Object.fromEntries(adapter.listAllModels().map(model => [model.id, model]))
-    assert.deepEqual(listed['sn-managed'].efforts, ['off', 'level_1', 'level_3', 'level_5'])
-    // 上游 default_level=off → 我们取最低思考档（不让默认落到「关思考」）。
-    assert.equal(listed['sn-managed'].defaultEffort, 'level_1')
-    assert.deepEqual(listed['sn-legacy'].efforts, ['on', 'off'])
-    assert.equal(listed['sn-legacy'].defaultEffort, 'on')
+    // 对外暴露的是 DSH 规范档位名（level_1→minimal、level_3→medium、level_5→xhigh）：
+    // 宿主聚合会丢弃不认识的 id，用 level_N 会让整个档位菜单消失；wire 值在出站时翻译回去。
+    assert.deepEqual(listed['sn-managed'].efforts, ['off', 'minimal', 'medium', 'xhigh'])
+    // 上游 default_level=off → 默认档取该模型支持的中档（level_3 → medium）：
+    // 既不落到「关思考」，也不落到最低档 minimal。
+    assert.equal(listed['sn-managed'].defaultEffort, 'medium')
+    assert.deepEqual(listed['sn-legacy'].efforts, ['high', 'off'])
+    assert.equal(listed['sn-legacy'].defaultEffort, 'high')
 
     // `resolveModel` 播报同一份档位（DSH 按它渲染选择器并校验档位合法）。
     const resolvedManaged = await adapter.resolveModel('raccoon', 'sn-managed')
-    assert.deepEqual(resolvedManaged.reasoning.efforts.map(effort => effort.id), ['off', 'level_1', 'level_3', 'level_5'])
+    assert.deepEqual(resolvedManaged.reasoning.efforts.map(effort => effort.id), ['off', 'minimal', 'medium', 'xhigh'])
     assert.deepEqual(resolvedManaged.reasoning.efforts.map(effort => effort.name), ['关闭', '极少', '中', '最大'])
-    assert.equal(resolvedManaged.reasoning.defaultEffort, 'level_1')
+    assert.equal(resolvedManaged.reasoning.defaultEffort, 'medium')
 
     /** 跑一次 stream 并取实际发出的请求体。 */
     const bodyFor = async (model, reasoningEffort) => {
@@ -267,8 +273,12 @@ test('托管档位模型只发顶层 raccoon_thinking_level，旧模型只发 ex
     }
 
     // ---- 托管模型：顶层字段，且不带 extra_body ----
-    const managedLevel3 = await bodyFor('sn-managed', 'level_3')
+    // 界面传规范名 medium → 出站翻译回上游 level_3
+    const managedLevel3 = await bodyFor('sn-managed', 'medium')
     assert.equal(managedLevel3.raccoon_thinking_level, 'level_3')
+    // 旧调用方直接传私有名也照旧可用
+    const managedRaw = await bodyFor('sn-managed', 'level_3')
+    assert.equal(managedRaw.raccoon_thinking_level, 'level_3')
     assert.equal('extra_body' in managedLevel3, false, '托管路径不得再发 extra_body.thinking（两套方言互斥）')
 
     const managedOff = await bodyFor('sn-managed', 'off')
@@ -276,24 +286,39 @@ test('托管档位模型只发顶层 raccoon_thinking_level，旧模型只发 ex
 
     // 没传档位时也要发：托管模型的上游默认可能是 off（关思考 → 正文出现规划）。
     const managedDefault = await bodyFor('sn-managed', undefined)
-    assert.equal(managedDefault.raccoon_thinking_level, 'level_1')
+    assert.equal(managedDefault.raccoon_thinking_level, 'level_3')
+
+    // 宿主用 prepareCall 的元数据补齐输出上限与思考默认档，然后交给绑定的请求。
+    const saved = await rpc('model.setParams', { provider: 'raccoon', modelId: 'sn-managed',
+      params: { maxTokens: 7_500, reasoningEffort: 'xhigh' } })
+    assert.equal(saved.ok, true)
+    const prepared = await adapter.prepareCall('raccoon', 'sn-managed')
+    assert.equal(prepared.model.defaultMaxTokens, 7_500)
+    assert.equal(prepared.model.reasoning.defaultEffort, 'xhigh')
+    chatBodies.length = 0
+    for await (const _chunk of prepared.stream({ provider: 'raccoon', model: 'sn-managed',
+      maxTokens: prepared.model.defaultMaxTokens, reasoningEffort: prepared.model.reasoning.defaultEffort,
+      messages: [{ role: 'user', content: 'hi' }] })) { /* 捕获请求体 */ }
+    assert.equal(chatBodies[0].max_tokens, 7_500)
+    assert.equal(chatBodies[0].raccoon_thinking_level, 'level_5')
 
     // ---- 老模型：旧方言，绝不发托管字段 ----
     const legacyOff = await bodyFor('sn-legacy', 'off')
     assert.deepEqual(legacyOff.extra_body, { thinking: { type: 'disabled' } })
     assert.equal('raccoon_thinking_level' in legacyOff, false)
 
-    const legacyOn = await bodyFor('sn-legacy', 'on')
+    const legacyOn = await bodyFor('sn-legacy', 'high')
     assert.deepEqual(legacyOn.extra_body, { thinking: { type: 'enabled' } })
     assert.equal('raccoon_thinking_level' in legacyOn, false)
 
     // ---- 容错：档位表里没有 off / 档位不认识 → 退回该模型默认档 ----
     const lockedDefault = await adapter.resolveModel('raccoon', 'sn-locked')
-    assert.deepEqual(lockedDefault.reasoning.efforts.map(effort => effort.id), ['level_1', 'level_3', 'level_5'])
+    assert.deepEqual(lockedDefault.reasoning.efforts.map(effort => effort.id), ['minimal', 'medium', 'xhigh'])
     const lockedOff = await bodyFor('sn-locked', 'off')
-    assert.equal(lockedOff.raccoon_thinking_level, 'level_1')
-    const managedUnknownEffort = await bodyFor('sn-managed', 'medium')
-    assert.equal(managedUnknownEffort.raccoon_thinking_level, 'level_1')
+    assert.equal(lockedOff.raccoon_thinking_level, 'level_3')
+    // 真不认识的档位（"ultra" 不在该模型档位表里）→ 退回默认档
+    const managedUnknownEffort = await bodyFor('sn-managed', 'ultra')
+    assert.equal(managedUnknownEffort.raccoon_thinking_level, 'level_3')
   } finally {
     for (const stop of cleanup.reverse()) await stop()
     globalThis.fetch = originalFetch
@@ -303,4 +328,25 @@ test('托管档位模型只发顶层 raccoon_thinking_level，旧模型只发 ex
     fs.rmSync(scratch, { recursive: true, force: true })
     hooks.deregister()
   }
+})
+
+test('档位名双向翻译：私有 id → DSH 规范名，出站再翻译回私有值', async () => {
+  const { canonicalEffortId, privateEffortFor } = await import('../vendor/channel-pack/src/reasoning-ladder.ts')
+  // 宿主只认这 8 个规范名，私有 id 会被整条丢弃（选择器里就没有档位了）。
+  assert.equal(canonicalEffortId('light'), 'low')
+  assert.equal(canonicalEffortId('extra_high'), 'xhigh')
+  assert.equal(canonicalEffortId('none'), 'off')
+  assert.equal(canonicalEffortId('on'), 'high')
+  assert.equal(canonicalEffortId('level_1'), 'minimal')
+  assert.equal(canonicalEffortId('level_5'), 'xhigh')
+  // 已是规范名 → 原样
+  assert.equal(canonicalEffortId('high'), 'high')
+  // 出站：规范名 → 该模型真正接受的私有值
+  assert.equal(privateEffortFor('low', ['light', 'high', 'extra_high']), 'light')
+  assert.equal(privateEffortFor('xhigh', ['light', 'high', 'extra_high']), 'extra_high')
+  assert.equal(privateEffortFor('medium', ['off', 'level_1', 'level_3', 'level_5']), 'level_3')
+  assert.equal(privateEffortFor('off', ['off', 'level_1']), 'off')
+  // 该模型不提供该档 → undefined（调用方据此不发 wire 字段）
+  assert.equal(privateEffortFor('max', ['light', 'high']), undefined)
+  assert.equal(privateEffortFor(undefined, ['light']), undefined)
 })

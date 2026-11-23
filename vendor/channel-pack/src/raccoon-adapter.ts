@@ -31,6 +31,7 @@ import type {
   LlmResolvedModelInfo,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import { canonicalEffortId, privateEffortFor, uniqueCanonicalEfforts } from './reasoning-ladder.js'
 import { AccountPool, providerCatalogVisible } from './account-pool.js'
 import { readCatalogCache, saveCatalogCache } from '../../../lib/catalog-cache.js'
 import { isModelDisabled } from './model-selection.js'
@@ -97,7 +98,7 @@ export function raccoonThinkingExtraBody(
   if (effort === undefined || effort.length === 0) return undefined
   // 只有明确的「关闭」才关；未知档位一律按开启处理（宁可多思考，不可静默关掉
   // —— 用户看不到思考内容会以为模型坏了）。
-  const type = effort === RACCOON_EFFORT_OFF ? 'disabled' : 'enabled'
+  const type = canonicalEffortId(effort) === RACCOON_EFFORT_OFF ? 'disabled' : 'enabled'
   return { thinking: { type } }
 }
 
@@ -116,8 +117,10 @@ export function raccoonThinkingLevel(
   effort: string | undefined,
   thinking: RaccoonThinkingInfo,
 ): string {
-  const candidate = effort !== undefined && thinking.levels.includes(effort)
-    ? effort
+  // 界面给的是 DSH 规范档位名，先翻译回上游 level_N（含 off）。
+  const wireEffort = privateEffortFor(effort, thinking.levels)
+  const candidate = wireEffort !== undefined
+    ? wireEffort
     : thinking.defaultLevel
   const level = thinking.levels.includes(candidate) ? candidate : thinking.levels[0] ?? candidate
   if (level === RACCOON_EFFORT_OFF && !thinking.levels.includes(RACCOON_EFFORT_OFF)) {
@@ -140,15 +143,15 @@ export function raccoonReasoningInfo(thinking?: RaccoonThinkingInfo): {
   defaultEffort: ReturnType<typeof ReasoningEffortId>
 } {
   const source = raccoonThinkingEfforts(thinking)
-  const efforts = source.efforts.map((id) => ({
+  // id 必须是 DSH 规范档位名（level_1→minimal … level_5→xhigh、off 不变）：
+  // 宿主聚合会丢弃不认识的 id，直接用 level_N 会让整个档位菜单消失。
+  const efforts = uniqueCanonicalEfforts(source.efforts).map(({ id, wire }) => ({
     id: ReasoningEffortId(id),
-    name: raccoonThinkingEffortName(id),
+    name: raccoonThinkingEffortName(wire),
   }))
   // ⚠️ 默认档必须确实在列表里（防御：目录被改乱时不至于抛错）
-  const fallbackId = source.efforts[0] ?? RACCOON_EFFORT_OFF
-  const defaultEffort = ReasoningEffortId(
-    source.efforts.includes(source.defaultEffort) ? source.defaultEffort : fallbackId,
-  )
+  const wanted = canonicalEffortId(source.defaultEffort)
+  const defaultEffort = efforts.find(effort => effort.id === wanted)?.id ?? efforts[0]?.id ?? ReasoningEffortId(RACCOON_EFFORT_OFF)
   return { efforts, defaultEffort }
 }
 
@@ -218,6 +221,15 @@ export interface RaccoonAdapterOptions {
   /** 拉取远端模型目录；失败时适配器回退兜底表。 */
   fetchRemoteModels?: () => Promise<RaccoonRemoteModel[]>
   catalogFile?: string
+  /**
+   * 出站模型 id 翻译（统一免费/订阅模型用）。
+   *
+   * `options.model` 是 DSH 选择的**统一 id**；请求体与限流标记要用**该账号
+   * 所属套餐的真实上游 id**（订阅账号 = `<统一 id>-p`，免费账号 = 原样）。
+   * 选号、Token 账本与调用账号记录仍用统一 id —— 它们描述「用户选了什么」，
+   * 只有出站协议与限流键描述「上游怎么称呼它」。
+   */
+  outboundModelId?: (modelId: string, accountId: string | undefined) => string
   /** 读取图片附件的原始字节（内联为 data URL 用）。 */
   readImage?: (attachment: unknown) => Promise<{ data: Uint8Array; mediaType: string } | undefined>
   /**
@@ -302,7 +314,7 @@ export class RaccoonAdapter extends LlmAdapter {
       const defaultMaxTokens = defaultModelOutputTokens(positiveMaxTokens(model.maxTokens) ?? fallback?.maxTokens, model.contextWindow)
       // 逐模型思考档位：有托管档位就按上游目录给（含允许关闭时的 `off`），
       // 没有则回退旧方言两态（开 / 关）。
-      const thinkingInfo = raccoonThinkingEfforts(model.thinking ?? fallback?.thinking)
+      const reasoning = raccoonReasoningInfo(model.thinking ?? fallback?.thinking)
       return {
         id: model.id,
         rateBadge: modelRateBadge(model.effectiveMultiplier, { status: model.status, baseMultiplier: model.baseMultiplier }),
@@ -310,8 +322,9 @@ export class RaccoonAdapter extends LlmAdapter {
         ...(typeof (model as any).contextWindow === 'number' ? { contextWindow: (model as any).contextWindow } : {}),
         ...(typeof (model as any).maxTokens === 'number' ? { maxTokens: (model as any).maxTokens } : {}),
         ...(defaultMaxTokens === undefined ? {} : { defaultMaxTokens }),
-        efforts: thinkingInfo.efforts,
-        defaultEffort: thinkingInfo.defaultEffort,
+        // 目录行同样只暴露 DSH 规范档位名（宿主聚合会丢弃 level_N 这类私有 id）。
+        efforts: reasoning.efforts.map(effort => effort.id),
+        defaultEffort: reasoning.defaultEffort,
         ...(typeof (model as any).supportsImage === 'boolean' ? { supportsImage: (model as any).supportsImage } : {}),
         ...(typeof fallback?.stale === 'boolean' ? { stale: fallback.stale } : {}),
         ...(typeof fallback?.staleReason === 'string' ? { staleReason: fallback.staleReason } : {}),
@@ -494,6 +507,10 @@ export class RaccoonAdapter extends LlmAdapter {
     }
 
     const messages = serializeMessages(options.messages, imageUrls)
+    // 出站 id：按实际服务的账号套餐翻译（未注入时恒为原样，即两侧独立模式）。
+    const wireModelOf = (accountId: string | undefined): string =>
+      this.options.outboundModelId?.(options.model, accountId) ?? options.model
+    let wireModel = wireModelOf(accountId)
 
     /**
      * 前置 system 消息（若有）。
@@ -526,7 +543,7 @@ export class RaccoonAdapter extends LlmAdapter {
 
     /** 构造请求体。 */
     const buildBody = (): string => JSON.stringify({
-      model: options.model,
+      model: wireModel,
       messages: wireMessages,
       stream: true,
       max_tokens: maxTokens,
@@ -601,6 +618,11 @@ export class RaccoonAdapter extends LlmAdapter {
             throw new LlmError('raccoon: credential expired and refresh failed', 'AUTH', { status: response.status })
           }
           credential = refreshed
+          // 续期失败时回退到 `resolveCredential()` 会**重新选号**，可能换到别的账号。
+          // 统一模式下出站 id 依赖账号套餐（订阅账号要加 `-p`），故账号与 wireModel
+          // 必须跟着重算，不能沿用上一轮的 accountId。
+          accountId = await this.options.accountPool?.findAccountIdByCredential(this.product.id, credential.access_token)
+          wireModel = wireModelOf(accountId)
           response = await send()
         }
         if (!response.ok) {
@@ -641,7 +663,7 @@ export class RaccoonAdapter extends LlmAdapter {
           if (accountId) {
             await this.options.accountPool?.updateModelRateLimit(
               accountId,
-              options.model,
+              wireModel,
               resetAt ?? Date.now() + RATE_LIMIT_FALLBACK_MS,
             )
           }
@@ -651,6 +673,7 @@ export class RaccoonAdapter extends LlmAdapter {
           if (nextOnLimit === undefined || tried.has(nextOnLimit.accountId)) throw error
           accountId = nextOnLimit.accountId
           credential = nextOnLimit.credential
+          wireModel = wireModelOf(accountId)
           if (isRaccoonExpired(credential)) {
             credential = await this.options.refresh(accountId) ?? credential
           }
@@ -658,7 +681,7 @@ export class RaccoonAdapter extends LlmAdapter {
         }
         if (error.code !== 'QUOTA_EXCEEDED') throw error
         if (accountId) {
-          await this.options.accountPool?.updateModelRateLimit(accountId, options.model, nextUtc8DayStartMs())
+          await this.options.accountPool?.updateModelRateLimit(accountId, wireModel, nextUtc8DayStartMs())
         }
         // A new SSE consumer starts block indices at zero; never replay after output.
         if (emitted || attempt === 2 || this.options.nextAccount === undefined) throw error
@@ -666,6 +689,7 @@ export class RaccoonAdapter extends LlmAdapter {
         if (next === undefined || tried.has(next.accountId)) throw error
         accountId = next.accountId
         credential = next.credential
+          wireModel = wireModelOf(accountId)
         if (isRaccoonExpired(credential)) {
           credential = await this.options.refresh(accountId) ?? credential
         }

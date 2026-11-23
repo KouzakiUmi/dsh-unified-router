@@ -14,6 +14,7 @@
 
 import { RACCOON_API_BASE, RACCOON_PHONE_CIPHER_SECRET, raccoonDisplayName } from './raccoon.js'
 import { RACCOON_REQUEST_IMAGE_MAX_BYTES } from './image-budget.js'
+import { defaultModelEffort } from '../../../lib/model-catalog.js'
 
 /**
  * 思考档位有**两套方言**，按模型分流 —— 这是本文件最容易搞错的地方。
@@ -73,8 +74,10 @@ import { RACCOON_REQUEST_IMAGE_MAX_BYTES } from './image-budget.js'
  * 探针 A 证实关闭时 `reasoning_content` 完全为空、`reasoning_tokens=0`，
  * 而文档型回答照样产出。用户看到的就是「CoT 泄漏到 assistant」。
  *
- * 故 `default_level` 为 `off` 时，本插件的 DSH 默认档取**最低思考档**
- * （`level_1`）而不是 `off`；`off` 仍可手动选择（有人要最快速度）。
+ * 故 `default_level` 为 `off` 时，本插件的 DSH 默认档**不取 off**；同时也不取
+ * 最低思考档 —— 默认档统一交给 `defaultModelEffort`：上游给了有效的中/高档
+ * （`level_3` 及以上）就照抄，否则取该模型支持的中档/更强档。`off` 与低档
+ * 仍可手动选择（有人要最快速度）。
  */
 
 /**
@@ -132,8 +135,9 @@ export interface RaccoonThinkingInfo {
   levels: readonly string[]
   /**
    * 逐模型默认档（已按本插件口径修正）：
-   * 上游 `default_level` 是具体档位时照抄；是 `off` 时改取最低思考档
-   * （理由见文件头「为什么默认档不照抄 upstream off」）。
+   * 上游 `default_level` 是有效中/高档时照抄；是 `off` / 缺失 / 低档时取该
+   * 模型支持的中档或更强档（`defaultModelEffort` 的统一默认档策略，理由见
+   * 文件头「为什么默认档不照抄 upstream off」）。
    */
   defaultLevel: string
 }
@@ -180,10 +184,14 @@ export function parseRaccoonThinking(value: unknown): RaccoonThinkingInfo | unde
 
   const options = canDisable ? [RACCOON_EFFORT_OFF, ...levels] : [...levels]
   const upstreamDefault = typeof raw.default_level === 'string' ? raw.default_level.trim() : ''
-  // 上游默认档是具体档位时照抄；是 off（或缺失）时取最低思考档，见文件头。
-  const defaultLevel = levels.includes(upstreamDefault)
-    ? upstreamDefault
-    : levels[0] ?? RACCOON_EFFORT_OFF
+  // 默认档规则由 `defaultModelEffort` 统一收口：
+  // - 上游 `default_level` 是**有效中/高档**（level_3 及以上）时照抄；
+  // - 是 off / 缺失 / 偏低档（level_1/level_2）时取该模型支持的中/高档，
+  //   而不是「最低思考档」—— 默认落在 minimal/low 会让用户觉得档位设置没用；
+  // - 模型只有低档时尊重能力（返回列表里实际存在的最强档）。
+  // 见文件头「默认档为什么不取最低档」。
+  const defaultLevel = defaultModelEffort(levels, upstreamDefault)
+    ?? levels[0] ?? RACCOON_EFFORT_OFF
   return { levels: options, defaultLevel: options.includes(defaultLevel) ? defaultLevel : options[0]! }
 }
 
@@ -354,13 +362,13 @@ function fallbackModel(entry: {
 }
 
 /** 五档全开（`level_1`…`level_5`），不允许关闭。 */
-const THINKING_5_NO_OFF: RaccoonThinkingInfo = { levels: ['level_1', 'level_2', 'level_3', 'level_4', 'level_5'], defaultLevel: 'level_1' }
-/** 四档（无 Medium），允许关闭；上游默认 off → 按插件口径改取最低思考档。 */
-const THINKING_4_OFF: RaccoonThinkingInfo = { levels: ['off', 'level_1', 'level_2', 'level_4', 'level_5'], defaultLevel: 'level_1' }
+const THINKING_5_NO_OFF: RaccoonThinkingInfo = { levels: ['level_1', 'level_2', 'level_3', 'level_4', 'level_5'], defaultLevel: 'level_3' }
+/** 四档（无 Medium），允许关闭；上游默认 off → 按统一默认档策略取最强可用档 `level_4`。 */
+const THINKING_4_OFF: RaccoonThinkingInfo = { levels: ['off', 'level_1', 'level_2', 'level_4', 'level_5'], defaultLevel: 'level_4' }
 /** 三档（Minimal / Medium / Max），允许关闭。 */
-const THINKING_3_OFF: RaccoonThinkingInfo = { levels: ['off', 'level_1', 'level_3', 'level_5'], defaultLevel: 'level_1' }
+const THINKING_3_OFF: RaccoonThinkingInfo = { levels: ['off', 'level_1', 'level_3', 'level_5'], defaultLevel: 'level_3' }
 /** 三档，不允许关闭。 */
-const THINKING_3_NO_OFF: RaccoonThinkingInfo = { levels: ['level_1', 'level_3', 'level_5'], defaultLevel: 'level_1' }
+const THINKING_3_NO_OFF: RaccoonThinkingInfo = { levels: ['level_1', 'level_3', 'level_5'], defaultLevel: 'level_3' }
 
 /**
  * 兜底模型目录（**2026-11-18** 实测 `GET /api/web/llm/v2/model_catalog`，

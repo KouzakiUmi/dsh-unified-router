@@ -47,6 +47,7 @@
 - **上游有兜底无 —— 28 条**：`DeepSeek-V4-Pro-Official`、`Doubao-Seed-Code`、`Doubao-Seed-Evolving`、`code-review-judge`、`deepseek-V3`、`deepseek-V3.1`、`deepseek-v4.1-flash`、`doubao-2.0-mini`、`glm-4.7`、`glm-5.1`、`glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx`、`glm-5v-turbo`、`kimi-k2.5`、`kimi-k3.1-pro`、`kimi-k3.1-pro-highspeed`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`minimax-m2.7`、`minimax-m3.1-flash`、`multimodal_image_kimi-k2.5`、`qwen-3.5`、`qwen-3.6-plus`、`qwen3.8-flash`、`qwen3.8-max`、`qwen4-max`、`step-5-preview`。
 - **参数漂移**：兜底把 32 条全写成 ctx=200000；上游按通道实为 116000/184000/200000/256000/232768/272000/96000/34096，另有 Max 模式 1M 档（兜底未表达）。交集 9 条中 `Doubao-Seed-2.1-Pro`/`-Turbo`（256k/116k/232768）、`Doubao-Seed-2.0-Code`（184k）不符，`minimax-m3` 部分不符，其余 5 条一致。
 - 倍率：上游 `display_contact_config` 携倍率/活动，兜底无价格字段（信息缺失）。
+- 后续宿主公开快照复核：`code-review-judge` 和 `multimodal_image_kimi-k2.5` 随公开对话条目返回，辨别须使用真实调用 ID，不能依赖显示名或上游隐藏标志。旧对话模型仍保留在设置目录，确认同目录有后继时不默认启用。
 
 ## 5. WorkBuddy
 
@@ -135,7 +136,7 @@ params.raccoon_thinking = { managed:true, supported:true, can_disable:bool,
 
 机制：该模型目录 `default_level: "off"`，而插件从未发过 `raccoon_thinking_level`（旧实现只发 `extra_body.thinking`，托管模型不认），于是每次请求都落在**思考关闭**档 —— 这类推理模型没有隐藏草稿区，规划就写进正文。探针 A 行（关闭态）复现：`reasoning_content` 完全为空、`reasoning_tokens=0`。
 
-⇒ 只发正确的 level 即可让规划回到 `reasoning_content`（B 行），用户也就看不到 CoT 了。本插件因此把「上游 `default_level` 为 off」的模型 DSH 默认档改为**最低思考档**（`level_1`），`off` 仍可手动选择。
+⇒ 探针的 `level_3` 让规划进入 `reasoning_content`（B 行）。上游默认关闭或偏低时，插件优先选择托管中档（`level_3`），`off` 仍可手动选择。
 
 ### C. 兜底表重采（2026-11-18 实测，两侧各 7 条）
 

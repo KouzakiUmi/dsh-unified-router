@@ -346,6 +346,10 @@ export interface ConsumeOpenAiSseOptions {
    * ⚠️ 回调**抛错会被吞掉**：观测失败绝不能把一次正常推理打死。
    */
   onFrame?: (data: Record<string, unknown>) => void
+  /** Provider-specific guard before any content, usage or tools from a frame are emitted. */
+  validateFrame?: (data: Record<string, unknown>) => void
+  /** Some gateways emit the routed model as a bare SSE data item. */
+  validateBareModel?: (value: string) => void
   /** 将 wire 侧规范化的工具名还原为调用方名称。 */
   restoreToolName?: (name: string) => string
   /** Provider-specific quota errors, including HTTP 200 error envelopes. */
@@ -565,6 +569,7 @@ export async function* consumeOpenAiSse(
         try {
           data = JSON.parse(payload)
         } catch {
+          config.validateBareModel?.(payload)
           continue
         }
         throwIfModelQueued(data)
@@ -693,6 +698,7 @@ export async function* consumeOpenAiSse(
             })
           }
         }
+        config.validateFrame?.(data)
         const choice = data.choices?.[0]
         const delta = choice?.delta
         if (typeof choice?.finish_reason === 'string') {

@@ -795,6 +795,15 @@ export interface RpcModelListEntry {
    * 「未知」语义 —— 不编造 `false`（与全仓「未知不编造」的约定一致）。
    */
   isFree?: boolean
+  /**
+   * **订阅限定**：该模型仅对付费订阅（会员）账号开放，免费账号不可调用。
+   *
+   * ⚠️ 与 {@link isFree}（免费额度）和 `rateBadge`（消耗倍率）是**三个独立维度**：
+   * 订阅限定模型仍可能有倍率（会员按倍率扣积分），免费模型也可能不限订阅。
+   * 缺失 = 适配器没报（不编造 `false`），界面据此挂「订阅限定」徽标。
+   * 判据来自官方文档/上游目录的会员门槛声明，不是本地按倍率推断。
+   */
+  subscriptionOnly?: boolean
   rateBadge?: import('./model-rate-badge.js').ModelRateBadge
   /**
    * 该模型是否已被判定为**上游下架**（`dead-models.json` 命中）。
@@ -847,11 +856,15 @@ export interface RpcModelParamsResponse {
  * 不传 `params`（或传空对象）= 清除该模型的覆盖，回到跟随默认 ——
  * 与黑名单「关闭→删键」同一约定，文档里只留真正被设过的模型。
  */
-export interface RpcModelSetParamsRequest {
+export type RpcModelSetParamsRequest = {
   provider: string
   modelId: string
-  params?: { contextWindow?: number; temperature?: number; maxTokens?: number; reasoningEffort?: string; supportsImage?: boolean }
-}
+} & (
+  // 会话药丸仅写上下文；显式 null 清除覆盖。
+  | { contextOnly: true; params: { contextWindow: number | null } }
+  // 未指定 field 的旧客户端仍用整份替换；设置页可以只写本次修改字段。
+  | { contextOnly?: false; field?: 'contextWindow' | 'maxTokens' | 'reasoningEffort' | 'supportsImage'; params?: { contextWindow?: number; temperature?: number; maxTokens?: number; reasoningEffort?: string; supportsImage?: boolean } }
+)
 
 /** RPC: 写入模型参数后的响应（回传完整参数表，便于前端校验） */
 export interface RpcModelSetParamsResponse {

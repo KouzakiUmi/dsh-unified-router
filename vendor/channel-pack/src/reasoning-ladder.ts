@@ -76,6 +76,58 @@ export const REASONING_EFFORT_RANK: Readonly<Record<string, number>> = Object.fr
  * CC Switch 的档位多选器就是这 8 个（含 `minimal` / `ultra`），
  * 故它就是「客户端能说出口的全部词汇」。
  */
+/**
+ * 私有档位 id → DSH 规范档位名。
+ *
+ * DSH 的模型选择器只认 `off/minimal/low/medium/high/xhigh/max` 这一套规范名，
+ * 聚合时会**整条丢弃**不认识的 id（实测：`light`/`extra_high` 被过滤后只剩 high）。
+ * 因此适配器对外暴露的 `reasoning.efforts[].id` 必须是规范名，wire 值在发送前
+ * 用 {@link privateEffortFor} 翻译回上游私有名。
+ */
+export const CANONICAL_EFFORT_ALIAS: Readonly<Record<string, string>> = Object.freeze({
+  light: 'low',
+  extra_high: 'xhigh',
+  none: 'off',
+  on: 'high',
+  level_1: 'minimal',
+  level_2: 'low',
+  level_3: 'medium',
+  level_4: 'high',
+  level_5: 'xhigh',
+})
+
+/** 把上游私有档位 id 归一成 DSH 规范档位名（已是规范名时原样返回）。 */
+export function canonicalEffortId(id: string): string {
+  return Object.hasOwn(CANONICAL_EFFORT_ALIAS, id) ? CANONICAL_EFFORT_ALIAS[id]! : id
+}
+
+const DSH_EFFORT_IDS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** 唯一且受宿主支持的公开档位；保留首项私有名用于文案和出站默认。 */
+export function uniqueCanonicalEfforts(available: readonly string[]): { id: string; wire: string }[] {
+  const seen = new Set<string>()
+  return available.flatMap(wire => {
+    const id = canonicalEffortId(wire)
+    if (!DSH_EFFORT_IDS.has(id) || seen.has(id)) return []
+    seen.add(id)
+    return [{ id, wire }]
+  })
+}
+
+/**
+ * 把 DSH 选中的规范档位名翻译回该模型真正接受的私有 id。
+ * @returns 该模型不提供该档位时返回 `undefined`（调用方据此不写 wire 字段）。
+ */
+export function privateEffortFor(
+  canonical: string | undefined,
+  available: readonly string[] | undefined,
+): string | undefined {
+  if (canonical === undefined || canonical.length === 0) return undefined
+  if (available === undefined) return canonical
+  if (available.includes(canonical)) return canonical
+  return available.find(option => canonicalEffortId(option) === canonical)
+}
+
 export const CANONICAL_REASONING_EFFORTS: readonly string[] = Object.freeze([
   'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
 ])

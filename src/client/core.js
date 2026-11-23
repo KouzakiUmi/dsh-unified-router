@@ -4,11 +4,11 @@
 // （拼接机制下跨模块按名引用，注册表晚于本模块定义没关系——只在运行时取用。）
 
 export const MODEL_PAGE_SIZE = 15
-export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.setKey', 'plan.setModelEnabled', 'plan.setModelParams', 'plan.resetModels'])
+export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.setKey', 'plan.setModelEnabled', 'plan.setModelParams', 'plan.resetModels', 'plan.consoleLogin'])
 export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
 // API Key 渠道（Agnes、云知声）共用的宿主方法；渠道 id 在 payload.provider 里带。
-export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels'])
-// 自管多账号渠道（AStudio / 豆包工作 / Coze / CodeArts 等）共用的宿主方法。
+export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels', 'apikey.setToolsEnabled', 'apikey.setConsoleSession', 'apikey.consoleLogin', 'apikey.clearConsoleSession'])
+// 自管多账号渠道（AStudio / CodeArts）共用的宿主方法。
 export const MANAGED_METHODS = new Set([
   'managed.snapshot', 'managed.models', 'managed.refreshModels',
   'managed.login', 'managed.importLocal', 'managed.importCredential',
@@ -16,13 +16,14 @@ export const MANAGED_METHODS = new Set([
   'managed.checkin', 'managed.claimRewards', 'managed.completeTasks',
   'managed.setModelEnabled', 'managed.setModelParams', 'managed.resetModels',
 ])
-export const AUTOMATION_METHODS = new Set(['automation.status', 'automation.setConfig', 'automation.run'])
+export const AUTOMATION_METHODS = new Set(['automation.status', 'automation.setConfig', 'automation.run', 'automation.query'])
+export const LOOMY_ROUTE_METHODS = new Set(['loomy.routeStatus', 'loomy.checkRoute', 'loomy.clearRoute', 'loomy.setRouteConfig'])
 export const METHODS = new Set(['provider.status', 'account.list', 'model.list', 'credits.permanentLock',
   'account.create', 'login.poll', 'account.update', 'account.delete', 'account.reorder', 'account.refresh',
   'account.reset', 'account.retest', 'provider.setEnabled', 'model.setDisabled', 'model.clearDead',
   'model.setAllDisabled', 'model.resetDefaults', 'model.refresh', 'model.params', 'model.setParams',
   'credits.balances', 'credits.claimAll', 'onboarding.claim', 'settings.snapshot', 'settings.refresh',
-  ...PLAN_METHODS, ...AUTOMATION_METHODS])
+  ...PLAN_METHODS, ...AUTOMATION_METHODS, ...LOOMY_ROUTE_METHODS])
 export const WORKBUDDY_ID = 'workbuddy'
 export const allowed = id => PROVIDERS.some(p => p.id === id)
 export const packAllowed = id => PACK_PROVIDERS.some(p => p.id === id)
@@ -31,6 +32,7 @@ export const number = value => typeof value === 'number' && Number.isFinite(valu
 export const initial = provider => ({ provider, accounts: [], models: [], balances: [], statuses: {}, selected: '', loadFailed: false,
   checkin: null,
   automation: null,
+  loomyRoute: { skipRouted: true, accounts: {} },
   locked: false, login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
   // WorkBuddy 是自管多账号快照：accounts 逐账号、models 全局、loginUrl 属登录窗口。
     workbuddy: { accounts: [], models: [], loginUrl: '' }, workbuddyReady: false, workbuddyStale: false, workbuddyError: false, workbuddyLoginUrl: null,
@@ -53,15 +55,168 @@ export function safeLoginUrl(value) {
   if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && local))) throw new Error('登录地址不可用')
   return url.href
 }
+const LOOMY_ROUTE_VERDICTS = new Set(['clean', 'routed', 'exhausted', 'expired', 'unknown'])
+const LOOMY_ROUTE_REASONS = new Set([
+  'ledger-deepseek', 'ledger-spark', 'ledger-other-family', 'catalog-missing-ds41',
+  'served-model-match', 'served-model-mismatch', 'no-quota', 'session-expired',
+  'account-disabled', 'no-ledger-records',
+])
+const LOOMY_ROUTE_REASON_LABELS = Object.freeze({
+  'ledger-deepseek': '积分账本',
+  'ledger-spark': '积分账本（Spark）',
+  'ledger-other-family': '积分账本（异族模型）',
+  'catalog-missing-ds41': '目录缺失 DS4.1',
+  'served-model-match': '响应模型匹配',
+  'served-model-mismatch': '响应模型不匹配',
+  'no-quota': '积分不足',
+  'session-expired': '登录已失效',
+  'account-disabled': '账号已停用',
+  'no-ledger-records': '尚无对话扣费记录',
+})
+export function loomyRouteEntryFrom(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  if (!LOOMY_ROUTE_VERDICTS.has(value.verdict)) return null
+  const reason = LOOMY_ROUTE_REASONS.has(value.reason) ? value.reason : ''
+  const servedModel = text(value.servedModel, 120)
+  const checkedAt = number(value.checkedAt)
+  return {
+    verdict: value.verdict,
+    ...(reason ? { reason } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(checkedAt !== null ? { checkedAt } : {}),
+  }
+}
+export function loomyRouteFrom(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const raw = source.accounts && typeof source.accounts === 'object' && !Array.isArray(source.accounts) ? source.accounts : {}
+  const accounts = {}
+  for (const [id, entry] of Object.entries(raw)) {
+    if (typeof id !== 'string' || !id || ['__proto__', 'prototype', 'constructor'].includes(id)) continue
+    const clean = loomyRouteEntryFrom(entry)
+    if (clean) accounts[id] = clean
+  }
+  return { skipRouted: source.skipRouted !== false, accounts }
+}
+export function loomyRouteView(state, account) {
+  const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
+  if (!entry) {
+    return {
+      entry: null,
+      tag: ['路由未检测', undefined, '点击「检测路由」只读验证目录与账本（0 积分）'],
+      detail: {
+        statusLabel: '检测状态',
+        servedLabel: '未检测',
+        reasonLabel: '请点击「检测路由」只读验证目录与账本（0 积分）',
+        checkedAt: 0,
+      },
+    }
+  }
+  const reasonLabel = LOOMY_ROUTE_REASON_LABELS[entry.reason] || ''
+  const checkedText = entry.checkedAt > 0 ? `检测于 ${displayTime(entry.checkedAt)}` : ''
+  const title = [entry.servedModel ? `实际落地：${entry.servedModel}` : '', reasonLabel, checkedText].filter(Boolean).join(' · ')
+  let label = '暂无账本记录'
+  let tone
+  let statusLabel = '路由状态'
+  if (entry.verdict === 'clean') {
+    label = '路由正常'
+    tone = 'success'
+    statusLabel = '实测落地模型'
+  } else if (entry.verdict === 'routed') {
+    label = entry.reason === 'catalog-missing-ds41' ? '改路由 · 目录无 DS4.1'
+      : entry.servedModel ? `改路由 → ${entry.servedModel}` : '上游改路由'
+    tone = 'error'
+    statusLabel = entry.reason === 'catalog-missing-ds41' ? '目录可见模型' : '实际落地模型'
+  } else if (entry.verdict === 'exhausted') {
+    label = '路由待测 · 积分不足'
+    tone = 'warn'
+    statusLabel = '探测阻塞'
+  } else if (entry.verdict === 'expired') {
+    label = entry.reason === 'account-disabled' ? '账号已停用' : '凭据已失效'
+    tone = entry.reason === 'account-disabled' ? 'error' : 'warn'
+    statusLabel = '账号状态'
+  }
+  return {
+    entry,
+    tag: [label, tone, title || label],
+    detail: {
+      statusLabel,
+      servedLabel: entry.servedModel || label,
+      reasonLabel,
+      checkedAt: entry.checkedAt,
+    },
+  }
+}
+export function loomyRouteCounts(state) {
+  const accounts = state.accounts ?? []
+  const out = { total: accounts.length, clean: 0, routed: 0, expired: 0, exhausted: 0, unknown: 0, unchecked: 0 }
+  for (const account of accounts) {
+    const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
+    if (!entry) out.unchecked += 1
+    else if (entry.verdict === 'clean') out.clean += 1
+    else if (entry.verdict === 'routed') out.routed += 1
+    else if (entry.verdict === 'expired') out.expired += 1
+    else if (entry.verdict === 'exhausted') out.exhausted += 1
+    else out.unknown += 1
+  }
+  return out
+}
+export function loomyRouteSummaryText(state) {
+  const counts = loomyRouteCounts(state)
+  if (!counts.total) return ''
+  const parts = []
+  if (counts.clean) parts.push(`正常 ${counts.clean}`)
+  if (counts.routed) parts.push(`改路由 ${counts.routed}`)
+  if (counts.expired + counts.exhausted) parts.push(`异常 ${counts.expired + counts.exhausted}`)
+  if (counts.unknown) parts.push(`无账本 ${counts.unknown}`)
+  if (!parts.length) return `路由未检测 ${counts.unchecked}`
+  if (counts.unchecked) parts.push(`未检测 ${counts.unchecked}`)
+  return `路由 ${parts.join(' · ')}`
+}
+export function loomyRouteLatestAt(state) {
+  let latest = 0
+  for (const account of state.accounts ?? []) {
+    const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
+    if (entry?.checkedAt > latest) latest = entry.checkedAt
+  }
+  for (const raw of Object.values(state.loomyRoute?.accounts ?? {})) {
+    const entry = loomyRouteEntryFrom(raw)
+    if (entry?.checkedAt > latest) latest = entry.checkedAt
+  }
+  return latest
+}
+export function loomyRouteMessage(value, singleAccount) {
+  if (singleAccount) {
+    const entry = loomyRouteEntryFrom(value?.accounts?.[singleAccount])
+    if (!entry) return '路由检测未获得结果，请稍后重试。'
+    if (entry.verdict === 'clean') return `路由检测完成：路由正常（${entry.servedModel || 'DeepSeek'}）。`
+    if (entry.verdict === 'routed') return `检测到上游改路由：实际落地 ${entry.servedModel || '非 DeepSeek 模型'}。`
+    if (entry.verdict === 'exhausted') return '当前账号积分不足，暂无法完成路由判定。'
+    if (entry.verdict === 'expired') return entry.reason === 'account-disabled' ? '检测到账号已被上游停用。' : '账号登录态已失效，请重新登录。'
+    return '暂未查到对话扣费记录，使用后可自动判定或再次检测。'
+  }
+  const s = value?.summary
+  if (!s || !s.tested) return '当前没有需要检测的 Loomy 账号。'
+  const parts = []
+  if (s.clean) parts.push(`${s.clean} 个正常`)
+  if (s.routed) parts.push(`${s.routed} 个改路由`)
+  if (s.expired + s.exhausted) parts.push(`${s.expired + s.exhausted} 个不可用`)
+  if (s.unknown) parts.push(`${s.unknown} 个无账本记录`)
+  if (s.error) parts.push(`${s.error} 个失败`)
+  return `路由检测完成（共 ${s.tested} 个）：${parts.join('，') || '无变化'}。`
+}
 export function accountsFrom(value, provider) {
-  return (Array.isArray(value?.accounts) ? value.accounts : []).filter(a => a && a.provider === provider && typeof a.id === 'string').map(a => ({
-    id: a.id, provider, nickname: text(a.nickname, 80) || '未命名账号', enabled: a.enabled !== false,
-    expiresAt: number(a.expiresAt),
-    // 套餐档位（Raccoon 家族按它分流：免费模型侧 / 订阅模型侧）。缺省不是错误：
-    // 老账号可能还没被探测打过标，界面按「未知」显示。
-    plan: a.plan === 'free' || a.plan === 'pro' || a.plan === 'unknown' ? a.plan : '',
-    modelRateLimits: Object.fromEntries(Object.entries(a.modelRateLimits ?? {}).filter(([, time]) => Number.isFinite(time) && time > Date.now())),
-  }))
+  return (Array.isArray(value?.accounts) ? value.accounts : []).filter(a => a && a.provider === provider && typeof a.id === 'string').map(a => {
+    const route = provider === 'loomy' ? loomyRouteEntryFrom(a.route) : null
+    return {
+      id: a.id, provider, nickname: text(a.nickname, 80) || '未命名账号', enabled: a.enabled !== false,
+      expiresAt: number(a.expiresAt),
+      // 套餐档位（Raccoon 家族按它分流：免费模型侧 / 订阅模型侧）。缺省不是错误：
+      // 老账号可能还没被探测打过标，界面按「未知」显示。
+      plan: a.plan === 'free' || a.plan === 'pro' || a.plan === 'unknown' ? a.plan : '',
+      ...(route ? { route } : {}),
+      modelRateLimits: Object.fromEntries(Object.entries(a.modelRateLimits ?? {}).filter(([, time]) => Number.isFinite(time) && time > Date.now())),
+    }
+  })
 }
 /**
  * 模型在界面状态里的**唯一键**：`provider:modelId`。
@@ -81,6 +236,7 @@ export function modelsFrom(value, provider) {
   return (Array.isArray(value?.models) ? value.models : []).filter(m => m && typeof m.id === 'string').map(m => ({
     id: m.id, provider: owner, key: modelKey(owner, m.id),
     name: text(m.name) || text(m.id), disabled: m.disabled === true, dead: m.dead === true, isFree: m.isFree === true,
+    subscriptionOnly: m.subscriptionOnly === true,
     // 模型真实能力：缺省时界面不给对应控件（不猜它有什么能力）。
     contextWindow: number(m.contextWindow),
     maxTokens: number(m.maxTokens),
@@ -116,15 +272,68 @@ export function paramsFrom(value, provider) {
       ...(typeof entry.supportsImage === 'boolean' ? { supportsImage: entry.supportsImage } : {}),
     }]))
 }
+export function replaceProviderParams(params, value, provider) {
+  return {
+    ...Object.fromEntries(Object.entries(params).filter(([key]) => !key.startsWith(`${provider}:`))),
+    ...paramsFrom(value, provider),
+  }
+}
+export function windowRemainingAmount(window) {
+  if (!window) return null
+  if (typeof window.balance === 'number' && Number.isFinite(window.balance)) return window.balance
+  if (typeof window.amount === 'number' && Number.isFinite(window.amount) && window.limit > 0) {
+    return Math.max(0, Math.round((window.limit - window.amount) * 10000) / 10000)
+  }
+  return null
+}
+export function windowRemainingNote(window, unitText = window?.unit || '') {
+  const remaining = windowRemainingAmount(window)
+  if (remaining === null) return false
+  return `剩余 ${displayNumber(remaining)}${window.limit > 0 ? ` / ${displayNumber(window.limit)}` : ''}${unitText ? ` ${unitText}` : ''}`
+}
+export const displayCreditUnit = unit => /^credits?$/i.test(String(unit || '').trim()) ? '积分' : String(unit || '').trim()
 export function balancesFrom(value) {
   return (Array.isArray(value?.accounts) ? value.accounts : []).filter(a => a && typeof a.accountId === 'string').map(a => ({
     accountId: a.accountId, nickname: text(a.nickname, 80) || '未命名账号', total: number(a.balance?.total),
     updatedAt: number(a.updatedAt), stale: Boolean(a.error),
-    packages: (Array.isArray(a.balance?.packages) ? a.balance.packages : []).slice(0, 40).map(p => ({
-      name: text(p.name, 80), remaining: number(p.remaining), unit: text(p.unit, 20),
-      expiresAt: number(p.expiresAt), active: p.active !== false,
-    })),
+    packages: (Array.isArray(a.balance?.packages) ? a.balance.packages : []).slice(0, 40).map(p => {
+      const rawUnit = text(p.unit, 20)
+      return {
+        name: text(p.name, 80), remaining: number(p.remaining),
+        unit: displayCreditUnit(rawUnit),
+        expiresAt: number(p.expiresAt), active: p.active !== false,
+      }
+    }),
   }))
+}
+export function displayCreditPackages(packages) {
+  const grouped = new Map()
+  const ordered = []
+  for (const pkg of Array.isArray(packages) ? packages : []) {
+    if (!pkg) continue
+    const rawName = pkg.name || ''
+    const key = `${rawName}\0${pkg.active !== false ? '1' : '0'}\0${pkg.unit || ''}`
+    let entry = grouped.get(key)
+    if (!entry) {
+      entry = { base: pkg, count: 0, knownRemaining: false, remaining: 0, expiresAt: null }
+      grouped.set(key, entry)
+      ordered.push(entry)
+    }
+    entry.count += 1
+    if (typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)) {
+      entry.knownRemaining = true
+      entry.remaining += pkg.remaining
+    }
+    if (typeof pkg.expiresAt === 'number' && Number.isFinite(pkg.expiresAt) && pkg.expiresAt > 0) {
+      entry.expiresAt = entry.expiresAt === null ? pkg.expiresAt : Math.min(entry.expiresAt, pkg.expiresAt)
+    }
+  }
+  return ordered.map(({ base, count, knownRemaining, remaining, expiresAt }) => count === 1 ? base : {
+    ...base,
+    name: `${base.name || '额度包'}（${count} 笔）`,
+    remaining: knownRemaining ? Math.round(remaining * 100) / 100 : null,
+    expiresAt,
+  })
 }
 // 渠道运行状态按注册表逐渠道收编（channel-pack 渠道才有；商汤由 plan 快照推导）。
 export function statusFrom(value) {
@@ -155,6 +364,7 @@ export function planSnapshotFrom(value) {
     hasApiKey: source.hasApiKey === true, registerProvider: source.registerProvider === true,
     providerRegistered: source.providerRegistered === true, catalogAvailable: source.catalogAvailable === true,
     catalogError: source.catalogError === true, pollSeconds: number(source.pollSeconds), updatedAt: number(source.updatedAt),
+    quota: source.quota ?? null,
     models: rows.filter(model => typeof model?.id === 'string' && model.id.length <= 256 && model.id).slice(0, 512)
       .map(model => ({ id: model.id, name: text(model.name), enabled: model.enabled !== false, ...planModelFields(model) })),
   }
@@ -183,10 +393,22 @@ export function apikeySnapshotFrom(value) {
     catalogSource: ['remote', 'cached', 'fallback'].includes(source.catalogSource) ? source.catalogSource : 'fallback',
     catalogError: source.catalogError === true, updatedAt: number(source.updatedAt),
     models: rows.filter(model => typeof model?.id === 'string' && model.id.length <= 256 && model.id).slice(0, 512)
-      .map(model => ({ id: model.id, name: text(model.name), enabled: model.enabled !== false, ...planModelFields(model) })),
+      .map(model => ({
+        id: model.id, name: text(model.name), enabled: model.enabled !== false,
+        ...(model.free === true ? { free: true } : {}),
+        ...(model.paidOnly === true ? { paidOnly: true } : {}),
+        ...planModelFields(model),
+      })),
     balance: apikeyBalanceFrom(source.balance),
     quota: projectApiKeyQuota(source.quota),
     rateLimit: projectApiKeyRateLimit(source.rateLimit),
+    toolsSupported: source.toolsSupported === true,
+    toolsEnabled: source.toolsEnabled === true,
+    toolsRegistered: source.toolsRegistered === true,
+    // 控制台会话能力按渠道声明：宿主只对配了 consoleCredentialRef 的渠道透出
+    // hasConsoleSession，这里保留「字段是否存在」语义，避免给 Agnes 也渲染控制台行。
+    ...(typeof source.hasConsoleSession === 'boolean' ? { hasConsoleSession: source.hasConsoleSession } : {}),
+    consoleLoginUrl: typeof source.consoleLoginUrl === 'string' ? source.consoleLoginUrl : '',
   }
 }
 // 重进设置页时恢复的渠道快照：按注册表里的渠道 id 逐个重建，未知 id 丢弃。
@@ -207,6 +429,9 @@ export function workbuddyWindowFrom(value) {
     name: text(value.name, 80), used: number(value.used), amount: number(value.amount),
     limit: number(value.limit), balance: number(value.balance), display: text(value.display, 120),
     unit: text(value.unit, 40), resetsAt: text(value.resetsAt, 40), span: number(value.span),
+    expiresAt: text(value.expiresAt, 48), aside: value.aside === true,
+    models: Array.isArray(value.models) ? value.models.slice(0, 256).map(id => text(id, 256)).filter(Boolean) : [],
+    notModels: Array.isArray(value.notModels) ? value.notModels.slice(0, 256).map(id => text(id, 256)).filter(Boolean) : [],
     runsOutAt: text(value.runsOutAt, 40), runsOut: number(value.runsOut),
   }
   return window.name ? window : null
@@ -332,6 +557,8 @@ export function automationFrom(value) {
       if (typeof entry.autoClaimRewards === 'boolean') clean.autoClaimRewards = entry.autoClaimRewards
       if (typeof entry.autoCompleteTasks === 'boolean') clean.autoCompleteTasks = entry.autoCompleteTasks
       if (typeof entry.cotLoopGuard === 'boolean') clean.cotLoopGuard = entry.cotLoopGuard
+      // 分渠道默认输出上限：只在上游缺输出规格时生效。
+      if (Number.isSafeInteger(entry.defaultMaxOutput) && entry.defaultMaxOutput > 0) clean.defaultMaxOutput = entry.defaultMaxOutput
       if (Object.keys(clean).length) providers[id] = clean
     }
   }
@@ -356,21 +583,45 @@ export function automationFrom(value) {
       autoClaimRewards: cfg.autoClaimRewards !== false,
       autoCompleteTasks: cfg.autoCompleteTasks === true,
       cotLoopGuard: cfg.cotLoopGuard !== false,
+      preferExpiringQuota: cfg.preferExpiringQuota === true,
+      raccoonUnifiedModels: cfg.raccoonUnifiedModels === true,
+      routingMode: ['manual', 'free', 'expiring', 'sticky'].includes(cfg.routingMode) ? cfg.routingMode
+        : cfg.preferExpiringQuota === true ? 'expiring' : 'manual',
       providers,
     },
     tasks,
+    quotaProviders: (Array.isArray(value.quotaProviders) ? value.quotaProviders : []).filter(id => typeof id === 'string' && providerById(id)),
+    unifiedModelProviders: (Array.isArray(value.unifiedModelProviders) ? value.unifiedModelProviders : []).filter(id => typeof id === 'string' && providerById(id)),
   }
 }
 export function automationEffective(state, providerId, field) {
   const cfg = state.automation?.config
-  if (!cfg) return field === 'autoCompleteTasks' ? false : true
+  if (!cfg) return undefined
   const override = cfg.providers?.[providerId]?.[field]
   if (typeof override === 'boolean') return override
   return cfg[field] === true
 }
+export const checkinEnabled = (state, id) => state.checkin?.providers?.[id]?.enabled
+  ?? (state.checkin?.providers?.[id] ? state.checkin.enabled : undefined)
+export const taskScope = (provider, mode) => `tasks:${provider}:${mode}`
+
+export function taskMessage(value, mode, querying = false) {
+  const records = Array.isArray(value?.results) ? value.results : []
+  if (!records.length) return '没有可操作的账号。'
+  const counts = new Map()
+  for (const record of records) {
+    const kind = record.outcome?.kind
+    const label = kind === 'claimed' || kind === 'completed' ? record.repeated ? '已完成' : '成功'
+      : ({ done: '已完成', 'already-claimed': '已签到', inactive: '活动未开启', ineligible: '暂不符合条件', empty: '暂无可领', failed: '失败', pending: '待确认', unsupported: '暂无记录' })[kind] ?? '待确认'
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  const topic = mode === 'checkin' ? '签到' : mode === 'completeTasks' ? '任务' : '奖励'
+  const local = querying && records.every(record => record.verified !== true) ? '（本地记录）' : ''
+  return `${topic}${querying ? '状态' : mode === 'completeTasks' ? '执行' : '领取'}${local}：${Array.from(counts, ([label, count]) => `${count} 个${label}`).join('，')}。`
+}
 const TASK_LABELS = {
-  claimed: '奖励已领', completed: '任务已完成', done: '今日已完成',
-  empty: '暂无可领', failed: '任务失败', pending: '处理中',
+  claimed: '奖励已领', completed: '任务已完成', done: '已完成',
+  empty: '暂无可领', failed: '任务失败', pending: '待确认', unsupported: '暂不支持',
 }
 export function taskEntry(state, providerId, mode, accountId) {
   const row = state.automation?.tasks?.[providerId]?.[mode]?.find(item => item.accountId === accountId)
@@ -378,7 +629,7 @@ export function taskEntry(state, providerId, mode, accountId) {
   const label = Object.hasOwn(TASK_LABELS, row.kind) ? TASK_LABELS[row.kind] : null
   if (!label) return null
   const ok = row.kind === 'claimed' || row.kind === 'completed' || row.kind === 'done'
-  return { tag: [label, ok ? 'success' : row.kind === 'empty' ? undefined : 'warn'], row }
+  return { tag: [label, ok ? 'success' : row.kind === 'empty' ? undefined : 'warn'], row, locked: ok || row.kind === 'pending' || row.kind === 'failed' && !row.retryable }
 }
 export function claimMessage(value, provider) {
   const results = Array.isArray(value?.results) ? value.results : []
@@ -518,6 +769,134 @@ export function sanitizeCardSnapshots(parsed) {
     accounts: parsed.workbuddy.accounts, models: parsed.workbuddy.models,
   }).workbuddy
   return { plan, workbuddy, apikeys: apikeySnapshotsFrom(parsed?.apikeys), managed: managedSnapshotsFrom(parsed?.managed) }
+}
+
+export const percentMetric = fraction => typeof fraction === 'number' && Number.isFinite(fraction)
+  ? { value: Math.round(fraction * 100), unit: '% 剩余', fraction }
+  : undefined
+
+export function isAgnesFreeQuota(quota, balance) {
+  if (quota?.status === 'ready') {
+    const bal = typeof quota.balance === 'number' && Number.isFinite(quota.balance) ? quota.balance : 0
+    const windows = Array.isArray(quota.windows) ? quota.windows : []
+    const hasPositive = windows.some(w =>
+      (typeof w?.remaining === 'number' && w.remaining > 0) ||
+      (typeof w?.limit === 'number' && w.limit > 0) ||
+      (typeof w?.used === 'number' && w.used > 0))
+    const hasZero = quota.balance === 0 || windows.some(w => w?.remaining === 0 || w?.limit === 0 || w?.used === 0)
+    return bal <= 0 && !hasPositive && hasZero
+  }
+  if (balance && typeof balance === 'object' && !balance.error) {
+    return balance.used === 0 && (balance.limit === null || balance.limit <= 0)
+  }
+  return false
+}
+
+export function isPermanentCreditPackage(pkg, providerId) {
+  if (!pkg || pkg.active === false) return false
+  const expires = pkg.expiresAt ?? pkg.expires
+  if (typeof expires === 'number' && Number.isFinite(expires) && expires > 0) return false
+  if (typeof expires === 'string' && expires.trim() && Number.isFinite(Date.parse(expires))) return false
+  const name = String(pkg.name || pkg.label || '').trim()
+  if (/每日|赠送|活动|签到|会员|套餐|月度|周|日额度|体验|福利|新手|邀请|资源包|daily|gift|trial|member|monthly|weekly/i.test(name)) return false
+  if (/永久|充值|购买|预付|星火|基础积分|按需积分|加购|permanent|prepaid|top[\s-]?up|buy/i.test(name)) return true
+  const raccoon = typeof isRaccoonFamily === 'function' ? isRaccoonFamily(providerId) : (providerId === 'raccoon' || providerId === 'raccoon-pro')
+  if (raccoon && name === '奖励积分') return true
+  return false
+}
+
+export function workbuddyAccountCredits(windows) {
+  const list = Array.isArray(windows) ? windows : []
+  const creditWindows = list.filter(win => win && (!win.unit || /^credits?$/i.test(win.unit)) && windowRemainingAmount(win) !== null)
+  if (!creditWindows.length) return null
+  const totalWin = creditWindows.find(win => /^(?:Total credits|总 Credits)$/i.test(win.name))
+  const creditsWin = creditWindows.find(win => /^Credits$/i.test(win.name))
+  const extraWin = creditWindows.find(win => /^Extra credits$/i.test(win.name))
+  const prepaidWin = creditWindows.find(win => /^Prepaid credits$/i.test(win.name))
+  let selected
+  if (totalWin) {
+    selected = [totalWin, ...(prepaidWin && prepaidWin !== totalWin ? [prepaidWin] : [])]
+  } else if (creditsWin) {
+    selected = [
+      creditsWin,
+      ...(prepaidWin && prepaidWin !== creditsWin ? [prepaidWin] : []),
+      ...creditWindows.filter(win => win !== creditsWin && win !== prepaidWin && !win.aside),
+    ]
+  } else {
+    const primary = creditWindows.filter(win => !win.aside)
+    selected = primary.length ? primary : creditWindows
+  }
+  const amount = Math.round(selected.reduce((sum, win) => sum + windowRemainingAmount(win), 0) * 100) / 100
+  const rawUnit = selected.find(win => win.unit)?.unit || creditWindows.find(win => win.unit)?.unit || 'credits'
+  const unit = displayCreditUnit(rawUnit) || '积分'
+  const nonAsideFracs = creditWindows.filter(win => !win.aside && win.limit > 0)
+    .map(win => Math.min(1, Math.max(0, windowRemainingAmount(win) / win.limit)))
+  const allFracs = nonAsideFracs.length ? nonAsideFracs : creditWindows.filter(win => win.limit > 0)
+    .map(win => Math.min(1, Math.max(0, windowRemainingAmount(win) / win.limit)))
+  const fraction = allFracs.length ? Math.min(...allFracs) : null
+  const subWindows = prepaidWin
+    ? (totalWin && creditsWin && extraWin ? [creditsWin, extraWin, prepaidWin]
+      : [totalWin ?? creditsWin, extraWin && !totalWin ? extraWin : null, prepaidWin].filter((w, i, arr) => w && arr.indexOf(w) === i))
+    : []
+  const packages = subWindows.length > 1
+    ? subWindows.map(win => ({
+      name: win.name,
+      remaining: windowRemainingAmount(win),
+      unit,
+      expiresAt: win.expiresAt || win.runsOutAt || (win === prepaidWin ? '' : win.resetsAt) || '',
+      active: true,
+    }))
+    : []
+  return { amount, unit, fraction, packages }
+}
+
+export function summarizePoolCredits(rows, providerId) {
+  const validRows = Array.isArray(rows) ? rows : []
+  let total = 0, knownCount = 0, temporary = 0, permanent = 0, packageCount = 0
+  let unit = '积分'
+  for (const row of validRows) {
+    if (row?.unit) unit = row.unit
+    const rowAmount = typeof row?.amount === 'number' && Number.isFinite(row.amount) ? row.amount : null
+    if (rowAmount !== null) {
+      total += rowAmount
+      knownCount += 1
+    }
+    const pkgs = Array.isArray(row?.packages) ? row.packages : []
+    let rowPkgSum = 0, rowHasPkg = false
+    for (const pkg of pkgs) {
+      if (!pkg || pkg.active === false) continue
+      const rem = typeof pkg.remaining === 'number' && Number.isFinite(pkg.remaining)
+        ? pkg.remaining
+        : (typeof pkg.balance === 'number' && Number.isFinite(pkg.balance) ? pkg.balance : null)
+      if (rem === null || rem < 0) continue
+      rowHasPkg = true
+      packageCount += 1
+      rowPkgSum += rem
+      if (isPermanentCreditPackage(pkg, providerId)) permanent += rem
+      else temporary += rem
+    }
+    if (!rowHasPkg && rowAmount !== null && rowAmount > 0) {
+      temporary += rowAmount
+    } else if (rowHasPkg && rowAmount !== null && rowAmount > rowPkgSum + 1e-6) {
+      permanent += (rowAmount - rowPkgSum)
+    }
+  }
+  const known = knownCount > 0
+  const hasPackages = packageCount > 0
+  const fmt = value => `${displayNumber(Math.round(value * 100) / 100)}`
+  const totalText = `${fmt(total)}${unit ? ` ${unit}` : ''}`
+  const splitText = `临时 ${fmt(temporary)} · 永久 ${fmt(permanent)}`
+  return {
+    known,
+    count: validRows.length,
+    unit,
+    total: Math.round(total * 100) / 100,
+    temporary: Math.round(temporary * 100) / 100,
+    permanent: Math.round(permanent * 100) / 100,
+    hasPackages,
+    splitText,
+    summary: !known ? '' : hasPackages ? `${totalText}（${splitText}）` : totalText,
+  }
 }
 
 export function writeChannelCache(storage, channels, statuses, cards = {}) {

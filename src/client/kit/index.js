@@ -35,8 +35,9 @@ export const Switch = ({ checked, disabled, label, onChange }) => h('button', {
  * 形状固定为「主体（头像 + 名称 + 徽标 + 副行） | 指标 | 开关 | 展开」，
  * 展开区（`detail`）承载明细与维护动作，默认收起 —— 不再把所有信息平铺。
  */
-export const Row = ({ key, avatar, name, tags, meta, metric, switchControl, controls, moreLabel, expanded, onToggle, detail, tone }) =>
-  h('div', { key, className: 'eac-row-item', 'data-off': tone === 'off' ? 'true' : undefined },
+export const Row = ({ key, avatar, name, tags, meta, metric, switchControl, controls, moreLabel, expanded, onToggle, detail, tone }) => {
+  const detailId = `eac-row-detail-${encodeURIComponent(key ?? name)}`
+  return h('div', { key, className: 'eac-row-item', 'data-off': tone === 'off' ? 'true' : undefined },
     h('div', { className: 'eac-row-main' },
       avatar === undefined ? null : h('span', { className: 'eac-avatar', 'aria-hidden': 'true' }, avatar),
       h('div', { className: 'eac-row-copy' },
@@ -46,13 +47,16 @@ export const Row = ({ key, avatar, name, tags, meta, metric, switchControl, cont
         meta === undefined ? null : h('span', { className: 'eac-row-meta' }, meta))),
     metric === undefined ? null : metric,
     switchControl === undefined ? null : switchControl,
-    controls?.length ? h('div', { className: 'eac-row-controls' }, ...controls) : null,
-    moreLabel === undefined ? null
-      : h('button', {
-        type: 'button', className: 'eac-more', 'aria-expanded': expanded, 'aria-label': `${name} 的更多操作`,
-        onClick: onToggle,
-      }, expanded ? '收起' : moreLabel),
-    expanded && detail ? h('div', { className: 'eac-row-more' }, detail) : null)
+    // 动作与展开按钮同处 more 列：并排放进一个容器，避免两个 grid 项叠在同一格。
+    (controls?.length || moreLabel !== undefined) ? h('div', { className: 'eac-row-controls' },
+      ...(controls?.length ? controls : []),
+      moreLabel === undefined ? null
+        : h('button', {
+          type: 'button', className: 'eac-more', 'aria-expanded': expanded, 'aria-label': `${name} 的更多操作`, 'aria-controls': detailId,
+          onClick: onToggle,
+        }, expanded ? '收起' : moreLabel)) : null,
+    expanded && detail ? h('div', { className: 'eac-row-more', id: detailId }, detail) : null)
+}
 
 /** 空态：三态区分（读取中 / 失败+重试 / 确实没有）。 */
 export const EmptyState = ({ loading, failed, onRetry, disabled, emptyText, loadingText }) => {

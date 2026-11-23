@@ -1,4 +1,5 @@
 // Extracted from OFM 999e9f784ea3ea7a11cae383b142697b1ff2c42f (MIT).
+export { mergeUnifiedRaccoonCatalogs }
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import { AccountPool, allAccountsRateLimitedForModel } from '../vendor/channel-pack/src/account-pool.js'
 import { configureDeadModelStore, withDeadModelPruning } from '../vendor/channel-pack/src/dead-model-store.js'
@@ -9,8 +10,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageRequestTarget } from '../vendor/channel-pack/src/image-budget.js'
 import { mountQoderCN } from './backend/providers/qodercn.js'
 import { mountTrae } from './backend/providers/trae.js'
-import { mountLoomy } from './backend/providers/loomy.js'
-import { mountRaccoon } from './backend/providers/raccoon.js'
+import { mountLoomy, type LoomyRouteController } from './backend/providers/loomy.js'
+import { mountRaccoon, mergeUnifiedRaccoonCatalogs } from './backend/providers/raccoon.js'
 import type { ProviderContext } from './backend/providers/context.js'
 import { join } from 'node:path'
 
@@ -77,13 +78,18 @@ export function makeReadImageRequest(ctx: Context) {
   }
 }
 
-export function mountBackend(ctx: Context, onRpc: (call: Function) => void, options: { qoderCatalogFile?: string; catalogDir?: string } = {}) {
-  const pool = new AccountPool(ctx)
-  // 模型参数注入：把设置页保存的覆盖值合并进每次模型调用的请求头。
-  //
-  // 只在用户**真的设过**该模型时才改 options —— 没有覆盖就原样透传，
-  // 让上游/适配器的默认值继续生效（不在这里替用户编造默认）。
-  // prepend 让它先于其他监听器看到原始 options；global 覆盖全部会话。
+export function mountBackend(ctx: Context, onRpc: (call: Function) => void, options: {
+  qoderCatalogFile?: string; catalogDir?: string
+  quotaAccountOrder?: (provider: string, ids: string[], context?: { modelId?: string; model?: unknown }) => readonly string[]
+  /** 智能选号模式（live getter）：manual / free / expiring / sticky。 */
+  routingMode?: () => string
+  isRaccoonUnifiedModels?: () => boolean
+  noteQuotaAccount?: (provider: string, accountId: string, model?: string) => void
+  loomyRoute?: LoomyRouteController
+} = {}) {
+  const pool = new AccountPool(ctx, options.quotaAccountOrder, (provider, accountId, model) => {
+    if (provider === 'trae' || provider === 'qodercn') options.noteQuotaAccount?.(provider, accountId, model)
+  })
   /**
    * 图片支持开关：在 `listModels` 的返回值上按用户设置覆盖。
    *
@@ -118,27 +124,49 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
     })
   }
 
-  // 宿主没提供事件总线时（比如精简的测试 ctx）跳过注入，不影响后端其余部分。
-  if (typeof (ctx as any).on === 'function') ctx.on('llm/stream', (options: any, next: any) => {
-    try {
-      const provider = options?.provider
-      const model = options?.model
-      if (typeof provider === 'string' && typeof model === 'string') {
-        const override = pool.modelParamsFor(provider, model)
-        if (override !== undefined) {
-          const patched: any = { ...options }
-          // 上下文窗口：宿主用它裁剪历史与预算，调低即少喂历史。
-          if (override.contextWindow !== undefined) patched.contextWindow = override.contextWindow
-          if (override.maxTokens !== undefined) patched.maxTokens = override.maxTokens
-          if (override.reasoningEffort !== undefined) patched.reasoningEffort = override.reasoningEffort
-          return next(patched)
+  /**
+   * 上下文窗口、输出默认值和思考默认档都从 `resolveModel` 交给宿主。
+   *
+   * ⚠️ **直接打在被注册的那个适配器实例上**（monkey-patch 实例方法），不是
+   * `wrapImagePreference` 那种外层 Proxy：注册链路里的
+   * `withDeadModelPruning` / 记账包装只拦 `listModels`/`listAllModels`/`stream`/
+   * `prepareCall`，`resolveModel` 原样透传到实例；`prepareCall` 内部的
+   * `this.resolveModel` 也落在同一个实例上。打在实例方法上一次覆盖两条路径。
+   *
+   * 宿主补齐请求时使用这些元数据；`llm/stream` 的 `next()` 不接收新参数。
+   * - `contextWindow`：宿主 compaction-basic 读 `info.context.contextWindow` 做预算/裁剪；
+   * - `reasoning.defaultEffort`：设置页「思考深度」保存的是**该模型的默认档**
+   *   （客户端按钮文案就是「默认（X）」，见 `src/client/ui.js` 的
+   *   `ModelParams`）。显式选择始终优先于模型默认档。
+   *   只在该模型确实声明了这个档位时才投影（不编造档位）。
+   * - `defaultMaxTokens`：用于没有显式指定输出预算的请求。
+   */
+  const patchAdapterContext = (adapter: any) => {
+    if (!adapter || typeof adapter.resolveModel !== 'function') return adapter
+    const original = adapter.resolveModel.bind(adapter)
+    adapter.resolveModel = async (...args: any[]) => {
+      const info = await original(...args)
+      try {
+        const override = pool.modelParamsFor(args[0], args[1])
+        if (!info || override === undefined) return info
+        const next = {
+          ...info,
+          ...(override.contextWindow === undefined ? {} : { context: { ...info.context, contextWindow: override.contextWindow } }),
+          ...(override.maxTokens === undefined ? {} : { defaultMaxTokens: override.maxTokens }),
         }
+        const effort = override.reasoningEffort
+        const efforts = next.reasoning?.efforts
+        if (effort === undefined || !Array.isArray(efforts)) return next
+        // 档位必须真的存在：给一个模型不支持的默认档，DSH 会拿它直接发请求。
+        if (!efforts.some((item: any) => String(item?.id) === effort)) return next
+        return { ...next, reasoning: { ...next.reasoning, defaultEffort: effort } }
+      } catch {
+        return info
       }
-    } catch {
-      // 参数读取失败**绝不阻断调用**：退化成原始 options 继续走。
     }
-    return next()
-  }, { global: true, prepend: true })
+    return adapter
+  }
+
   const accountForRefresh = async (provider: string, accountId?: string) => {
     if (accountId === undefined) return pool.getAvailableAccount(provider, '')
     const entry = pool.listAccountsByProvider(provider).find(account => account.id === accountId)
@@ -213,17 +241,20 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
     )
   }
   const providerContext: ProviderContext = {
-    ctx, pool, accountForRefresh, throwIfAllAccountsRateLimited,
+    ctx, pool, accountForRefresh, throwIfAllAccountsRateLimited, noteQuotaAccount: options.noteQuotaAccount,
     readImage: makeReadImage(ctx), readImageRequest: makeReadImageRequest(ctx),
     catalogFile: provider => options.catalogDir && join(options.catalogDir, `${provider}-catalog.json`),
   }
   const qoder = mountQoderCN(providerContext, options.qoderCatalogFile)
   const trae = mountTrae(providerContext)
-  const loomy = mountLoomy(providerContext)
-  const raccoon = mountRaccoon(providerContext)
+  // Loomy 的专属余额选择器覆盖 free / expiring 两档（它本来就按「每日 → 永久」
+  // 分档）；manual / sticky 走池路径，粘滞由 quotaAccountOrder 在池内生效。
+  const loomy = mountLoomy(providerContext,
+    () => ['free', 'expiring'].includes(options.routingMode?.() ?? 'manual'), options.loomyRoute)
+  const raccoon = mountRaccoon(providerContext, options.isRaccoonUnifiedModels)
   const providers = [loomy, raccoon, qoder, trae]
   const modelAdapters = Object.fromEntries(providers.flatMap(provider => Object.entries(provider.adapters).map(([id, adapter]) =>
-    [id, wrapImagePreference(withDeadModelPruning([id], adapter))])))
+    [id, wrapImagePreference(withDeadModelPruning([id], patchAdapterContext(adapter)))])))
   const allowedProviders = Object.keys(modelAdapters)
   registerChannelPackRpc(ctx, pool, undefined as any, undefined as any, qoder.auth,
     trae.auth, undefined as any, loomy.auth, raccoon.auth, undefined as any,

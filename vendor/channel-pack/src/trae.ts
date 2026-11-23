@@ -1187,6 +1187,21 @@ export function parseTraeModelList(body: unknown): TraeRemoteModel[] {
  *   两个职责：不在表内的通道被丢弃；同一模型被多个表内通道列出时取更靠前者。
  *   覆盖它会改变**准入集合**，不只是顺序。
  */
+/**
+ * 上游内部工作流条目（按 id 硬性剔除）。
+ *
+ * 实测（真实 batch_get_detail_param 快照，2026-12）：以下 id 以
+ * `usage: 'chat_completion'`、`config_switch: true`、非隐藏的状态**开启**下发，
+ * 但它们是官方 Auto Mode 编排的内部子代理/专用条目（显示名分别伪装成
+ * "DeepSeek V3.1 Terminus" 与 "Kimi K2.5"），既不出现在官方选择器里，也不该
+ * 出现在本插件的会话模型选择器。id 黑名单是唯一能可靠剔除的判据——其余
+ * 标志位它们全都表现为普通模型。
+ */
+export const TRAE_INTERNAL_MODEL_IDS: ReadonlySet<string> = new Set([
+  'code-review-judge',
+  'multimodal_image_kimi-k2.5',
+])
+
 export function parseTraeBatchModelList(
   body: unknown,
   channelPriority: readonly string[] = TRAE_CHANNELS,
@@ -1225,10 +1240,13 @@ export function parseTraeBatchModelList(
       //    混入目录会塞满无关模型；
       // 2. config_switch 必须开启：上游已停用；
       // 3. is_invisible_to_user 不得为 true：截图 Auto Mode 的模型列表只展示
-      //    用户可见的条目（内部子代理、标题生成等不应出现在对话面板中）。
+      //    用户可见的条目（内部子代理、标题生成等不应出现在对话面板中）；
+      // 4. id 不得命中 {@link TRAE_INTERNAL_MODEL_IDS}：标志位完全正常、
+      //    单靠 1–3 条拦不住的内部工作流条目，按 id 剔除。
       if (model.usage !== undefined && model.usage !== 'chat_completion') continue
       if (model.isEnabled === false) continue
       if (model.isHidden === true) continue
+      if (TRAE_INTERNAL_MODEL_IDS.has(model.id)) continue
       const incumbent = byId.get(model.id)
       if (incumbent === undefined) {
         byId.set(model.id, model)

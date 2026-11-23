@@ -36,8 +36,10 @@ function setup() {
     ...Array.from({ length: 36 }, (_, i) => ({ id: `model-${String(i).padStart(2, '0')}`, name: '', enabled: true, maxOutputLength: 16384, maxTokensOverride: null })),
   ]
   let failSave = false
+  let quota = null
   const plan = () => ({ configured: true, hasApiKey: true, registerProvider: false, providerRegistered: false,
-    planName: '计划', quotaError: '', shapeWarning: false, quotaKnown: true, pollSeconds: 60, pools: [], models, enabledModelIds: [], catalogAvailable: true, trend: { hours: 24, models: [] } })
+    planName: '计划', quotaError: '', shapeWarning: false, quotaKnown: true, pollSeconds: 60, pools: [], models, enabledModelIds: [], catalogAvailable: true, trend: { hours: 24, models: [] },
+    quota })
   const rpc = async (method, payload, signal) => {
     calls.push({ method, payload, signal })
     if (method === 'plan.snapshot') return { ok: true, value: plan() }
@@ -78,10 +80,10 @@ function setup() {
     await tick(); tree = render(); tree = render()
     return tree
   }
-  return { react, calls, models, plan, rpc, module, render, clickTab, enterPlan, fail(value) { failSave = value } }
+  return { react, calls, models, plan, rpc, module, render, clickTab, enterPlan, fail(value) { failSave = value }, setQuota(value) { quota = value } }
 }
 
-test('商汤默认打开模型，渠道分区只有 API Key 和提供方开关', async () => {
+test('商汤默认打开模型，渠道分区分开提供 API Key 和控制台登录', async () => {
   const f = setup()
   try {
     let tree = await f.enterPlan()
@@ -89,9 +91,24 @@ test('商汤默认打开模型，渠道分区只有 API Key 和提供方开关',
     assert.ok(texts(tree).includes('模型目录'))
     assert.equal(texts(tree).includes('模型 API Key'), false)
     tree = f.clickTab(tree, 'eac-tab-advanced')
+    assert.ok(nodes(tree).some(n => n.props['aria-label'] === '刷新渠道与用量'))
     assert.ok(texts(tree).includes('模型 API Key'))
+    assert.ok(texts(tree).includes('浏览器登录'))
+    assert.ok(texts(tree).includes('控制台额度'))
     assert.equal(texts(tree).includes('额度账号'), false)
     assert.equal(nodes(tree).some(n => n.props['aria-label'] === '搜索全部模型'), false)
+    f.setQuota({ status: 'ready', plan: 'Free Plan', updatedAt: Date.now(), pools: [{
+      name: '通用积分池', poolType: 'default', modelIds: ['glm-5.2'],
+      window5h: { limit: 120000, remaining: 90000, resetAt: 1900000000 },
+      window7d: { limit: 1200000, remaining: 1080000, resetAt: 1900100000 },
+      grantBalance: 0,
+    }] })
+    nodes(tree).find(n => n.props['aria-label'] === '切换到 Loomy').props.onClick()
+    await tick(); f.render()
+    tree = await f.enterPlan()
+    tree = f.clickTab(tree, 'eac-tab-advanced')
+    assert.ok(texts(tree).includes('5 小时积分'))
+    assert.ok(texts(tree).includes('7 天积分'))
   } finally { f.react.dispose() }
 })
 

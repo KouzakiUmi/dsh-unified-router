@@ -10,20 +10,31 @@ function renderTags(tags = []) {
 
 function renderActions(actions = [], ui, scope) {
   const locked = scope ? (ui.loading || ui.isPending(scope)) : ui.disabled
-  return actions.filter(Boolean).map(({ label, call, panel, open, href, primary: main, danger: destructive, disabled, accessible }) => {
+  return actions.filter(Boolean).map(({ label, call, panel, open, href, primary: main, danger: destructive, disabled, accessible, scope: actionScope }) => {
     if (href && /^https:\/\//.test(href)) return h('a', { key: label, href, target: '_blank', rel: 'noopener noreferrer', className: 'eac-button' }, label)
     const run = panel ? () => ui.setPanel(panel, open) : () => ui.act(...call)
     const makeButton = main ? primary : destructive ? danger : button
-    return makeButton(label, run, locked || disabled, { key: label, 'aria-label': accessible })
+    return makeButton(label, run, locked || disabled || (actionScope && ui.isPending(actionScope)), { key: label, 'aria-label': accessible })
   })
 }
 
-const SETTINGS_FORMS = { account: AccountForm, key: PlanKeyForm }
+const SETTINGS_FORMS = { account: AccountForm, key: PlanKeyForm, console: ConsoleCookieForm }
 function renderForm(form, ui, key, scope) {
   if (!form) return null
   const save = (...args) => ui.invoke(...form.call, ...args)
   const formScope = scope || `channel:${ui.providerId}`
-  return h(SETTINGS_FORMS[form.kind], { key, account: form.account, disabled: ui.loading || ui.isPending(formScope), save, onSave: save })
+  return h(SETTINGS_FORMS[form.kind], { key, account: form.account, disabled: form.disabled === true || ui.loading || ui.isPending(formScope), save, onSave: save })
+}
+
+/** 单选分段控件（智能选号模式）：复用参数编辑器的 .eac-tier 外观与 aria-pressed。 */
+function renderOptionTiers({ options, value, name }, ui, disabled) {
+  // 返回数组：Row 的 controls 按数组展开（单个元素没有 length 会被丢掉）。
+  return [h('div', { className: 'eac-tier-row', role: 'group', 'aria-label': name },
+    options.map(option => h('button', {
+      key: option.value, type: 'button', className: 'eac-tier',
+      'aria-pressed': option.value === value, disabled,
+      onClick: () => ui.act(...option.call),
+    }, option.label)))]
 }
 
 function renderQuotaGroup(group) {
@@ -56,6 +67,7 @@ function renderLogin(login, ui) {
       login.canCheck ? h('p', { className: 'eac-callout-url' }, login.url) : null),
     h('div', { className: 'eac-callout-actions' },
       h('a', { href: login.url, target: '_blank', rel: 'noopener noreferrer', className: 'eac-button is-primary' }, '打开登录页'),
+      login.cancel ? button('取消授权', () => ui.act(...login.cancel)) : null,
       login.canCheck ? button('复制链接', async () => {
         try {
           await globalThis.navigator.clipboard.writeText(login.url)
@@ -66,10 +78,35 @@ function renderLogin(login, ui) {
       login.canCheck ? button('取消', () => ui.act('forgetLogin'), ui.disabled) : null))
 }
 
+function renderRouteOverview(overview, ui) {
+  if (!overview?.counts) return null
+  const { counts, skipRouted, lastCheckedAt } = overview
+  const unhealthy = counts.expired + counts.exhausted
+  const tags = [
+    counts.clean > 0 && [`正常 ${counts.clean}`, 'success'],
+    counts.routed > 0 && [`改路由 ${counts.routed}`, 'error'],
+    unhealthy > 0 && [`异常 ${unhealthy}`, 'warn'],
+    counts.unknown > 0 && [`无账本 ${counts.unknown}`],
+    counts.unchecked > 0 && [`未检测 ${counts.unchecked}`],
+    [skipRouted ? '自动避开改路由' : '未避开改路由', skipRouted ? 'info' : 'warn'],
+  ]
+  return h('div', { className: 'eac-callout', role: 'region', 'aria-label': 'Loomy 上游路由状态' },
+    h('div', { className: 'eac-callout-copy' },
+      h('div', { className: 'eac-row-head' },
+        h('p', { className: 'eac-callout-title' }, '上游路由状态'),
+        ...renderTags(tags)),
+      h('p', { className: 'eac-muted' }, lastCheckedAt > 0
+        ? `最近检测 ${displayTime(lastCheckedAt)} · 只读检测（0 积分）`
+        : '只读检测（0 积分），识别静默改路由。')),
+    h('div', { className: 'eac-callout-actions' },
+      ...renderActions([{ label: '路由设置', panel: 'advanced', open: 'route-check' }], ui)))
+}
+
 function AccountsPanel(view, ui) {
   const { rows } = view
   const summary = []
-  if (rows.length) summary.push(`${rows.length} 个账号`)
+  const counts = [rows.length ? `${rows.length} 个账号` : '', view.poolSummary || ''].filter(Boolean).join(' · ')
+  if (counts) summary.push(counts)
   if (typeof view.autoCheckin === 'boolean') {
     summary.push(tag(view.autoCheckin ? '自动签到已开启' : '自动签到已关闭'))
   }
@@ -79,6 +116,7 @@ function AccountsPanel(view, ui) {
     summary: summary.length ? summary : null,
     actions: renderActions(view.actions, ui, `login:${ui.providerId}`),
     children: [
+      renderRouteOverview(view.routeOverview, ui),
       renderLogin(view.login, ui),
       showImport ? h('div', { className: 'eac-callout' },
         h(CredentialImportForm, {
@@ -121,14 +159,14 @@ function AccountsPanel(view, ui) {
 
 function renderModelEditor(model, ui, modelDisabled) {
   const { editor, key } = model
-  const onSave = value => ui.invoke(...editor.call, value)
+  const onSave = (...args) => ui.invoke(...editor.call, ...args)
   const providerId = model.provider || ui.providerId
   if (editor.kind === 'tiers') return h(ModelParams, { key, model, providerId, value: editor.value, disabled: modelDisabled, onSave })
   const draft = ui.drafts[key]
-  const value = draft ?? model.params
+  const value = { ...model.params, ...draft }
   return h(PlanModelParams, {
     key, model, providerId, disabled: modelDisabled, value,
-    setValue: value => ui.setDrafts(current => ({ ...current, [key]: value })),
+    setValue: patch => ui.setDrafts(current => ({ ...current, [key]: { ...current[key], ...patch } })),
     async onSave(value) {
       const ok = await onSave(value)
       if (ok) ui.setDrafts(current => {
@@ -142,6 +180,7 @@ function renderModelEditor(model, ui, modelDisabled) {
 
 function ModelRow(model, ui, modelDisabled) {
   const name = modelDisplayName(model)
+  const custom = paramSummary(model.editor?.value ?? model.params)
   const editing = ui.editParams === model.key
   const editorId = 'eac-params-' + encodeURIComponent(model.key)
   return h('article', { className: 'eac-model', key: model.key, 'data-disabled': model.enabled === false ? 'true' : undefined },
@@ -153,7 +192,7 @@ function ModelRow(model, ui, modelDisabled) {
         h('div', { className: 'eac-model-id', title: model.id }, model.id)),
       model.defaults ? h('p', { className: 'eac-model-defaults', title: model.defaults }, model.defaults) : null,
       h('div', { className: 'eac-model-aside' },
-        h('span', { className: 'eac-model-tags' }, ...renderTags(model.tags)),
+         h('span', { className: 'eac-model-tags' }, ...renderTags(model.tags), custom ? tag(`自定义 ${custom}`, 'info') : null),
         model.editor ? button(editing ? '收起' : '参数', () => ui.act('toggleParams', model.key), modelDisabled,
           { className: 'is-quiet', 'aria-label': `${name} 的参数`, 'aria-expanded': editing, 'aria-controls': editorId }) : null)),
     editing ? h('div', { id: editorId }, renderModelEditor(model, ui, modelDisabled)) : null)
@@ -210,12 +249,13 @@ function ModelsPanel({ groups }, ui) {
             const reason = exclusions.get(model.id)
             const alternative = byId.get(reason?.alternative)
             const tag = reason?.kind === 'older' ? ['旧版', 'warn',
-              alternative ? `同目录已有 ${modelDisplayName(alternative)}。` : model.staleReason]
+              alternative ? `同目录已有 ${modelDisplayName(alternative)}。` : (model.staleReason || '已由新一代模型替代。')]
               : reason?.kind === 'value' ? ['性价比偏低', 'warn',
                 `${modelDisplayName(alternative)} 的渠道倍率更低，可用于同类任务。`] : null
             return ModelRow({ ...model, tags: [...(model.tags ?? []), tag] }, ui, groupDisabled)
           }))
-            : grouped ? h('p', { className: 'eac-empty' }, ui.query.trim() ? '没有匹配的模型。' : '暂无模型。') : null)
+             : grouped ? EmptyState({ loading: ui.loading, failed: ui.failed, onRetry: () => ui.act('refreshModels', group.id),
+               emptyText: ui.query.trim() ? '没有匹配的模型。' : '暂无模型。', loadingText: '正在读取模型…' }) : null)
       }),
       !grouped && !found.length ? EmptyState({ loading: ui.loading, failed: ui.failed, onRetry: () => ui.act('refreshSettings'),
         emptyText: ui.query.trim() ? '没有匹配的模型。' : '暂无模型。' }) : null,
@@ -231,15 +271,54 @@ function automationRowsFor(provider, state) {
   const supportsCheckin = provider.pack
     ? provider.caps?.dailyReward !== false
     : (id === WORKBUDDY_ID || provider.caps?.dailyReward === true)
-  const supportsRewards = provider.caps?.onboarding === true || provider.caps?.claimRewards === true
-  const supportsTasks = provider.caps?.completeTasks === true
+  const capabilities = state.automation?.tasks?.[id]?.capabilities
+  const supportsRewards = capabilities?.claimRewards ?? (provider.caps?.onboarding === true && provider.caps?.completeTasks !== true || provider.caps?.claimRewards === true)
+  const supportsTasks = capabilities?.completeTasks ?? (provider.caps?.completeTasks === true)
   const overrides = state.automation?.config?.providers?.[id] ?? {}
+  const accounts = (provider.pack ? state.accounts : id === WORKBUDDY_ID ? state.workbuddy?.accounts : state.managed?.[id]?.accounts) ?? []
+  const eligible = accounts.some(account => account.enabled !== false && (provider.pack || account.signedIn))
+  const query = mode => ({ label: '查询状态', call: ['queryAutomationTask', id, mode], disabled: !eligible, scope: taskScope(id, mode) })
+  const inherited = field => !state.automation ? '待读取' : typeof overrides[field] === 'boolean' ? '本渠道单独设置' : '跟随全局设置'
   const scope = 'automation'
   const rows = []
+  if (state.automation?.quotaProviders?.includes(id)) {
+    // 智能选号模式（全局单选）：分段控件代替旧的布尔开关。
+    // manual = 手动顺序；free = 免费额度优先；expiring = 临期优先（兼容旧开关）；
+    // sticky = 缓存优先（同一账号用到额度用尽或受限才切换）。
+    const mode = state.automation.config?.routingMode ?? 'manual'
+    rows.push({ id: 'routing-mode', name: '智能选号模式', scope,
+      meta: { manual: '手动顺序（默认）· 按账号列表顺序', free: '免费额度优先 · 先用每日与赠送额度',
+        expiring: '临期额度优先 · 每日 → 赠送 → 7 天内到期', sticky: '缓存优先 · 同一账号用尽或受限才切换' }[mode],
+      value: mode,
+      options: [
+        { value: 'manual', label: '手动' },
+        { value: 'free', label: '免费优先' },
+        { value: 'expiring', label: '临期优先' },
+        { value: 'sticky', label: '缓存优先' },
+      ].map(option => ({ ...option, call: ['setAutomationConfig', { routingMode: option.value }] })) })
+  }
+  // 默认输出上限（分渠道）：只在上游没给输出规格时生效（目录 max_output 缺失/为 null
+  // 的模型，如云知声 u2-med）。上游有真实规格就用上游值，这里只补缺。
+  // 只有自带模型设置文件的三类渠道会消费这个值（API Key、自管、WorkBuddy）；
+  // 账号池与商汤套餐渠道走各自兜底表、不读它，故不给它们渲染这一行 ——
+  // 否则会出现「能保存但不生效」。
+  const supportsDefaultMaxOutput = id === WORKBUDDY_ID
+    || Boolean(state.managed?.[id]) || Boolean(state.apikeys?.[id])
+  const configuredOutput = state.automation?.config?.providers?.[id]?.defaultMaxOutput
+  const outputChosen = Number.isSafeInteger(configuredOutput) && configuredOutput > 0
+  if (supportsDefaultMaxOutput) rows.push({ id: 'default-max-output', name: '默认输出上限', scope,
+    meta: outputChosen ? `上游未给输出规格时用 ${formatTokens(configuredOutput)}` : '上游未给输出规格时按上下文推导',
+    value: outputChosen ? configuredOutput : 0,
+    options: [
+      { value: 0, label: '默认' },
+      { value: 64_000, label: '64K' },
+      { value: 128_000, label: '128K' },
+      { value: 256_000, label: '256K' },
+    ].map(option => ({ ...option, call: ['setAutomationConfig', { provider: id, defaultMaxOutput: option.value || null }] })) })
   const guardEnabled = automationEffective(state, id, 'cotLoopGuard')
   rows.push({
     id: 'cot-loop-guard', name: '思考循环保护', scope,
-    meta: typeof overrides.cotLoopGuard === 'boolean' ? '本渠道单独设置 · 命中重复思考自动切断并续跑' : '跟随全局设置 · 命中重复思考自动切断并续跑',
+    meta: inherited('cotLoopGuard'),
     enabled: guardEnabled,
     toggle: ['setAutomationConfig', { provider: id, cotLoopGuard: !guardEnabled }],
     toggleLabel: `${provider.title} 思考循环保护`,
@@ -250,24 +329,25 @@ function automationRowsFor(provider, state) {
     const enabled = automationEffective(state, id, 'autoCheckin')
     rows.push({
       id: 'auto-checkin', name: '自动每日签到', scope,
-      meta: typeof overrides.autoCheckin === 'boolean' ? '本渠道单独设置' : '跟随全局设置',
+      meta: inherited('autoCheckin'),
       enabled,
       toggle: ['setAutomationConfig', { provider: id, autoCheckin: !enabled }],
       toggleLabel: `${provider.title} 自动每日签到`,
-      actions: typeof overrides.autoCheckin === 'boolean'
-        ? [{ label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCheckin: null }] }] : undefined,
+      actions: [query('checkin'), typeof overrides.autoCheckin === 'boolean'
+        ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCheckin: null }] } : null],
     })
   }
   if (supportsRewards) {
     const enabled = automationEffective(state, id, 'autoClaimRewards')
     rows.push({
       id: 'auto-claim-rewards', name: '自动领取奖励', scope,
-      meta: typeof overrides.autoClaimRewards === 'boolean' ? '本渠道单独设置' : '跟随全局设置',
+      meta: inherited('autoClaimRewards'),
       enabled,
       toggle: ['setAutomationConfig', { provider: id, autoClaimRewards: !enabled }],
       toggleLabel: `${provider.title} 自动领取奖励`,
       actions: [
-        { label: '立即领取', call: ['runAutomationTask', id, 'claimRewards'] },
+        { label: '立即领取', call: ['runAutomationTask', id, 'claimRewards'], disabled: !eligible, scope: taskScope(id, 'claimRewards') },
+        query('claimRewards'),
         typeof overrides.autoClaimRewards === 'boolean'
           ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoClaimRewards: null }] } : null,
       ],
@@ -276,13 +356,14 @@ function automationRowsFor(provider, state) {
   if (supportsTasks) {
     const enabled = automationEffective(state, id, 'autoCompleteTasks')
     rows.push({
-      id: 'auto-complete-tasks', name: '自动执行完成任务', scope,
-      meta: '默认关闭；开启后将自动触发该平台的任务执行动作',
+      id: 'auto-complete-tasks', name: '自动完成任务', scope,
+      meta: inherited('autoCompleteTasks'),
       enabled,
       toggle: ['setAutomationConfig', { provider: id, autoCompleteTasks: !enabled }],
-      toggleLabel: `${provider.title} 自动执行完成任务`,
+      toggleLabel: `${provider.title} 自动完成任务`,
       actions: [
-        { label: '立即执行', call: ['runAutomationTask', id, 'completeTasks'] },
+        { label: '立即执行', call: ['runAutomationTask', id, 'completeTasks'], disabled: !eligible, scope: taskScope(id, 'completeTasks') },
+        query('completeTasks'),
         typeof overrides.autoCompleteTasks === 'boolean'
           ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCompleteTasks: null }] } : null,
       ],
@@ -293,22 +374,38 @@ function automationRowsFor(provider, state) {
 
 function ChannelPanel(rows, ui, provider, state) {
   const autoRows = provider ? automationRowsFor(provider, state) : []
-  const allRows = [...rows, ...autoRows]
-  return Section({
-    title: '渠道设置',
-    children: ListBox({ children: allRows.map(row => {
+  const renderRows = list => ListBox({
+    children: list.map(row => {
       const key = `${ui.providerId}:channel:${row.id}`
       const scope = row.scope || `channel:${ui.providerId}`
       const rowDisabled = ui.loading || ui.isPending(scope)
+      const expandable = !!(row.form || row.groups?.length)
       return Row({
         key, name: row.name, meta: row.meta, tags: renderTags(row.tags),
+        metric: row.metric ? Metric({ ...row.metric, label: row.name }) : undefined,
         switchControl: row.toggle ? Switch({ checked: row.enabled ?? false, disabled: rowDisabled || row.enabled === undefined,
           label: row.toggleLabel || row.name, onChange: () => ui.act(...row.toggle) }) : undefined,
-        controls: row.href ? h('a', { href: row.href, target: '_blank', rel: 'noopener noreferrer' }, '打开控制台') : renderActions(row.actions, ui, scope),
-        moreLabel: row.form ? '配置' : undefined, expanded: ui.more[key] === true,
-        onToggle: () => ui.act('toggleMore', key), detail: row.form && renderForm(row.form, ui),
+        controls: row.options ? renderOptionTiers(row, ui, rowDisabled)
+          : row.href ? [h('a', { className: 'eac-button', href: row.href, target: '_blank', rel: 'noopener noreferrer' }, '打开控制台')] : renderActions(row.actions, ui, scope),
+        moreLabel: expandable ? (row.moreLabel || '配置') : undefined, expanded: ui.more[key] === true,
+        onToggle: () => ui.act('toggleMore', key),
+        detail: expandable ? [
+          ...(row.groups ?? []).map(renderQuotaGroup),
+          row.form ? h('div', { key: 'form' }, renderForm(row.form, ui)) : null,
+        ] : undefined,
       })
-    }) }),
+    }),
+  })
+  return Section({
+    title: '渠道设置',
+    children: [
+      rows.length ? h('div', { className: 'eac-group', key: 'channel' },
+        autoRows.length ? h('p', { className: 'eac-group-title' }, '渠道连接与配置') : null,
+        renderRows(rows)) : null,
+      autoRows.length ? h('div', { className: 'eac-group', key: 'automation' },
+        h('p', { className: 'eac-group-title' }, '自动化与策略'),
+        renderRows(autoRows)) : null,
+    ].filter(Boolean),
   })
 }
 

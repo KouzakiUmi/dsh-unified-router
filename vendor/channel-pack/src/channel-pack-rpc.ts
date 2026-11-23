@@ -81,7 +81,7 @@ import {
   withQoderNickname,
 } from './qoder.js'
 import type { QoderCredential } from './qoder.js'
-import { claimQoderDailyCheckin, fetchQoderCreditBalance } from './qoder-credits.js'
+import { claimQoderDailyCheckin, fetchQoderCheckinStatus, fetchQoderCreditBalance } from './qoder-credits.js'
 import { isTraeRefreshable, traeCredentialExpiresAtMs, traeDisplayNickname } from './trae.js'
 import type { TraeCredential } from './trae.js'
 import { fetchClineCreditBalance } from './cline-credits.js'
@@ -809,7 +809,7 @@ export function registerChannelPackRpc(
  */
 export interface ModelCatalogSource {
   listAllModels(): readonly {
-    id: string; name: string; isFree?: boolean; stale?: boolean; staleReason?: string
+    id: string; name: string; isFree?: boolean; subscriptionOnly?: boolean; stale?: boolean; staleReason?: string
     contextWindow?: number; maxTokens?: number; defaultMaxTokens?: number; efforts?: readonly string[]
     defaultEffort?: string; supportsImage?: boolean; rateBadge?: ModelRateBadge
   }[]
@@ -2437,7 +2437,7 @@ if (provider === LOBSTERAI.id) {
       //
       // 各渠道显式分派协议，未知或退役渠道不调用任何默认端点。
       case 'credits.status': {
-        const req = payload as RpcCreditsStatusRequest
+        const req = payload as RpcCreditsStatusRequest & { accountId?: string }
         if (req.provider === LOBSTERAI.id) {
           // LobsterAI 没有独立的「签到状态」端点：活动状态要经
 
@@ -2451,16 +2451,15 @@ if (provider === LOBSTERAI.id) {
             } satisfies RpcCreditsStatusResponse,
           }
         }
-        if (req.provider === TRAE.id) {
-          // TRAE 有签到状态端点，但需要发起 Ug 请求获取（见 claim 内部的多步流程）。
-
-          const accounts = await pool.listAccounts(req.provider)
-          return {
-            ok: true,
-            value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
-            } satisfies RpcCreditsStatusResponse,
-          }
+        if (req.provider === TRAE.id || isQoderFamily(req.provider)) {
+          const accounts = (await pool.listAccounts(req.provider)).filter(entry => req.accountId === undefined || entry.id === req.accountId)
+          const value = await collectCreditsStatus(accounts, undefined, {
+            resolve: ref => ctx.credentials.resolve(ref),
+            fetchStatus: credential => req.provider === TRAE.id
+              ? fetchTraeCheckinStatus(credential as TraeCredential, TRAE)
+              : fetchQoderCheckinStatus(credential as QoderCredential, requireQoderFamily(req.provider).product),
+          })
+          return { ok: true, value: { accounts: value } satisfies RpcCreditsStatusResponse }
         }
         if (req.provider === CLINE.id) {
           // Cline **没有签到端点**（对整个 sidecar 二进制做字符串扫描，
@@ -3277,7 +3276,7 @@ if (provider === LOBSTERAI.id) {
         // 类型就是唯一真相，缺失的键会在编译产物里被直接丢掉（stale/efforts 都因此
         // 丢过一次，表现为「设置页看不到分组」）。
         let catalog: Array<{
-          id: string; name: string; isFree?: boolean
+          id: string; name: string; isFree?: boolean; subscriptionOnly?: boolean
           contextWindow?: number; maxTokens?: number; defaultMaxTokens?: number; stale?: boolean; staleReason?: string
           efforts?: readonly string[]; defaultEffort?: string; supportsImage?: boolean; rateBadge?: ModelRateBadge
         }>
@@ -3337,6 +3336,7 @@ if (provider === LOBSTERAI.id) {
             // 模型列表按「计费/来源」分组，把「适配器没报」当成「按量计费」是
             // 保守归组，但字段本身仍保持「未知」语义（与全仓约定一致）。
             ...model.isFree === undefined ? {} : { isFree: model.isFree },
+            ...model.subscriptionOnly === undefined ? {} : { subscriptionOnly: model.subscriptionOnly },
             ...model.rateBadge === undefined ? {} : { rateBadge: model.rateBadge },
             // 能力元数据：界面据此只渲染该模型真正支持的档位（不猜、不给做不到的选项）。
             ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
@@ -3367,7 +3367,7 @@ if (provider === LOBSTERAI.id) {
       // provider 各取自己的适配器：`raccoon` 用免费账号凭据拉、`raccoon-pro` 用
       // 订阅账号凭据拉，两侧目录天然独立，不做倍率过滤。
       case 'model.refresh': {
-        const req = payload as { provider?: unknown }
+        const req = payload as { provider?: unknown; broadcast?: unknown }
         const provider = typeof req?.provider === 'string' ? req.provider : ''
         if (provider === '') {
           return { ok: false, error: { code: 'bad-request', message: 'provider 必填' } }
@@ -3384,7 +3384,9 @@ if (provider === LOBSTERAI.id) {
           const result = await refresh.call(adapter)
           const count = typeof result?.count === 'number' && Number.isFinite(result.count) ? result.count : 0
           const source = adapter.catalogStatus?.().source ?? (result?.source === 'remote' ? 'remote' : 'fallback')
-          if (source === 'remote') broadcastCatalogChanged(ctx)
+          // `broadcast: true`（宿主切换「统一免费与订阅模型」后主动刷新）：即使本次
+          // 落到兜底目录也要广播 —— 隐藏 raccoon-pro 分组依赖宿主收到变更事件。
+          if (source === 'remote' || req.broadcast === true) broadcastCatalogChanged(ctx)
           ctx.logger.info(`[channel-pack] 刷新模型目录 ${provider}：${source}（${count}）`)
           return { ok: true, value: { count, source, ...(result && 'issue' in result ? { issue: result.issue } : {}) } }
         } catch (error) {
@@ -3443,10 +3445,15 @@ if (provider === LOBSTERAI.id) {
       }
 
       /**
-       * 写入某个模型的参数覆盖。
+       * 写入某个模型的参数覆盖（默认**整份替换**，与设置页保存一致）。
        *
-       * ⚠️ **不广播目录变更**：参数只影响调用时的请求头，不改变模型是否出现在
-       * 选择器里，广播会让客户端白白重拉一次目录。
+       * 输入栏 `contextOnly: true` 与设置页 `field` 都在服务端合并一个字段；
+       * 清除该字段时仍保留同模型的其它覆盖。
+       *
+       * ⚠️ **必须广播 adapters-updated**：contextWindow 覆盖经 `resolveModel`
+       * 投影进 `info.context.contextWindow`，宿主压缩/预算直接读它；不广播
+       * 的话已开会话直到下次目录刷新都沿用旧窗口（其余渠道的同名字段写后
+       * 都走同一约定）。
        */
       case 'model.setParams': {
         const req = payload as RpcModelSetParamsRequest
@@ -3456,7 +3463,50 @@ if (provider === LOBSTERAI.id) {
         if (typeof req.modelId !== 'string' || req.modelId.length === 0) {
           return { ok: false, error: { code: 'bad-request', message: 'modelId 必填' } }
         }
-        await pool.setModelParams(req.provider, req.modelId, req.params)
+        const previous = pool.modelParamsFor(req.provider, req.modelId)
+        const field = req.contextOnly === true ? 'contextWindow' : req.field
+        if (field !== undefined && !['contextWindow', 'maxTokens', 'reasoningEffort', 'supportsImage'].includes(field)) {
+          return { ok: false, error: { code: 'bad-request', message: '模型参数无效' } }
+        }
+        if (field === 'contextWindow') {
+          const value = req.contextOnly === true ? req.params?.contextWindow : req.params?.contextWindow ?? null
+          if (value !== null && (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 10_000_000)) {
+            return { ok: false, error: { code: 'bad-request', message: 'contextWindow 必须是正整数或 null' } }
+          }
+          const row = modelAdapters?.[req.provider]?.listAllModels().find(model => model.id === req.modelId)
+          const capacity = row?.contextWindow
+          const output = previous?.maxTokens ?? row?.defaultMaxTokens
+          const target = value ?? capacity
+          if (capacity === undefined || capacity <= 0 || target === undefined || target > capacity || (output !== undefined && target <= output)) {
+            return { ok: false, error: { code: 'bad-request', message: '上下文窗口超出目录容量范围或小于等于输出预留' } }
+          }
+          const merged = { ...previous }
+          if (value === null) delete merged.contextWindow
+          else merged.contextWindow = value
+          await pool.setModelParams(req.provider, req.modelId, merged)
+        } else {
+          // 思考档位必须是该模型**真实声明**的档位：设置页的档位同时是该模型的
+          // 默认档（会被投影进 `resolveModel().reasoning.defaultEffort`，DSH 再拿
+          // 它直接发请求），写进一个目录里不存在的档位会让选中它的会话报
+          // `UNSUPPORTED_REASONING_EFFORT`。目录行拿不到时按原样放行（不猜）。
+          const params = req.contextOnly === true ? undefined : req.params
+          const next = field === undefined ? params : { ...previous, [field]: params?.[field] }
+          const requestedEffort = field === undefined || field === 'reasoningEffort' ? next?.reasoningEffort : undefined
+          if (typeof requestedEffort === 'string' && requestedEffort.length > 0) {
+            const row = modelAdapters?.[req.provider]?.listAllModels().find(model => model.id === req.modelId)
+            if (row !== undefined && Array.isArray(row.efforts) && !row.efforts.includes(requestedEffort)) {
+              return { ok: false, error: { code: 'bad-request', message: '该模型不支持此思考档位' } }
+            }
+          }
+          await pool.setModelParams(req.provider, req.modelId, next)
+        }
+        // 能影响宿主预算和默认档的元数据变化要广播，避免会话继续使用旧目录。
+        const next = pool.modelParamsFor(req.provider, req.modelId)
+        if (previous?.contextWindow !== next?.contextWindow
+            || previous?.maxTokens !== next?.maxTokens
+            || previous?.reasoningEffort !== next?.reasoningEffort) {
+          broadcastCatalogChanged(ctx)
+        }
         ctx.logger.info(`[channel-pack] 更新模型参数 ${req.provider}/${req.modelId}`)
         const value: RpcModelSetParamsResponse = {
           provider: req.provider,

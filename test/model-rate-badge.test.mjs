@@ -157,6 +157,11 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
 
     const offlineTrae = await rpc('model.list', { provider: 'trae' })
     assert.deepEqual(offlineTrae.value.models.find(model => model.id === 'deepseek-v4.1-flash').rateBadge, reference('0.12'))
+    // 订阅限定（官方会员门槛）：Seed-Evolving 仅 Pro 及以上可用，独立于倍率徽标。
+    assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-Evolving').subscriptionOnly, true)
+    // 非订阅限定模型不挂该标志（缺失即不编造 false）。
+    assert.equal(offlineTrae.value.models.find(model => model.id === 'deepseek-v4.1-flash').subscriptionOnly, undefined)
+    assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-2.1-Turbo').subscriptionOnly, undefined)
     const consumption = rate => ({ enable: true, data: { rate } })
     const detail = (id, name, contact) => ({ config_name: id, usage: 'chat_completion',
       display_config: { display_name: name }, ...contact })

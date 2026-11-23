@@ -3,6 +3,12 @@
 export function packSettings(provider) {
   const { id, caps = {}, family } = provider
   const sides = family ?? [{ id }]
+  // 统一免费与订阅模型（仅小浣熊家族卡）：自动化状态声明本卡可用该开关，
+  // 且用户已打开。开着时模型分区只显示一个「统一模型」组（合并目录由后端
+  // 免费面适配器提供），订阅模型面整组隐藏。
+  const unifiedModelsOn = state => !!(caps.unifiedModels
+    && state.automation?.unifiedModelProviders?.includes(id)
+    && state.automation?.config?.raccoonUnifiedModels)
   return {
     ...provider,
     statusFrom(state) {
@@ -18,13 +24,32 @@ export function packSettings(provider) {
     },
     accounts(state) {
       const balances = new Map(state.balances.map(balance => [balance.accountId, balance]))
+      const pool = summarizePoolCredits(
+        state.accounts.filter(account => account.enabled !== false).map(account => {
+          const bal = balances.get(account.id)
+          return { amount: bal?.total ?? null, unit: '积分', packages: bal?.packages ?? [] }
+        }),
+        id,
+      )
+      const routeCounts = caps.routeCheck ? loomyRouteCounts(state) : null
+      const routeSummary = caps.routeCheck ? loomyRouteSummaryText(state) : ''
+      const hasUnhealthyRoute = !!routeCounts && (routeCounts.routed + routeCounts.expired + routeCounts.exhausted + routeCounts.unknown) > 0
       return {
         ready: !state.loading || state.accounts.length > 0,
         failed: state.loadFailed,
-        autoCheckin: state.checkin?.providers?.[id] ? state.checkin.enabled : undefined,
+        poolSummary: [pool.known ? `总计 ${pool.summary}` : '', routeSummary].filter(Boolean).join(' · '),
+        routeOverview: caps.routeCheck ? {
+          counts: routeCounts,
+          skipRouted: state.loomyRoute?.skipRouted !== false,
+          lastCheckedAt: loomyRouteLatestAt(state),
+        } : null,
+        autoCheckin: checkinEnabled(state, id),
         actions: [
+          caps.routeCheck && { label: '检测路由', call: ['loomyCheckRoute'], disabled: state.accounts.length === 0, scope: 'route:loomy' },
+          caps.routeCheck && hasUnhealthyRoute && { label: '重测异常', call: ['loomyCheckRoute', undefined, 'unhealthy'], scope: 'route:loomy' },
           caps.dailyReward !== false && { label: '全部领取', call: ['claim'],
-            disabled: !state.accounts.some(account => !checkinEntry(state, id, account.id)?.locked) },
+            disabled: !state.accounts.some(account => account.enabled !== false && !checkinEntry(state, id, account.id)?.locked),
+            scope: `channel:${state.provider}` },
           { label: '添加账号', call: ['startLogin'], primary: true },
         ],
         login: state.login && { url: state.login.url, canCheck: true },
@@ -32,6 +57,24 @@ export function packSettings(provider) {
           const { id: accountId, nickname, enabled, plan } = account
           const limited = Object.values(account.modelRateLimits).filter(expires => expires > Date.now()).length
           const balance = balances.get(accountId)
+          const taskMode = caps.completeTasks ? 'completeTasks' : 'claimRewards'
+          const onboarding = caps.onboarding ? taskEntry(state, id, taskMode, accountId) : null
+          const routeInfo = caps.routeCheck ? loomyRouteView(state, account) : null
+          const shownPackages = displayCreditPackages(balance?.packages)
+          const groups = [
+            ...(shownPackages.length ? [{ title: '额度包', items: shownPackages.map(pkg => ({
+              label: pkg.name || '额度包', value: pkg.remaining, unit: pkg.unit || undefined,
+              notes: [!pkg.active && '已失效', pkg.expiresAt > 0 && `到期 ${displayTime(pkg.expiresAt)}`],
+            })) }] : []),
+            ...(routeInfo?.detail ? [{ title: '上游路由', items: [{
+              label: routeInfo.detail.statusLabel,
+              value: routeInfo.detail.servedLabel,
+              notes: [
+                routeInfo.detail.reasonLabel && (routeInfo.entry ? `依据 ${routeInfo.detail.reasonLabel}` : routeInfo.detail.reasonLabel),
+                routeInfo.detail.checkedAt > 0 && `检测 ${displayTime(routeInfo.detail.checkedAt)}`,
+              ],
+            }] }] : []),
+          ]
           return {
             id: accountId, name: nickname, enabled,
             toggle: ['save', accountId, nickname, !enabled],
@@ -41,17 +84,18 @@ export function packSettings(provider) {
               account.expiresAt > 0 && account.expiresAt <= Date.now() && ['凭据过期', 'warn'],
               limited > 0 && [`受限 ${limited}`, 'warn'],
               balance?.stale && [balance.total === null ? '余额读取失败' : '上次余额', 'warn'],
+              caps.routeCheck && routeInfo?.tag,
               checkinEntry(state, id, accountId)?.tag,
+              onboarding?.tag,
             ],
             metric: { value: balance?.total ?? (balance?.stale ? '—' : '额度待更新'), unit: balance?.total != null ? '积分' : undefined },
             updatedAt: balance?.updatedAt,
-            groups: balance?.packages.length ? [{ title: '额度包', items: balance.packages.map(pkg => ({
-              label: pkg.name || '额度包', value: pkg.remaining, unit: pkg.unit || undefined,
-              notes: [!pkg.active && '已失效', pkg.expiresAt > 0 && `到期 ${displayTime(pkg.expiresAt)}`],
-            })) }] : [],
+            groups,
             form: { kind: 'account', account, call: ['save'] },
             actions: [
-              caps.onboarding && { label: caps.rewardLabel ?? '领新手任务', call: ['onboarding', accountId] },
+              caps.routeCheck && { label: '检测路由', call: ['loomyCheckRoute', accountId], scope: 'route:loomy' },
+              caps.routeCheck && routeInfo?.entry && { label: '清除路由', call: ['loomyClearRoute', accountId], scope: 'route:loomy' },
+              caps.onboarding && { label: caps.rewardLabel ?? '领新手任务', call: ['onboarding', accountId], disabled: !enabled || onboarding?.locked },
               { label: '优先使用', call: ['prioritize', accountId] },
               { label: '刷新凭据', call: ['accountAction', 'account.refresh', accountId] },
               { label: '重置限流', call: ['accountAction', 'account.reset', accountId] },
@@ -67,7 +111,8 @@ export function packSettings(provider) {
       }
     },
     models(state) {
-      return { groups: sides.map(side => {
+      const shown = unifiedModelsOn(state) ? [{ id: sides[0].id, title: '统一模型' }] : sides
+      return { groups: shown.map(side => {
         const rows = state.models.filter(model => model.provider === side.id).map(model => ({
           ...model,
           enabled: !model.disabled && !model.dead,
@@ -75,16 +120,17 @@ export function packSettings(provider) {
           defaults: defaultParamSummary(model),
           tags: [
             model.dead && ['已失效', 'error'],
+            // 订阅限定与倍率/免费是独立维度：会员门槛先标，再标当前消耗倍率。
+            model.subscriptionOnly && ['订阅限定', 'info'],
             model.rate ? [model.rate.label, model.rate.tone === 'warning' ? 'warn' : model.rate.tone]
               : model.isFree && ['免费', 'success'],
-            state.params[model.key] && [`自定义 ${paramSummary(state.params[model.key])}`, 'info'],
           ],
           editor: { kind: 'tiers', call: ['setModelParams', model.key], value: state.params[model.key] },
         }))
         return {
           id: side.id, title: side.title, rows, source: state.modelSource[side.id] ?? 'unknown',
           notice: side.id === 'qodercn' ? ({
-            'login-required': 'Qoder CLI 尚未登录。请在终端运行 qoderclicn login，然后刷新目录。',
+            'login-required': 'Qoder CLI 未登录 · qoderclicn login',
             'cli-missing': '找不到 Qoder 中国版 CLI。安装后可刷新目录。',
             timeout: 'Qoder CLI 读取超时，可稍后重试。',
             'cli-failed': 'Qoder CLI 读取失败，可稍后重试。',
@@ -99,16 +145,66 @@ export function packSettings(provider) {
       }) }
     },
     channel(state) {
+      const skipRouted = state.loomyRoute?.skipRouted !== false
+      const routeCounts = caps.routeCheck ? loomyRouteCounts(state) : null
+      const hasAccounts = state.accounts.length > 0
+      const hasUnhealthyRoute = !!routeCounts && (routeCounts.routed + routeCounts.expired + routeCounts.exhausted + routeCounts.unknown) > 0
+      const hasAnyRoute = !!routeCounts && (routeCounts.total - routeCounts.unchecked) > 0
       return [
-        ...sides.map(side => ({
+        ...(unifiedModelsOn(state) ? [{
+          id: sides[0].id, name: '模型提供方',
+          enabled: state.statuses[sides[0].id] ? !state.statuses[sides[0].id].closed : undefined,
+          toggle: ['setEnabled', state.statuses[sides[0].id]?.closed === true, sides[0].id],
+          toggleLabel: state.statuses[sides[0].id]?.closed !== false ? '打开模型提供方' : '关闭模型提供方',
+        }] : sides.map(side => ({
           id: side.id, name: side.title ? `${side.title}提供方` : '模型提供方',
           enabled: state.statuses[side.id] ? !state.statuses[side.id].closed : undefined,
           toggle: ['setEnabled', state.statuses[side.id]?.closed === true, side.id],
           toggleLabel: state.statuses[side.id]?.closed !== false ? (family ? '打开模型提供方' : '打开渠道') : (family ? '关闭模型提供方' : '关闭渠道'),
-        })),
+        }))),
+        ...(caps.unifiedModels && state.automation?.unifiedModelProviders?.includes(id) ? [{
+          id: 'unified-models', name: '统一免费与订阅模型',
+          meta: '先走免费账号，免费额度用尽自动改用订阅账号',
+          enabled: state.automation?.config?.raccoonUnifiedModels === true,
+          toggle: ['setAutomationConfig', { raccoonUnifiedModels: !(state.automation?.config?.raccoonUnifiedModels === true) }],
+          toggleLabel: '统一免费与订阅模型',
+        }] : []),
         ...(caps.permanentLock ? [{
           id: 'permanent', name: '锁定永久积分', meta: '仅使用有时效的积分',
           enabled: state.locked, toggle: ['lock', !state.locked],
+        }] : []),
+        ...(caps.routeCheck ? [{
+          id: 'route-check', name: '避开上游改路由账号', scope: 'route:loomy',
+          meta: '只读检测（0 积分）· 自动避开静默改路由账号',
+          enabled: skipRouted, toggle: ['loomySetSkipRouted', !skipRouted],
+          moreLabel: hasAccounts ? '路由明细' : undefined,
+          groups: hasAccounts ? [{
+            title: '各账号路由状态',
+            items: state.accounts.map(account => {
+              const info = loomyRouteView(state, account)
+              const detail = info.detail
+              return {
+                label: account.nickname,
+                value: info.tag[0],
+                notes: [
+                  detail?.servedLabel && detail.servedLabel !== '未检测' && !info.tag[0].includes(detail.servedLabel) && `落地 ${detail.servedLabel}`,
+                  detail?.reasonLabel,
+                  detail?.checkedAt > 0 && `检测 ${displayTime(detail.checkedAt)}`,
+                ],
+              }
+            }),
+          }] : undefined,
+          tags: [
+            routeCounts.routed > 0 && [`改路由 ${routeCounts.routed}`, 'error'],
+            routeCounts.clean > 0 && [`正常 ${routeCounts.clean}`, 'success'],
+            routeCounts.expired + routeCounts.exhausted > 0 && [`异常 ${routeCounts.expired + routeCounts.exhausted}`, 'warn'],
+            routeCounts.unchecked > 0 && [`未检测 ${routeCounts.unchecked}`],
+          ],
+          actions: [
+            { label: '检测全部', call: ['loomyCheckRoute'], disabled: !hasAccounts },
+            { label: '重测异常', call: ['loomyCheckRoute', undefined, 'unhealthy'], disabled: !hasUnhealthyRoute },
+            { label: '清空记录', call: ['loomyClearRoute'], disabled: !hasAnyRoute },
+          ],
         }] : []),
       ]
     },

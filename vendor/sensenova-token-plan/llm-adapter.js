@@ -1,4 +1,4 @@
-import { planRequestDefaults } from "../../lib/sensenova-params.js";
+import { defaultModelEffort, effectiveModelEffort } from "../../lib/model-catalog.js";
 import { a as buildDescriptors, n as LLM_DISPLAY_NAME, r as LLM_PROVIDER_ID, t as DEFAULT_REASONING_EFFORT } from "./llm-models.js";
 import { t as assemblePiAiAdapter } from "./llm-adapter-core.js";
 
@@ -70,17 +70,13 @@ function createSensenovaAdapter({ entries, enabledIds = [], baseUrl, resolveApiK
 		apiKeyName: "SenseNova API key",
 		models,
 		configuredMaxTokens: new Map(models.map(model => [model.id, model.maxTokens])),
-		modelEfforts: new Map(models.filter(model => modelParams?.[model.id]?.reasoningEffort
-			&& model.thinkingLevelMap[modelParams[model.id].reasoningEffort] != null)
-			.map(model => [model.id, modelParams[model.id].reasoningEffort])),
-		requestDefaults: options => {
-			const model = models.find(entry => entry.id === options.model)
-			const efforts = Object.keys(model?.thinkingLevelMap ?? {}).filter(level => model.thinkingLevelMap[level] !== null)
-			return planRequestDefaults(options, modelParams?.[options.model], efforts)
-		},
+		modelEfforts: new Map(models.map(model => {
+			const efforts = Object.keys(model.thinkingLevelMap).filter(level => model.thinkingLevelMap[level] !== null);
+			const fallback = defaultModelEffort(efforts, DEFAULT_REASONING_EFFORT);
+			return [model.id, effectiveModelEffort(efforts, modelParams?.[model.id]?.reasoningEffort, fallback)];
+		})),
 		resolveCredential: resolveApiKey,
-		...get !== void 0 ? { get } : {},
-		reasoning: DEFAULT_REASONING_EFFORT
+		...get !== void 0 ? { get } : {}
 	});
 }
 

@@ -1,4 +1,5 @@
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import { reportLedgerAccount } from '../../../vendor/channel-pack/src/token-ledger.js'
 import { LoomyAuth } from '../../../vendor/channel-pack/src/loomy-auth.js'
 import { LOOMY } from '../../../vendor/channel-pack/src/loomy-product.js'
@@ -7,7 +8,18 @@ import { type LoomyCredential } from '../../../vendor/channel-pack/src/loomy.js'
 import { LoomyBalanceSelector } from '../../../vendor/channel-pack/src/loomy-balance-selector.js'
 import type { ProviderContext } from './context.js'
 
-export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage, catalogFile }: ProviderContext) {
+export interface LoomyRouteController {
+  hasUserIdRoutes?: () => boolean
+  getAccountRoute?: (accountId: string, userId?: string) => unknown
+  isAccountExcluded: (accountId: string, userId?: string) => boolean
+  observeServedModel?: (accountId: string | undefined, requestedModel: string, servedModel: string, userId?: string) => void
+}
+
+export function mountLoomy(
+  { ctx, pool, throwIfAllAccountsRateLimited, readImage, catalogFile, noteQuotaAccount }: ProviderContext,
+  useQuotaPriority = () => false,
+  loomyRoute?: LoomyRouteController,
+) {
   const loomy = new LoomyAuth(ctx)
 
   /**
@@ -34,7 +46,8 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
    * 而本插件既有的「限流 → 换号」只在服务端返回限流错误时触发，
    * 故对 Loomy **完全无效**：会一直烧同一个号（用户报障）。
    *
-   * 策略：优先有今日额度的号 → 其次有永久积分的号 → 都无/查不到排最后。
+   * 开启全局额度优先后使用：有今日额度 → 有永久积分 → 无/查不到。
+   * 永久积分锁独立启用此选择器，且只接收第一档。
    * 档内保持手动拖拽顺序（详见 `loomy-balance-rank.ts`）。
    */
   const loomyBalanceSelector = new LoomyBalanceSelector({
@@ -42,8 +55,30 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
     resolveCredential: resolveLoomyCredentialByRef,
   })
 
+  const routedExcludedIds = async (): Promise<Set<string>> => {
+    const excluded = new Set<string>()
+    if (!loomyRoute) return excluded
+    const checkUserId = loomyRoute.hasUserIdRoutes?.() === true
+    for (const entry of pool.listAccountsByProvider(LOOMY.id)) {
+      if (!entry.enabled) continue
+      let userId: string | undefined
+      if (checkUserId && loomyRoute.getAccountRoute?.(entry.id) == null) {
+        userId = (await resolveLoomyCredentialByRef(entry.credentialRef))?.userid
+      }
+      if (loomyRoute.isAccountExcluded(entry.id, userId)) {
+        excluded.add(entry.id)
+      }
+    }
+    return excluded
+  }
+
   const loomyAdapter = registerLoomyLlm(ctx, {
     credentialRef: credentialRef(LOOMY.defaultCredentialRef),
+    onServedModel: loomyRoute?.observeServedModel
+      ? (accountId, requestedModel, servedModel, userId) => {
+        loomyRoute.observeServedModel?.(accountId, requestedModel, servedModel, userId)
+      }
+      : undefined,
     /**
      * 解析本轮该用哪个账号的凭据。
      *
@@ -52,17 +87,44 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
      * 过滤失效（早期实现传空串 `''`，等于「不按模型过滤」）。
      */
     resolveCredential: async (modelId?: string) => {
+      const excluded = await routedExcludedIds()
+      const allowPermanent = !pool.permanentLocked(LOOMY.id)
+      if (allowPermanent && !useQuotaPriority()) {
+        const available = await pool.getAvailableAccount(
+          LOOMY.id,
+          modelId ?? '',
+          excluded.size > 0 ? excluded : undefined,
+        )
+        if (available) {
+          reportLedgerAccount(LOOMY.id, available.entry.id)
+          if (modelId) noteQuotaAccount?.(LOOMY.id, available.entry.id, modelId)
+          return available.credential as LoomyCredential
+        }
+        const enabledAccounts = pool.listAccountsByProvider(LOOMY.id).filter(a => a.enabled)
+        const unroutedEnabled = excluded.size > 0 ? enabledAccounts.filter(a => !excluded.has(a.id)) : enabledAccounts
+        if (unroutedEnabled.length > 0 || excluded.size === 0) {
+          throwIfAllAccountsRateLimited(LOOMY, modelId, excluded.size > 0 ? unroutedEnabled : undefined)
+        }
+        if (excluded.size > 0) {
+          throw new LlmError(
+            'Loomy：当前启用账号均已被「避开上游改路由账号」排除。可在 Loomy 渠道设置重测路由或关闭该开关。',
+            'MISSING_CREDENTIAL',
+          )
+        }
+        return resolveLoomyCredentialByRef(LOOMY.defaultCredentialRef)
+      }
       // 只从 Loomy 自己的账号池取账号，回退到自己的单凭据 ref，
       // 保证不会串用其它 provider 的凭据。
       // provider 实参用 LOOMY.id 而非字面量 'loomy'：写死字面量在
 
       //
-      // ⚠️ 先按「模型未受限 + 未停用」筛出候选，**再**按余额分档选号。
+      // ⚠️ 先按「模型未受限 + 未停用 + 未被改路由排除」筛出候选，**再**按余额分档选号。
       // 余额排序只在这批候选内部进行 —— 即你的要求：
       // 「策略建立在模型没有受限且账户没有被设置为停用的基础上」。
-      const candidates = pool
+      const unroutedEnabled = pool
         .listAccountsByProvider(LOOMY.id)
-        .filter(a => a.enabled)
+        .filter(a => a.enabled && !excluded.has(a.id))
+      const candidates = unroutedEnabled
         .filter((a) => {
           // 与 `getAvailableAccount` 的限流判据保持一致（空 modelId = 不过滤）。
           const key = modelId ?? ''
@@ -75,8 +137,6 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
 
       // 「锁定永久积分」：只允许消耗今日赠送额度（用户要求，且持久化）。
 
-      const allowPermanent = !pool.permanentLocked(LOOMY.id)
-
       if (candidates.length > 0) {
         const picked = await loomyBalanceSelector.select(candidates, { allowPermanent })
         if (picked.ok) {
@@ -84,6 +144,7 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
           // Token 账本（第 2 期）：回报「本笔请求解析出的账号」。
           if (credential !== undefined) {
             reportLedgerAccount(LOOMY.id, picked.account.id)
+            if (modelId) noteQuotaAccount?.(LOOMY.id, picked.account.id, modelId)
             return credential
           }
         } else if (!allowPermanent) {
@@ -109,7 +170,16 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
         }
       }
 
-      throwIfAllAccountsRateLimited(LOOMY, modelId)
+      if (unroutedEnabled.length > 0 || excluded.size === 0) {
+        throwIfAllAccountsRateLimited(LOOMY, modelId, excluded.size > 0 ? unroutedEnabled : undefined)
+      }
+      if (!allowPermanent) throw new Error('Loomy：已锁定永久积分，当前没有可使用每日额度的账号。')
+      if (excluded.size > 0) {
+        throw new LlmError(
+          'Loomy：当前启用账号均已被「避开上游改路由账号」排除。可在 Loomy 渠道设置重测路由或关闭该开关。',
+          'MISSING_CREDENTIAL',
+        )
+      }
       // 兜底：账号池为空/全部不可解析时，退回单凭据 ref。
       const resolved = await ctx.credentials.resolve(credentialRef(LOOMY.defaultCredentialRef))
       if (!resolved) return undefined
@@ -130,15 +200,27 @@ export function mountLoomy({ ctx, pool, throwIfAllAccountsRateLimited, readImage
       return JSON.parse(resolved.value) as LoomyCredential
     },
     nextAccount: async (modelId, tried) => {
+      const excluded = await routedExcludedIds()
+      const combinedTried = new Set(tried)
+      for (const id of excluded) combinedTried.add(id)
+      const allowPermanent = !pool.permanentLocked(LOOMY.id)
+      if (allowPermanent && !useQuotaPriority()) {
+        const available = await pool.getAvailableAccount(LOOMY.id, modelId, combinedTried)
+        if (!available) return undefined
+        reportLedgerAccount(LOOMY.id, available.entry.id)
+        noteQuotaAccount?.(LOOMY.id, available.entry.id, modelId)
+        return { accountId: available.entry.id, credential: available.credential as LoomyCredential }
+      }
       const candidates = pool.listAccountsByProvider(LOOMY.id)
-        .filter(account => account.enabled && !tried.has(account.id))
+        .filter(account => account.enabled && !combinedTried.has(account.id))
         .filter(account => !account.modelRateLimits?.[modelId] || Date.now() >= account.modelRateLimits[modelId]!)
         .map(account => ({ id: account.id, credentialRef: account.credentialRef }))
-      const picked = await loomyBalanceSelector.select(candidates, { allowPermanent: !pool.permanentLocked(LOOMY.id) })
+      const picked = await loomyBalanceSelector.select(candidates, { allowPermanent })
       if (!picked.ok) return undefined
       const credential = await resolveLoomyCredentialByRef(picked.account.credentialRef)
       if (!credential) return undefined
       reportLedgerAccount(LOOMY.id, picked.account.id)
+      noteQuotaAccount?.(LOOMY.id, picked.account.id, modelId)
       return { accountId: picked.account.id, credential }
     },
     // 远端模型目录：GET /api/v1/models。

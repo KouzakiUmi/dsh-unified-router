@@ -55,7 +55,7 @@ function hostFixture() {
       { accountId: `${p}-b`, nickname: '账号 B', balance: null, error: 'NEVER_DISPLAY' },
     ] } }
     if (method === 'credits.claimAll') return { ok: true, value: { results: [{ outcome: { kind: 'inactive', actionRequired: true } }] } }
-    if (method === 'onboarding.claim') return { ok: true, value: { claimed: [{ key: 'one' }], skipped: ['two'] } }
+    if (method === 'automation.run' || method === 'automation.query') return { ok: true, value: { results: [{ verified: true, outcome: { kind: 'done' } }] } }
     return { ok: true, value: {} }
   }
   return { call, calls, overrides }
@@ -101,6 +101,7 @@ test('样式模板字面量内部不得出现反引号（会让 CSS 提前闭合
   const body = styles.slice(styles.indexOf(TICK) + 1, styles.lastIndexOf(TICK))
   assert.ok(body.length > 1000, 'styles.js 结构变了，先修这条断言')
   assert.equal(body.split(TICK).length - 1, 0, 'CLIENT_STYLES 模板体内不能有反引号（包含注释）')
+  assert.match(body, /\.eac-switch::before\{[^}]*inset:-3px 0/, '开关扩大触控热区但不改变视觉尺寸')
 })
 
 test('模型只有内部代号时也要有人话名（Qoder CN 的 qmodel/qfmodel 这类 id）', () => {
@@ -153,8 +154,11 @@ test('账号紧凑列表：两个账号同时可见，点「管理」展开后�
   // 默认不渲染表单。
   assert.equal(treeNodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'AccountForm'), undefined)
   // 点第一个账号的 ⋯ 才出表单。
-  treeNodes(tree).filter(n => n.props.className === 'eac-more')[0].props.onClick()
+  const more = treeNodes(tree).filter(n => n.props.className === 'eac-more')[0]
+  more.props.onClick()
   tree = render()
+  const detail = treeNodes(tree).find(n => n.props.className === 'eac-row-more')
+  assert.equal(detail.props.id, more.props['aria-controls'], '展开按钮与详情区域有可访问的关联')
   const form = treeNodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'AccountForm')
   assert.equal(form.props.key, 'loomy:loomy-a')
   react.dispose()
@@ -190,17 +194,23 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   react.dispose()
 })
 
-test('渠道卡片十二张：Raccoon 只有一张卡片（两个模型面合并）；无每日签到但登录奖励可用', async () => {
-  const { module, react } = loadClient(); const host = hostFixture(); let Settings
+test('渠道卡片十张：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
+  const { module, react } = loadClient(undefined, {
+    localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'doubaowork' : null },
+  }); const host = hostFixture(); let Settings
   const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
   module.apply(ctx)
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   render(); await tick()
   const tabs = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  // 十二张卡片：原八张 + AStudio、豆包工作、Coze、CodeArts。
   // `raccoon-pro` 是模型层的第二个 provider，不是一张卡片。
   assert.deepEqual(tabs.map(n => n.props['aria-label'].replace('切换到 ', '')),
-    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'AStudio', '豆包工作', 'Coze', 'CodeArts'])
+    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'AStudio', 'CodeArts'])
+  assert.equal(tabs[0].props['aria-selected'], true)
+  assert.ok(tabs.every(tab => tab.props['aria-controls'] === 'eac-provider-workspace'))
+  const workspace = treeNodes(render()).find(n => n.props.id === 'eac-provider-workspace')
+  assert.equal(workspace.props.role, 'tabpanel')
+  assert.equal(workspace.props['aria-labelledby'], tabs[0].props.id)
 
   const store = module.createRouterStore(host.call)
   try {
@@ -211,9 +221,12 @@ test('渠道卡片十二张：Raccoon 只有一张卡片（两个模型面合并
     // 登录奖励按家族放行，且带**账号所在池**的 provider 与账号 id。
     store.select('raccoon-a')
     await store.onboarding()
-    const claim = host.calls.find(c => c.method === 'onboarding.claim')
+    const claim = host.calls.find(c => c.method === 'automation.run')
     assert.equal(claim.payload.provider, 'raccoon')
     assert.equal(claim.payload.accountId, 'raccoon-a')
+    await store.queryAutomationTask('raccoon', 'claimRewards', 'raccoon-a')
+    assert.equal(host.calls.filter(c => c.method === 'automation.run').length, 1)
+    assert.equal(host.calls.find(c => c.method === 'automation.query').payload.mode, 'claimRewards')
   } finally { store.dispose(); react.dispose() }
 })
 
@@ -375,7 +388,7 @@ test('奖励带选中账号，优先级用 orderedIds，模型恢复与显示按
   try {
     await store.load('raccoon'); assert.equal(await store.onboarding(), false)
     store.select('raccoon-b'); await store.onboarding()
-    assert.equal(host.calls.find(c => c.method === 'onboarding.claim').payload.accountId, 'raccoon-b')
+    assert.equal(host.calls.find(c => c.method === 'automation.run').payload.accountId, 'raccoon-b')
     await store.prioritize('raccoon-b')
     assert.deepEqual(Array.from(host.calls.find(c => c.method === 'account.reorder').payload.orderedIds), ['raccoon-b', 'raccoon-a'])
     // 家族卡的模型键是 `provider:modelId`：启停必须打到模型自己所属的 provider。
@@ -505,6 +518,28 @@ test('领取后的余额查询纳入统一取消生命周期', async () => {
   } finally {
     gate.resolve({ ok: true, value: { accounts: [] } })
     store.dispose()
+  }
+})
+
+test('全部领取在途时按钮按渠道作用域禁用', async () => {
+  const { module, react } = loadClient(); const host = hostFixture(); const gate = deferred(); let Settings
+  host.overrides.set('credits.claimAll', () => gate.promise)
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } },
+    connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const claimButton = tree => treeNodes(tree).find(n => n.type === 'button' && (n.children || []).includes('全部领取'))
+  try {
+    render(); await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
+    assert.equal(!claimButton(render()).props.disabled, true)
+    claimButton(render()).props.onClick(); await tick()
+    assert.equal(claimButton(render()).props.disabled, true, '领取在途时给出按钮级忙碌反馈')
+    gate.resolve({ ok: true, value: { results: [{ outcome: { kind: 'claimed' } }] } })
+    await tick(); await tick()
+  } finally {
+    gate.resolve({ ok: true, value: { results: [] } })
+    react.dispose()
   }
 })
 
@@ -822,7 +857,7 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   render(); await tick()
   // 卡片：一张家族卡，副行是「账号数（单池）· 模型数（两侧之和）」。
   const cards = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  assert.equal(cards.length, 12)
+  assert.equal(cards.length, 10)
   assert.ok(hasText(render(), '3 账号 · 6 模型'))
   // 默认进入模型页，切换渠道前先配置该渠道的补拉响应。
   host.overrides.set('model.refresh', async payload => ({ ok: true, value: payload.provider === 'raccoon'
@@ -882,6 +917,35 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
 })
 
 // ===== 模型目录：真正拉取上游（model.refresh）+ 来源标识 =====
+
+test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互相覆盖', async () => {
+  const { module, react } = loadClient(); const host = hostFixture(); let Settings
+  // loomy 目录：一条订阅限定（带倍率）、一条订阅限定（无倍率）、一条普通免费。
+  host.overrides.set('model.list', async payload => payload.provider === 'loomy'
+    ? { ok: true, value: { models: [
+      { id: 'pro-model', name: '会员模型', disabled: false, subscriptionOnly: true, rate: { label: 'x0.80', tone: 'neutral' } },
+      { id: 'pro-free', name: '会员免费模型', disabled: false, subscriptionOnly: true, isFree: true },
+      { id: 'normal', name: '普通模型', disabled: false, isFree: true },
+    ] } }
+    : { ok: true, value: { models: [] } })
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const tab = (tree, id) => treeNodes(tree).find(n => n.props.id === id)
+  render(); await tick()
+  tab(render(), 'eac-tab-models').props.onClick()
+  let tree = render(); await tick(); await tick()
+  const tags = treeNodes(tree).filter(n => n.props.className === 'eac-tag').map(n => [n.children[0], n.props['data-tone']])
+  // 订阅限定徽标出现两次（两条订阅限定模型），tone=info。
+  assert.equal(tags.filter(t => t[0] === '订阅限定').length, 2)
+  assert.ok(tags.every(t => t[0] !== '订阅限定' || t[1] === 'info'))
+  // 倍率与免费徽标不被订阅限定覆盖：x0.80 与 免费 仍在。
+  assert.ok(tags.some(t => t[0] === 'x0.80'))
+  assert.ok(tags.some(t => t[0] === '免费'))
+  // 普通模型不挂订阅限定。
+  assert.equal(tags.filter(t => t[0] === '订阅限定').length, 2)
+  react.dispose()
+})
 
 test('模型目录真拉上游：进模型分区自动补拉一次，兜底/远端来源与刷新按钮如实反映', async () => {
   const { module, react } = loadClient(); const host = hostFixture(); let Settings
@@ -1183,6 +1247,29 @@ test('设置批量读取宿主快照，切换时恢复额度并静默更新当�
   } finally { store.dispose() }
 })
 
+test('输入栏写入的账号池模型参数同步到设置页，恢复默认会移除覆盖', async () => {
+  const { module } = loadClient()
+  const fixture = hostFixture()
+  let cursor = 'one', params = { m0: { contextWindow: 500_000, reasoningEffort: 'high' } }
+  const store = module.createRouterStore(async (method, payload, signal) => {
+    if (method === 'settings.snapshot') return { ok: true, value: { cursor, entries: {
+      'raccoon/model.params': { at: Date.now(), value: { provider: 'raccoon', params } },
+      'raccoon-pro/model.params': { at: Date.now(), value: { provider: 'raccoon-pro', params: { m0: { contextWindow: 256_000 } } } },
+    } } }
+    return fixture.call(method, payload, signal)
+  })
+  try {
+    await store.load('raccoon')
+    await store.readHostSnapshots()
+    assert.equal(store.getSnapshot().params['raccoon:m0'].contextWindow, 500_000)
+    params = {}
+    cursor = 'two'
+    await store.readHostSnapshots()
+    assert.equal(store.getSnapshot().params['raccoon:m0'], undefined)
+    assert.equal(store.getSnapshot().params['raccoon-pro:m0'].contextWindow, 256_000)
+  } finally { store.dispose() }
+})
+
 test('设置发布产物使用操作和状态文案', () => {
   assert.doesNotMatch(source, /不代表|不视为|不构成|仅供参考|以上游为准|请勿视为|不能视为|后台操作可能继续/)
 })
@@ -1195,7 +1282,7 @@ test('账号行从宿主签到快照显示已签到并停用当轮领取入口',
   host.overrides.set('settings.snapshot', async () => ({
     ok: true, value: { cursor: 'checkin-v1', entries: {
       'daily/checkin.status': { value: { enabled: true, providers: {
-        loomy: { date, resetHour: 0, accounts: [
+        loomy: { date, resetHour: 0, enabled: false, accounts: [
           { accountId: 'loomy-a', kind: 'claimed' }, { accountId: 'loomy-b', kind: 'already-claimed' },
         ] },
       } } },
@@ -1211,7 +1298,149 @@ test('账号行从宿主签到快照显示已签到并停用当轮领取入口',
     treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
     const nodes = treeNodes(render())
     assert.equal(nodes.filter(node => node.props.className === 'eac-tag' && node.children.includes('已签到')).length, 2)
+    assert.equal(nodes.some(node => node.children.includes('自动签到已关闭')), true, '账号页按本渠道生效值显示')
     assert.equal(nodes.find(node => node.children.includes('全部领取')).props.disabled, true)
     assert.equal(host.calls.some(call => call.method === 'credits.claimAll'), false, '设置页只读取状态')
+  } finally { react.dispose() }
+})
+
+test('Qoder CN 进入模型页从上次目录自动静默刷新为远端目录，静默失败不弹未登录告警', async () => {
+  const { module, react } = loadClient()
+  const host = hostFixture()
+  let sourceTag = 'cached'
+  let issue = ''
+  let refreshMode = 'cached-fail'
+  host.overrides.set('model.list', async payload => payload.provider === 'qodercn'
+    ? { ok: true, value: { source: sourceTag, issue, models: [{ id: 'qmodel', name: 'Qwen 3.8 Max', disabled: false }] } }
+    : { ok: true, value: { models: [{ id: 'm0', name: '模型 0', disabled: false }] } })
+  host.overrides.set('model.refresh', async payload => {
+    if (payload.provider === 'qodercn') {
+      if (refreshMode === 'cached-fail') {
+        sourceTag = 'cached'
+        issue = 'login-required'
+        return { ok: true, value: { count: 1, source: 'cached', issue: 'login-required' } }
+      }
+      sourceTag = 'remote'
+      issue = ''
+      return { ok: true, value: { count: 1, source: 'remote' } }
+    }
+    return { ok: true, value: { count: 1, source: 'remote' } }
+  })
+  let Settings
+  const ctx = {
+    slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } },
+    connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } },
+  }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const hasText = (tree, needle) => treeNodes(tree).some(n => (n.children || []).some(c => typeof c === 'string' && c.includes(needle)))
+  try {
+    render(); await tick()
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 Qoder 中国版').props.onClick()
+    await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-models').props.onClick()
+    render(); await tick(); await tick(); await tick()
+    const qoderRefreshes = host.calls.filter(c => c.method === 'model.refresh' && c.payload?.provider === 'qodercn')
+    assert.equal(qoderRefreshes.length, 1, '切到 Qoder 中国版模型页时，上次目录(cached)应自动静默刷新一次')
+    let tree = render()
+    assert.equal(hasText(tree, '上次目录'), true)
+    assert.equal(hasText(tree, 'qoderclicn login'), false, '静默刷新失败但已有上次目录时，不弹 CLI 未登录告警')
+
+    // 下次手动刷新成功后升级为「远端目录」并清除告警状态
+    refreshMode = 'remote-ok'
+    treeNodes(tree).find(n => n.type === 'button' && n.children.includes('刷新目录')).props.onClick()
+    await tick(); await tick(); await tick()
+    tree = render()
+    assert.equal(hasText(tree, '远端目录'), true)
+    assert.equal(hasText(tree, '上次目录'), false)
+  } finally { react.dispose() }
+})
+
+test('各渠道设置页统一展示积分单位、同名包聚合、总计汇总与窗口剩余明细', async () => {
+  const { module, react } = loadClient()
+  const host = hostFixture()
+  host.overrides.set('credits.balances', async payload => payload.provider === 'trae' ? {
+    ok: true,
+    value: {
+      accounts: [{
+        accountId: 'trae-a', nickname: 'Trae 主号', updatedAt: 1000,
+        balance: {
+          total: 250,
+          packages: [
+            { name: '签到奖励', remaining: 100, unit: 'credits', active: true, expiresAt: 2000 },
+            { name: '签到奖励', remaining: 150, unit: 'credits', active: true, expiresAt: 1000 },
+          ],
+        },
+      }],
+    },
+  } : { ok: true, value: { accounts: [] } })
+  host.overrides.set('managed.snapshot', async payload => payload.provider === 'codearts' ? {
+    ok: true,
+    value: {
+      provider: 'codearts', enabled: true, registered: true,
+      accounts: [{
+        id: 'ca-1', name: 'CodeArts 主号', signedIn: true, enabled: true, plan: '体验版',
+        balance: 500.25, unit: '积分', updatedAt: 1000,
+        windows: [
+          { name: '总积分包', used: 17, amount: 99.75, limit: 600, balance: 500.25, unit: '积分' },
+          { name: '基础积分包', used: 0, amount: 0, limit: 500, balance: 500, unit: '积分' },
+          { name: '赠送积分包', used: 100, amount: 99.75, limit: 100, balance: 0.25, unit: '积分' },
+        ],
+      }],
+    },
+  } : { ok: true, value: { provider: payload.provider, enabled: true, registered: false, accounts: [] } })
+  host.overrides.set('workbuddy.snapshot', async () => ({
+    ok: true,
+    value: {
+      accounts: [{
+        id: 'wb-1', name: 'WB 主号', signedIn: true, plan: 'Free', updatedAt: 1000,
+        windows: [
+          { name: 'Credits', used: 0, amount: 0, limit: 500, unit: 'credits' },
+          { name: 'Total credits', used: 20, amount: 200, limit: 1000, unit: 'credits' },
+        ],
+      }],
+    },
+  }))
+  let Settings
+  const ctx = {
+    slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } },
+    connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } },
+  }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const allText = tree => treeNodes(tree).flatMap(n => (n.children || []).filter(c => typeof c === 'string')).join('|')
+  try {
+    render(); await tick()
+    // 1. TRAE：credits 单位归一为积分，多笔签到奖励合并显示
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 TRAE').props.onClick()
+    await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
+    render(); await tick()
+    let t = render()
+    const traeMore = treeNodes(t).find(n => n.props.className === 'eac-more')
+    if (traeMore) { traeMore.props.onClick(); t = render() }
+    assert.match(allText(t), /签到奖励（2 笔）/)
+
+    // 2. CodeArts：顶部展示总计与临时/永久分项，展开展示剩余 / 上限
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 CodeArts').props.onClick()
+    await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
+    t = render()
+    assert.match(allText(t), /总计 500\.25 积分（临时 0\.25 · 永久 500）/)
+    const caMore = treeNodes(t).find(n => n.props.className === 'eac-more')
+    caMore.props.onClick(); t = render()
+    assert.match(allText(t), /剩余 500\.25 \/ 600 积分/)
+
+    // 3. WorkBuddy：顶部展示总计积分，账号行优先展示积分数（保留剩余进度条），展开展示剩余 / 上限与剩余百分比
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 WorkBuddy').props.onClick()
+    await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
+    t = render()
+    assert.match(allText(t), /总计 800 积分/)
+    assert.match(allText(t), /800\|积分/)
+    const wbMore = treeNodes(t).find(n => n.props.className === 'eac-more')
+    wbMore.props.onClick(); t = render()
+    assert.match(allText(t), /800 \/ 1,000\| 积分/)
+    assert.match(allText(t), /剩余 80%/)
   } finally { react.dispose() }
 })

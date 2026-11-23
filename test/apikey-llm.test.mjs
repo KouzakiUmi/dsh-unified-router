@@ -4,7 +4,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   createApiKeyAdapter,
   createApiKeyFetch,
-  makeRequestDefaults,
   makeStreamWrapper,
   toModelDescriptor,
 } from '../lib/apikey-llm.js'
@@ -79,30 +78,6 @@ test('toModelDescriptor input 跟随 vision / attachment，显式 vision:false �
   assert.deepEqual(overridden.input, ['text'])
   const none = toModelDescriptor(makeRow({ vision: false, attachment: false }), 'agnes', 'https://x/v1')
   assert.deepEqual(none.input, ['text'])
-})
-
-test('makeRequestDefaults：短请求且支持 off 时取 off，否则 effectiveEffort', () => {
-  const rows = [
-    makeRow({ id: 'm-off', efforts: ['off', 'low'], effectiveEffort: 'low' }),
-    makeRow({ id: 'm-nooff', efforts: ['low', 'high'], effectiveEffort: 'high' }),
-    makeRow({ id: 'm-none', efforts: [], effectiveEffort: undefined }),
-  ]
-  const byId = new Map(rows.map(row => [row.id, row]))
-  const defaults = makeRequestDefaults(byId)
-
-  assert.equal(defaults({ model: 'm-off', maxTokens: 512 }).reasoningEffort, 'off')
-  assert.equal(defaults({ model: 'm-off', maxTokens: 2048 }).reasoningEffort, 'low')
-  assert.equal(defaults({ model: 'm-off', maxTokens: 0 }).reasoningEffort, 'low')
-
-  const shortNoOff = { model: 'm-nooff', maxTokens: 512 }
-  assert.equal(defaults(shortNoOff), shortNoOff, '短请求不支持 off 时原样返回')
-  assert.equal(defaults({ model: 'm-nooff', maxTokens: 4096 }).reasoningEffort, 'high')
-
-  const callerSet = { model: 'm-off', maxTokens: 512, reasoningEffort: 'medium' }
-  assert.equal(defaults(callerSet).reasoningEffort, 'medium')
-
-  const nothing = { model: 'm-none', maxTokens: 4096 }
-  assert.equal(defaults(nothing), nothing)
 })
 
 function fetchFor(spec, { context = {}, rows = [makeRow()], upstream, model } = {}) {
@@ -268,7 +243,6 @@ test('createApiKeyAdapter 装配：displayName/apiKeyName/resolveCredential/默�
   assert.equal(args.configuredMaxTokens.get('m1'), 65536)
   assert.equal(args.configuredMaxTokens.get('m2'), 32_768)
   assert.equal(args.modelEfforts.get('m1'), 'low')
-  assert.equal(typeof args.requestDefaults, 'function')
   assert.equal(typeof args.wrapStream, 'function')
   assert.equal(typeof args.api.stream, 'function')
   assert.equal(typeof args.api.streamSimple, 'function')

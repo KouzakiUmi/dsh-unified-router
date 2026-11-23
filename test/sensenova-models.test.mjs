@@ -4,7 +4,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSenseNovaManager } from '../lib/sensenova.js'
-import { planRequestDefaults } from '../lib/sensenova-params.js'
 import { guardedRpc } from '../lib/rpc.js'
 import { apply, publicResult } from '../lib/web-host.js'
 import { a as buildDescriptors, C as resolveSettings } from '../vendor/sensenova-token-plan/llm-models.js'
@@ -477,7 +476,7 @@ test('新模型写操作仍受来源与宿主授权保护，错误不暴露原�
 })
 
 test('商汤只请求 API 模型目录，模型参数和 compat 进入发布并跨重启保留', async () => {
-  const f = fixture([row('glm-5.2'), row('b')])
+  const f = fixture([row('deepseek-flash'), row('b')])
   const builds = []
   const calls = []
   f.ctx.llm = { registerAdapter() { return () => {} } }
@@ -488,29 +487,27 @@ test('商汤只请求 API 模型目录，模型参数和 compat 进入发布并�
   try {
     globalThis.fetch = async url => {
       calls.push(new URL(url).pathname)
-      return Response.json({ data: [row('glm-5.2'), row('b')] })
+      return Response.json({ data: [row('deepseek-flash'), row('b')] })
     }
     const first = f.create({ registerProvider: true }, deps)
     const patch = { contextWindow: 96000, maxTokens: 12000, supportsImage: true, reasoningEffort: 'medium',
       compat: { supportsStore: false, maxTokensField: 'max_completion_tokens', requiresToolResultName: true } }
     await call(first, 'plan.snapshot')
-    const saved = await call(first, 'plan.setModelParams', { modelId: 'glm-5.2', params: patch })
-    const descriptor = builds.at(-1).find(model => model.id === 'glm-5.2')
+    const saved = await call(first, 'plan.setModelParams', { modelId: 'deepseek-flash', params: patch })
+    const descriptor = builds.at(-1).find(model => model.id === 'deepseek-flash')
     assert.equal(descriptor.contextWindow, 96000)
     assert.equal(descriptor.maxTokens, 12000)
     assert.deepEqual(descriptor.input, ['text', 'image'])
     assert.deepEqual(descriptor.compat, { supportsDeveloperRole: false, ...patch.compat })
-    assert.deepEqual(planRequestDefaults({ model: 'glm-5.2' }, saved.params, saved.thinkingLevels), { model: 'glm-5.2', reasoningEffort: 'medium' })
-    assert.equal(planRequestDefaults({ reasoningEffort: 'high' }, patch, saved.thinkingLevels).reasoningEffort, 'high')
     await assert.rejects(call(first, 'plan.setModelParams', { modelId: 'b', params: { reasoningEffort: 'max' } }))
     first.dispose()
     const restarted = f.create({ registerProvider: true }, deps)
     const snapshot = await call(restarted, 'plan.snapshot')
-    assert.deepEqual(snapshot.models.find(model => model.id === 'glm-5.2').params, patch)
+    assert.deepEqual(snapshot.models.find(model => model.id === 'deepseek-flash').params, patch)
     await assert.rejects(call(restarted, 'plan.login', { username: 'fixture', password: 'fixture' }))
     assert.ok(calls.length > 0 && calls.every(path => path === '/v1/models'))
     const reset = await call(restarted, 'plan.setModelParams', {
-      modelId: 'glm-5.2', params: { contextWindow: null, maxTokens: null, supportsImage: null, reasoningEffort: null, compat: null },
+      modelId: 'deepseek-flash', params: { contextWindow: null, maxTokens: null, supportsImage: null, reasoningEffort: null, compat: null },
     })
     assert.equal(reset.contextWindow, 128000)
     assert.equal(reset.vision, false)

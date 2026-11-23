@@ -2,6 +2,15 @@ function buddyRemaining(window) {
   return window.used !== null ? Math.min(1, Math.max(0, 1 - window.used / 100)) : null
 }
 
+function workbuddyPoolSummary(accounts) {
+  const pool = summarizePoolCredits(
+    (accounts ?? []).filter(account => account?.signedIn)
+      .map(account => workbuddyAccountCredits(account.windows) ?? { amount: null, unit: '积分' }),
+    workbuddy.id,
+  )
+  return pool.known ? `总计 ${pool.summary}` : ''
+}
+
 export const workbuddy = {
   id: 'workbuddy',
   title: 'WorkBuddy',
@@ -49,14 +58,16 @@ export const workbuddy = {
   accounts(state) {
     return {
       ready: state.workbuddyReady || state.workbuddy.accounts.length > 0, failed: state.workbuddyError,
-      autoCheckin: state.checkin?.providers?.[workbuddy.id] ? state.checkin.enabled : undefined,
+      poolSummary: workbuddyPoolSummary(state.workbuddy.accounts),
+      autoCheckin: checkinEnabled(state, workbuddy.id),
       login: state.workbuddyLoginUrl || state.workbuddy.loginUrl
-        ? { url: state.workbuddyLoginUrl || state.workbuddy.loginUrl } : null,
+        ? { url: state.workbuddyLoginUrl || state.workbuddy.loginUrl, cancel: state.pending?.[`login:${workbuddy.id}`] ? ['workbuddyCancelLogin'] : null } : null,
       actions: [{ label: '添加账号', call: ['workbuddyLogin'], primary: true }],
       rows: state.workbuddy.accounts.map(account => {
         const name = account.name || account.uid || account.id
-        const remaining = account.windows.map(buddyRemaining).filter(value => value !== null)
+        const remaining = account.windows.filter(window => !window.aside).map(buddyRemaining).filter(value => value !== null)
         const lowest = remaining.length ? Math.min(...remaining) : null
+        const credits = workbuddyAccountCredits(account.windows)
         const confirmation = state.pendingDelete?.accountId === account.id && state.pendingDelete.provider === 'workbuddy'
         const checkin = checkinEntry(state, workbuddy.id, account.id)
         return {
@@ -67,16 +78,23 @@ export const workbuddy = {
             (account.error || state.workbuddyStale) && [account.windows.length ? '上次额度' : '额度读取失败', 'warn'],
             checkin?.tag,
           ],
-          metric: lowest !== null ? { value: Math.round(lowest * 100), unit: '% 剩余', fraction: lowest } : { value: '额度待更新' },
+          metric: credits
+            ? { value: credits.amount, unit: credits.unit, ...(lowest !== null ? { fraction: lowest } : {}) }
+            : (percentMetric(lowest) ?? { value: '额度待更新' }),
           groups: account.windows.length ? [{ title: '额度窗口', items: account.windows.map(window => {
             const fraction = buddyRemaining(window)
+            const unitText = displayCreditUnit(window.unit)
+            const rem = windowRemainingAmount(window)
             return {
               label: window.name, fraction,
-              value: fraction === null ? window.balance : Math.round(fraction * 100), unit: fraction === null ? window.unit : '% 剩余',
+              value: rem !== null ? (window.limit > 0 ? `${displayNumber(rem)} / ${displayNumber(window.limit)}` : rem)
+                : fraction === null ? window.balance : Math.round(fraction * 100),
+              unit: rem !== null ? (unitText || '积分') : (fraction === null ? (unitText || window.unit) : '% 剩余'),
               notes: [
-                window.amount !== null && `已用 ${displayNumber(window.amount)} ${window.unit}`.trim(),
+                rem !== null ? (fraction !== null && `剩余 ${Math.round(fraction * 100)}%`) : (fraction !== null && windowRemainingNote(window, unitText)),
+                window.amount !== null && `已用 ${displayNumber(window.amount)} ${unitText}`.trim(),
                 window.resetsAt && `重置 ${displayTime(window.resetsAt)}`,
-                window.runsOutAt && `预计用尽 ${displayTime(window.runsOutAt)}`,
+                window.runsOutAt && `到期 ${displayTime(window.runsOutAt)}${window.runsOut > 0 ? ` · ${displayNumber(window.runsOut)} ${unitText}`.trimEnd() : ''}`,
               ],
             }
           }) }] : [],
@@ -102,7 +120,7 @@ export const workbuddy = {
       rows: models.map(model => ({
         ...model, key: modelKey('workbuddy', model.id),
         toggle: ['workbuddySetModelEnabled', model.id, !model.enabled],
-        defaults: currentModelSummary(model),
+         defaults: baseModelSummary(model),
         tags: [model.rate ? [model.rate.label, model.rate.tone] : model.free && ['免费', 'success']],
         editor: { kind: 'numeric', call: ['workbuddySetModelParams', model.id] },
       })),
@@ -115,7 +133,8 @@ export const workbuddy = {
   },
 }
 
-function createWorkBuddyActions({ getState, isDisposed, hasSnapshots, request, publish, mutate, loadManaged, loginUrlTimers, writes }) {
+function createWorkBuddyActions({ getState, isDisposed, hasSnapshots, request, publish, mutate, loadManaged, loginUrlTimers }) {
+  let activeLogin = null
   const saveModels = (method, payload, message) => mutate(method, payload, { refresh: false, message, result(value) {
     const state = getState()
     if (state.provider === workbuddy.id && Array.isArray(value?.models)) {
@@ -137,15 +156,15 @@ function createWorkBuddyActions({ getState, isDisposed, hasSnapshots, request, p
     // 登录地址由主机的阻塞 login 生成、经快照 loginUrl 字段透出：登录 pending
     // 期间每 2 秒补读一次快照直到结算（authorize 首跳可能超过数秒，只补读
     // 固定两次会永远错过地址）；定时器统一登记，dispose 时清理。
+    workbuddyCancelLogin() { activeLogin?.abort() },
     workbuddyLogin() {
+      if (activeLogin || getState().loading) return Promise.resolve(false)
+      const controller = new AbortController()
+      activeLogin = controller
       const options = { progress: '正在准备 WorkBuddy 登录…',
-        message: value => value?.signedIn === true ? '已添加 WorkBuddy 账号。' : 'WorkBuddy 登录未完成，请重试。' }
-      // mutate 在 busy/loading 时会立即拒绝：此时不登记补读定时器。
-      if (getState().busy || getState().loading) return mutate('workbuddy.login', {}, options)
+        controller, message: value => value?.signedIn === true ? '已添加 WorkBuddy 账号。' : 'WorkBuddy 登录未完成，请重试。' }
       const login = mutate('workbuddy.login', {}, options)
       let polling = true, timer = null
-      const controller = new AbortController()
-      writes.add(controller)
       const fetchUrl = async () => {
         if (!polling || getState().provider !== workbuddy.id) return
         try {
@@ -168,7 +187,7 @@ function createWorkBuddyActions({ getState, isDisposed, hasSnapshots, request, p
       return login.finally(() => {
         polling = false
         controller.abort()
-        writes.delete(controller)
+        activeLogin = null
         if (timer !== null) { clearTimeout(timer); loginUrlTimers.delete(timer) }
         if (!isDisposed() && getState().provider === workbuddy.id) publish({ workbuddyLoginUrl: null })
       })

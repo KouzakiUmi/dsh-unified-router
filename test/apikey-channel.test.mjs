@@ -294,10 +294,14 @@ test('setKey：非字符串、空白与超长 Key 一律拒绝且不写凭据', 
     ...files, fetch: fetchStub(() => undefined).fetch, modelSettings: modelSettingsStub(), loadLlmAdapter: adapterLoader(),
   })
   t.after(() => manager.dispose())
-  for (const apiKey of [undefined, '', '   ', 'x'.repeat(4097), 42]) {
+  for (const apiKey of [undefined, '', '   ', 'x'.repeat(4097), 42, 'sk-aaaa bbbb', 'sk-aaaa\nbbbb', 'sk-aaaa　bbbb']) {
     await assert.rejects(() => manager.call('apikey.setKey', { provider: 'agnes', apiKey }), /API Key 无效/)
   }
   assert.equal(creds.values.size, 0)
+  // 首尾空白合法（trim 后无内部空白）：正常保存。
+  const ok = await manager.call('apikey.setKey', { provider: 'agnes', apiKey: '  sk-valid-key  \n' })
+  assert.equal(ok.hasApiKey, true)
+  assert.equal(creds.values.get('TEST_AGNES_API_KEY'), 'sk-valid-key')
 })
 
 // ---- 远端失败：回落缓存 → 再回落 fallback ----------------------------------
@@ -439,8 +443,8 @@ test('setEnabled：启用触发 registerAdapter，关闭释放注册并持久化
   assert.equal(llm.registrations[0].adapter.marker, 'adapter-1')
   assert.equal(llm.emitCount >= 1, true)
 
-  // 开关持久化到 stateFile（0o600 内容 {enabled:true}），新实例读回。
-  assert.deepEqual(JSON.parse(readFileSync(files.stateFile, 'utf8')), { enabled: true })
+  // 开关持久化到 stateFile（0o600 内容 {enabled, toolsEnabled}），新实例读回。
+  assert.deepEqual(JSON.parse(readFileSync(files.stateFile, 'utf8')), { enabled: true, toolsEnabled: false })
 
   const off = await manager.call('apikey.setEnabled', { provider: 'agnes', enabled: false })
   assert.deepEqual(off, { enabled: false, providerRegistered: false })

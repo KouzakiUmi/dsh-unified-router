@@ -7,7 +7,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   const cache = createClientCache(persisted)
   const snapshotProviders = PROVIDERS.filter(item => item.snapshot)
   const snapshotReads = new Set(['credits.balances', ...snapshotProviders.flatMap(item => item.snapshot.methods)])
-  const sharedFields = ['statuses', 'checkin', 'automation', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
+  const sharedFields = ['statuses', 'checkin', 'automation', 'loomyRoute', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
   let state = restoredRouterState(provider, persisted)
   let disposed = false, readController = null, balanceController = null,
     planController = null, planPollTimer = null, planPollGeneration = 0, planRevision = 0,
@@ -364,7 +364,9 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         ...(Object.keys(sources).length ? { modelSource: { ...state.modelSource, ...sources } } : {}),
         ...(silent ? {} : { notice: providerById(channel)?.caps?.cliCatalog && results[0]?.status === 'fulfilled' && sources[channel]
           ? '' : catalogNotice(sides, sources) }),
-        ...(channel === 'qodercn' && results[0]?.status === 'fulfilled' ? { qoderCatalogIssue: results[0].value?.issue ?? '' } : {}),
+        ...(channel === 'qodercn' && results[0]?.status === 'fulfilled'
+          && !(silent && sources.qodercn === 'cached')
+          ? { qoderCatalogIssue: results[0].value?.issue ?? '' } : {}),
       })
       cache.rememberChannel(channel, state)
       return true
@@ -382,7 +384,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   function autoRefreshCatalog() {
     if (disposed || state.loading) return Promise.resolve(false)
     const channel = state.provider
-    if (!packAllowed(channel) || providerById(channel)?.caps?.cliCatalog) return Promise.resolve(false)
+    if (!packAllowed(channel)) return Promise.resolve(false)
     const sides = modelProvidersOf(channel)
     if (!sides.length || autoRefreshed.has(channel)) return Promise.resolve(false)
     if (sides.every(side => state.modelSource[side] === 'remote')) return Promise.resolve(false)
@@ -467,7 +469,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     const targetProvider = typeof payload.provider === 'string' ? payload.provider
       : account?.provider || state.provider
     writeRevision++
-    const controller = new AbortController()
+    const controller = options.controller ?? new AbortController()
     writes.add(controller)
     const release = pending.enter(scope)
     publish({ notice: options.progress || '正在应用，请稍候…' })
@@ -501,7 +503,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   async function planMutate(method, payload, options = {}) {
     const scope = options.scope || (method.includes('Model') ? `models:${PLAN_PROVIDER_ID}` : `channel:${PLAN_PROVIDER_ID}`)
     if (disposed || pending.has(scope) || state.loading || state.provider !== PLAN_PROVIDER_ID) return false
-    const controller = new AbortController()
+    const controller = options.controller ?? new AbortController()
     planRevision++
     writeRevision++
     planController?.abort()
@@ -515,14 +517,14 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       if (options.result) {
         options.result(result)
         cache.persistCards(state)
-        publish({ notice: options.message || '商汤设置已保存。' })
+        publish({ notice: typeof options.message === 'function' ? options.message(result) : options.message || '商汤设置已保存。' })
       } else {
         const refreshed = await loadPlan(PLAN_PROVIDER_ID, true)
         if (!disposed && state.provider === PLAN_PROVIDER_ID) publish({ notice: refreshed ? options.message || '商汤设置已保存。' : '设置已保存，但模型目录读取未完成。' })
       }
       return true
     } catch {
-      if (!disposed && state.provider === PLAN_PROVIDER_ID) publish({ notice: controller.signal.aborted ? '请求已取消。' : '商汤设置保存失败。' })
+      if (!disposed && state.provider === PLAN_PROVIDER_ID) publish({ notice: controller.signal.aborted ? '请求已取消。' : options.failure || '商汤设置保存失败。' })
       return false
     } finally {
       writes.delete(controller)
@@ -546,6 +548,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       getState: () => state, isDisposed: () => disposed, hasSnapshots: () => sync.hasSnapshots(),
       request, publish, mutate, planMutate, loadManaged, loginUrlTimers, writes,
       persistCards: () => cache.persistCards(state),
+      rememberChannel: target => cache.rememberChannel(target, state),
     }))),
     message(notice) { publish({ notice }) },
     async setAutomationConfig(patch) {
@@ -570,28 +573,27 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         release()
       }
     },
-    async runAutomationTask(targetProvider, mode = 'claimRewards', accountId) {
+    queryAutomationTask(targetProvider, mode, accountId) {
+      return store.runAutomationTask(targetProvider, mode, accountId, true)
+    },
+    async runAutomationTask(targetProvider, mode = 'claimRewards', accountId, querying = false) {
       const target = targetProvider || state.provider
-      const scope = `tasks:${target}:${mode}`
+      const scope = taskScope(target, mode)
       if (disposed || pending.has(scope)) return false
       const controller = new AbortController()
       writes.add(controller)
       const release = pending.enter(scope)
       writeRevision++
-      publish({ notice: mode === 'completeTasks' ? '正在执行自动任务…' : '正在领取奖励…' })
+      publish({ notice: querying ? '正在查询状态…' : mode === 'completeTasks' ? '正在执行任务…' : '正在领取奖励…' })
       try {
-        const value = await request('automation.run', { provider: target, mode, ...(accountId ? { accountId } : {}) }, controller.signal)
+        const value = await request(querying ? 'automation.query' : 'automation.run', { provider: target, mode, ...(accountId ? { accountId } : {}) }, controller.signal)
         if (!disposed && state.provider === target) {
-          const list = Array.isArray(value?.results) ? value.results : []
-          const okCount = list.filter(r => ['claimed', 'completed'].includes(r.outcome?.kind)).length
-          const doneCount = list.filter(r => r.outcome?.kind === 'done').length
-          const label = mode === 'completeTasks' ? '任务执行' : '奖励领取'
-          publish({ notice: `${label}：${okCount} 个新增，${doneCount} 个已完成。` })
+          publish({ notice: taskMessage(value, mode, querying) })
           if (sync.hasSnapshots()) void sync.readHostSnapshots()
         }
         return true
       } catch {
-        if (!disposed && state.provider === target) publish({ notice: mode === 'completeTasks' ? '任务执行未完成。' : '奖励领取未完成。' })
+        if (!disposed && state.provider === target) publish({ notice: querying ? '状态查询未完成。' : mode === 'completeTasks' ? '任务执行未完成。' : '奖励领取未完成。' })
         return false
       } finally {
         writes.delete(controller)
@@ -653,14 +655,14 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       const targetProvider = typeof target === 'string' && target ? target : state.provider
       return mutate('model.resetDefaults', { provider: targetProvider }, { message: '已恢复推荐模型。' })
     },
-    setModelParams(key, patch) {
+    setModelParams(key, patch, field) {
       const model = state.models.find(m => m.key === key)
       if (!model) return Promise.resolve(false)
       const channel = state.provider
-      return mutate('model.setParams', { provider: model.provider, modelId: model.id, params: patch }, {
+      return mutate('model.setParams', { provider: model.provider, modelId: model.id, params: patch, ...(field ? { field } : {}) }, {
         refresh: false, message: '模型参数已保存。',
         result(value) {
-          if (state.provider === channel) publish({ params: { ...state.params, ...paramsFrom(value, model.provider) } })
+          if (state.provider === channel) publish({ params: replaceProviderParams(state.params, value, model.provider) })
           if (state.provider === channel) cache.rememberChannel(channel, state)
         },
       })
@@ -688,9 +690,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       const target = typeof accountId === 'string' && accountId !== '' ? accountId : state.selected
       if (!target || !providerById(state.provider)?.caps?.onboarding) { publish({ notice: '请选择账号。' }); return Promise.resolve(false) }
       if (!state.accounts.some(a => a.id === target)) { publish({ notice: '账号已变化，请刷新后重试。' }); return Promise.resolve(false) }
-      return mutate('onboarding.claim', { accountId: target }, { refresh: false, progress: '正在领取任务奖励…',
-        message: value => `任务领取：${Array.isArray(value?.claimed) ? value.claimed.length : 0} 项新增，${Array.isArray(value?.skipped) ? value.skipped.length : 0} 项已完成。`,
-        async result(_value, targetProvider) { if (state.provider === targetProvider) await refreshLatestBalances(targetProvider) } })
+      return store.runAutomationTask(state.provider, state.provider === 'loomy' ? 'completeTasks' : 'claimRewards', target)
     },
     lock(locked) { return mutate('credits.permanentLock', { locked: locked === true }) },
     startLogin() {

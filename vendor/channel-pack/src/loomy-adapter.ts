@@ -19,6 +19,7 @@ import type {
 import { AccountPool, providerCatalogVisible } from './account-pool.js'
 import { readCatalogCache, saveCatalogCache } from '../../../lib/catalog-cache.js'
 import { isModelDisabled } from './model-selection.js'
+import { canonicalEffortId, privateEffortFor, uniqueCanonicalEfforts } from './reasoning-ladder.js'
 import { defaultModelEffort, defaultModelOutputTokens, readableModelName, modelRecommendationExclusions } from '../../../lib/model-catalog.js'
 import { nextUtc8DayStartMs } from './model-queue.js'
 import { RemoteCatalogGate } from './remote-catalog-gate.js'
@@ -31,7 +32,7 @@ import {
   splitLoomyRate,
   type LoomyCredential,
 } from './loomy.js'
-import { LOOMY, type LoomyFallbackModel, type LoomyProduct } from './loomy-product.js'
+import { LOOMY, LOOMY_EFFORTS, type LoomyFallbackModel, type LoomyProduct } from './loomy-product.js'
 import {
   registerAdapterIdempotent,
 } from './llm-register-compat.js'
@@ -85,13 +86,9 @@ export interface LoomyRemoteModel {
  * 故这里给中文即中文界面。
  */
 const LOOMY_EFFORT_NAMES: Readonly<Record<string, string>> = {
-  none: '关闭思考',
-  minimal: '最小',
   low: '低',
   medium: '中',
   high: '高',
-  xhigh: '极高',
-  max: '最大',
 }
 
 /**
@@ -165,7 +162,7 @@ export function parseLoomyRemoteModels(payload: unknown): LoomyRemoteModel[] {
     models.push({
       id,
       name: loomyDisplayName(rawName),
-      contextWindow: Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : 0,
+      contextWindow: Number.isSafeInteger(contextWindow) && contextWindow > 0 ? contextWindow : 0,
       ...(modalities?.length ? { supportsImage: modalities.includes('image') } : {}),
       ...(Number.isSafeInteger(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
       supportsThinking: capabilities.reasoning === true,
@@ -246,6 +243,13 @@ export interface LoomyAdapterOptions {
   product?: LoomyProduct
   /** 注入的 fetch（测试用）。 */
   fetchImpl?: typeof fetch
+  /** 旁路观测：记录本次响应流实际由哪个模型服务。 */
+  onServedModel?: (
+    accountId: string | undefined,
+    requestedModel: string,
+    servedModel: string,
+    userId?: string,
+  ) => void
 }
 
 /** Loomy 模型适配器。chat 端点用 Bearer，业务端点用 token。 */
@@ -414,7 +418,9 @@ export class LoomyAdapter extends LlmAdapter {
       name: readableModelName(model, entry !== undefined ? splitLoomyRate(entry.name).name : bareName),
       inputModalities: this.inputModalitiesFor(entry),
     }
-    const contextWindow = entry?.contextWindow ?? fallback?.contextWindow
+    const remoteWindow = entry?.contextWindow
+    const contextWindow = typeof remoteWindow === 'number' && Number.isSafeInteger(remoteWindow) && remoteWindow > 0
+      ? remoteWindow : fallback?.contextWindow
     resolved.defaultMaxTokens = defaultModelOutputTokens(entry?.maxTokens ?? fallback?.maxTokens, contextWindow)
     // 未知模型不编造 context（宁可让 DSH 用默认值，也不报一个假窗口）。
     if (contextWindow !== undefined && contextWindow > 0) {
@@ -445,14 +451,17 @@ export class LoomyAdapter extends LlmAdapter {
     fallback: LoomyFallbackModel | undefined,
   ): LlmResolvedModelInfo['reasoning'] {
     // 远端优先；远端整体失败时用兜底表（两者字段同名同形）。
-    const efforts = entry?.efforts ?? fallback?.efforts
-    if (efforts === undefined || efforts.length === 0) return undefined
-    const defaultEffort = defaultModelEffort(efforts, entry?.defaultEffort ?? fallback?.defaultEffort, LOOMY_PREFERRED_DEFAULT_EFFORT)
+    const efforts = uniqueCanonicalEfforts(entry?.efforts ?? fallback?.efforts ?? [])
+      .filter(({ id }) => LOOMY_EFFORTS.includes(id))
+    if (efforts.length === 0) return undefined
+    const declared = entry?.defaultEffort ?? fallback?.defaultEffort
+    const defaultEffort = defaultModelEffort(efforts.map(effort => effort.id), declared === undefined ? undefined : canonicalEffortId(declared), LOOMY_PREFERRED_DEFAULT_EFFORT)
     return {
-      efforts: efforts.map((id) => ({
+      // 暴露官方客户端的低、中、高三档，网关目录中的其他值不进入选择器。
+      efforts: efforts.map(({ id, wire }) => ({
         id: ReasoningEffortId(id),
         // 未登记的中文名回退到 id 本身（新档位上线时不至于空白）。
-        name: LOOMY_EFFORT_NAMES[id] ?? id,
+        name: LOOMY_EFFORT_NAMES[wire] ?? id,
       })),
       ...defaultEffort === undefined ? {} : { defaultEffort: ReasoningEffortId(defaultEffort) },
     }
@@ -536,13 +545,14 @@ export class LoomyAdapter extends LlmAdapter {
      * —— 服务端对未知字段静默忽略（与「无效模型名回退默认模型」同一模式）。
      * 故这里的字段名依据是**远端自己的命名**，而非「试出来能通」。
      */
-    const effortsForModel = (await this.loadModels()).find((m) => m.id === options.model)?.efforts
-      ?? this.fallbackIndex.get(options.model)?.efforts
-    const effort = options.reasoningEffort !== undefined
-      && effortsForModel !== undefined
-      && effortsForModel.includes(options.reasoningEffort)
-      ? options.reasoningEffort
-      : this.reasoningFor(entry, this.fallbackIndex.get(options.model))?.defaultEffort
+    const fallback = this.fallbackIndex.get(options.model)
+    const effortsForModel = (entry?.efforts ?? fallback?.efforts ?? [])
+      .filter(value => LOOMY_EFFORTS.includes(canonicalEffortId(value) ?? ''))
+    const requestedEffort = privateEffortFor(options.reasoningEffort, effortsForModel)
+    const effort = requestedEffort !== undefined
+      ? requestedEffort
+      : privateEffortFor(this.reasoningFor(entry, fallback)?.defaultEffort,
+        effortsForModel)
 
     /** 构造请求体。 */
     const maxTokens = options.maxTokens ?? defaultModelOutputTokens(entry?.maxTokens, entry?.contextWindow)
@@ -592,9 +602,20 @@ export class LoomyAdapter extends LlmAdapter {
     }
 
     const tried = new Set<string>()
+    const validateRoute = loomyDeepSeekRouteGuard(options.model)
     for (let attempt = 0; attempt < 3; attempt++) {
       if (accountId) tried.add(accountId)
       let emitted = false
+      let observedModel = false
+      const observeModel = (value: unknown) => {
+        if (!observedModel && typeof value === 'string' && /^(?:[a-z0-9_.-]+\/){0,2}[a-z0-9_. -]{1,96}$/i.test(value.trim())) {
+          observedModel = true
+          try {
+            this.options.onServedModel?.(accountId, options.model, value.trim(), credential?.userid)
+          } catch {}
+        }
+        validateRoute?.(value)
+      }
       try {
         let response = await send(credential.access_token)
         if (response.status === 401 || response.status === 403) {
@@ -632,6 +653,10 @@ export class LoomyAdapter extends LlmAdapter {
           firstTokenTimeoutMs: resolveFirstTokenTimeoutMs(),
           chunkTimeoutMs: resolveChunkTimeoutMs(),
           isQuotaError: isLoomyQuotaError,
+          ...((validateRoute || this.options.onServedModel) && {
+            validateFrame: data => observeModel(data.model),
+            validateBareModel: observeModel,
+          }),
           maxTokens,
         })) {
           emitted = true
@@ -671,6 +696,19 @@ export class LoomyAdapter extends LlmAdapter {
         if (isLoomyExpired(credential)) credential = await this.options.refresh(accountId) ?? credential
       }
     }
+  }
+}
+
+function loomyDeepSeekRouteGuard(requested: string) {
+  const modelId = (value: unknown) => typeof value === 'string' ? value.trim().split('/').at(-1) ?? '' : ''
+  const isDeepSeek = (value: string) => /^deepseek(?=[-_.\s\d]|$)/i.test(value)
+  if (!isDeepSeek(modelId(requested))) return undefined
+  return (value: unknown) => {
+    if (typeof value !== 'string' || !/^(?:[a-z0-9_.-]+\/){0,2}[a-z0-9_. -]{1,96}$/i.test(value.trim())) return
+    const served = modelId(value)
+    if (!/^(?:spark|glm|qwen|mimo|kimi|hy|step|sensenova)(?=[-_.\s\d]|$)[a-z0-9_. -]*$/i.test(served)) return
+    // INVALID_REQUEST stops the host retry loop; this is not a quota or rate-limit signal.
+    throw new LlmError(`Loomy：请求 ${requested}，上游返回模型标记 ${served}，已中断响应`, 'INVALID_REQUEST')
   }
 }
 

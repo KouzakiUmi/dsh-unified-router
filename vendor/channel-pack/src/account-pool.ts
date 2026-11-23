@@ -154,7 +154,8 @@ export class AccountPool {
   /** 锁定表的独立后端（权威落盘点）。 */
   private readonly lockStore: PermanentLockStore
 
-  constructor(private readonly ctx: Context) {
+  constructor(private readonly ctx: Context, private readonly quotaAccountOrder?: (provider: string, ids: string[]) => readonly string[],
+    private readonly noteQuotaAccount?: (provider: string, accountId: string, model?: string) => void) {
     this.store = createChannelPackStore(ctx)
     this.lockStore = createPermanentLockStore(ctx)
     if (this.store.kind === 'memory') {
@@ -984,7 +985,7 @@ export class AccountPool {
    *
    * **为什么需要 `excludeAccountIds`**：调用方在「请求级轮换」时会逐个换号
    * 重试，必须能拿到**下一个**账号而不是每次都拿回同一个。
-   * 本池默认按「重置时间最早到期」排序，当失败类别**不写限流标记**时
+   * 本池使用手动顺序或宿主注入的额度顺序，当失败类别**不写限流标记**时
    * （如 5xx / 请求错误 —— 它们不是限流，不该留徽章），
    * 刚失败的账号仍是排序第一，调用方若不排除它就会原地打转、
    * 换号形同虚设。Go 侧对应的是 `PickExcluding(tried)`（`pool.go:131`）。
@@ -1008,16 +1009,13 @@ export class AccountPool {
         return resetAt === undefined || resetAt === 0 || Date.now() >= resetAt
       })
     if (candidates.length === 0) return null
-    // 候选顺序即**用户在 Channel Pack 拖拽设定的手动顺序**（`reorderAccounts` 写入）。
-    //
-    // 为什么不再按「限流重置时间最早到期」重排（早期实现如此）：
-    // 那个排序会让手动顺序形同虚设 —— 用户把某账号拖到首位，只要另一个
-    // 账号的限流重置时间更早，实际选中的仍是后者，拖拽变成纯 UI 装饰。
-    // 现在的语义是「手动顺序优先，限流豁免」：顺序完全由用户决定，
-    // 而当前正处于限流期的账号已被上面的 filter 排除，不会选到。
-    //
-    // 注意 candidates 来自 readAccounts() 的 filter，而 filter 保持原数组
-    // 顺序，故这里天然就是手动顺序，无需任何排序。
+    // 手动顺序是基线。只有独立宿主明确开启额度优先时，才重排已过滤的候选。
+    if (modelId && this.quotaAccountOrder && candidates.length > 1) {
+      // 第三参带 modelId：粘滞（缓存优先）按「provider + 模型」找最近服务账号。
+      const order = this.quotaAccountOrder(provider, candidates.map(entry => entry.id), { modelId })
+      const positions = new Map(order.map((id, index) => [id, index]))
+      candidates.sort((a, b) => (positions.get(a.id) ?? order.length) - (positions.get(b.id) ?? order.length))
+    }
     //
     // 逐个尝试解析凭据，跳过占位/损坏条目（并记录原因，避免静默失败）
     const failures: string[] = []
@@ -1040,7 +1038,8 @@ export class AccountPool {
             `[channel-pack] ${failures.length} 个 ${provider} 账号不可用，已跳过：${failures.join('; ')}`,
           )
         }
-        return { entry, credential }
+         if (modelId) this.noteQuotaAccount?.(provider, entry.id, modelId)
+         return { entry, credential }
       } catch (error) {
         failures.push(`${entry.id}: 凭据 JSON 损坏 (${String(error)})`)
         continue

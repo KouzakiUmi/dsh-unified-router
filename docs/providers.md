@@ -91,6 +91,7 @@
 - **模型目录来源**：`GET /anthropic/v1/models`（`x-api-key` 或 Bearer 皆可），返回 `{data:[{id, display_name, context_window, max_output}], has_more, last_id}`，支持 `limit` / `after_id` 分页（官方文档，**未用真实 Key 实测**）。离线兜底为 4 条官方文档确认存在的 u2 系列。
 - **模型**：Unisound 自家 `u2-flash`、`u2`、`u2-med`、`u2-radimed`；另有 DeepSeek、豆包、混元、MiMo、Kimi、GLM、MiniMax、Qwen 等第三方模型，同一把 Key 调用（官方文档）。
 - **思考档位**：`u2`、`u2-flash`、`u2-med` 的 `reasoning_effort` 取 `none` / `minimal` / `low` / `medium` / `high` / `xhigh`，默认 `high`，`max` 映射为 `xhigh`；`u2-flash` 产品页另写 `none` / `low` / `high` / `max` 四档。`u2-radimed` 默认关闭且不支持开启。其余模型（含第三方模型）未获确认，不挂思考档位（官方文档）。
-- **模型参数**：目录返回 `context_window` 与 `max_output`。`u2-flash` 官方产品页标注上下文 1M / 最大输出 128K，其余三个无公开规格，记 0。图片输入按未知处理。
+- **模型参数**：优先使用目录返回的 `context_window` 与 `max_output`；目录缺字段时用**真实 Key 拉取的目录真值**（2026-11-23 核对，`GET /anthropic/v1/models` 返 30 条）：`u2-flash` 1,048,576 / 262,144、`u2` 160,000 / 64,000、`u2-med` 262,144、`u2-radimed` 40,960。`u2-med` 与 `u2-radimed` 的上游 `max_output` 就是 `null`（**不公开**）→ 记 0，输出预算走通用推导，不编造官方值。离线兜底表用同组真值。
+- **附图**：`u2-flash`、`u2-med`、`u2-radimed` 可直接附图聊天（`u2-med` 官方产品页「输入模态：文本、图片」；`u2` 只声明文本输入）。
 - **额度 / 用量**：**官方文档没有公开余额接口，设置页不显示用量**。「渠道」分区只显示 API Key 与模型提供方开关。
 - **限制**：目录的分页由 `after_id` 游标驱动。无 Key 时目录显示兜底表，模型提供方开关不可用。

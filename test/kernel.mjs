@@ -6,7 +6,7 @@ export class Service {
 }
 export class LlmAdapter {}
 export class LlmError extends Error {
-  constructor(code, message) { super(message); this.code = code }
+  constructor(message, code) { super(message); this.code = code }
 }
 export const credentialRef = value => value
 export const ReasoningEffortId = value => value

@@ -96,7 +96,7 @@ export interface LoomyProduct {
  * ⚠️ 远端可用时**优先用远端的 `reasoning_efforts`**，本常量只在远端整体失败时
  * 顶替（与 `contextWindow` 同策略）。
  */
-const LOOMY_EFFORTS: readonly string[] = ['none', 'low', 'medium', 'high', 'xhigh']
+export const LOOMY_EFFORTS: readonly string[] = ['low', 'medium', 'high']
 
 /**
  * 本插件选用的默认档位（**用户要求 `high`**）。

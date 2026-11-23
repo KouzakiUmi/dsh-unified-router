@@ -1,7 +1,7 @@
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, publicResult } from '../lib/web-host.js'
@@ -10,7 +10,7 @@ import { createSettingsSnapshots, SNAPSHOT_INTERVAL_MS } from '../lib/settings-s
 import { createDailyCheckin } from '../lib/daily-checkin.js'
 import { settingsCheckinAdapters } from '../lib/settings-providers.js'
 
-function fixture({ autoCollect = false, snapshotFile, balance } = {}) {
+function fixture({ autoCollect = false, snapshotFile, balance, testDeps, requestRejection } = {}) {
   const routes = new Map(); const calls = []; const cleanup = []; let disposed = false
   const account = { id: 'a', provider: 'loomy', nickname: '测试', enabled: true, credentialRef: 'PRIVATE_REF', token: 'NEVER_DISPLAY', refreshToken: 'PRIVATE_REFRESH' }
   const raw = async (method, payload) => {
@@ -21,16 +21,54 @@ function fixture({ autoCollect = false, snapshotFile, balance } = {}) {
     return { ok: false, error: { code: 'upstream', message: 'secret=NEVER_DISPLAY' } }
   }
   const connection = {
+    requestRejection,
     createPeer() { return { dispose() { disposed = true } } },
     createSharedFetchHandler(base) { assert.equal(base, '/api'); return { async fetch(request) { const body = await request.json(); return Response.json({ type: 'server-response', rpcId: body.rpcId, result: await raw(body.payload.method, body.payload.payload) }) } } },
     fetch: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
   }
-  const ctx = { connection, credentials: {}, llm: {}, get: key => ctx[key], inject(_deps, fn) { fn(this) }, effect(fn) { cleanup.push(fn()) } }
-  apply(ctx, { backend: 'shared' }, { autoCollect, snapshotFile })
+  const streamHooks = []
+  const ctx = { connection, credentials: {}, llm: {}, get: key => ctx[key], inject(_deps, fn) { fn(this) }, effect(fn) { cleanup.push(fn()) },
+    on(name, fn) { if (name === 'llm/stream') streamHooks.push(fn); return () => {} } }
+  apply(ctx, { backend: 'shared' }, { autoCollect, snapshotFile, ...testDeps })
   const route = routes.get('/api/unified-router')
   const call = async (method, payload) => { const response = await route.fetch(new Request('http://dsh.internal/api/unified-router', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'test-rpc', method: 'unified-router', payload: { method, payload } }) })); return response.json() }
-  return { routes, calls, call, route, dispose() { for (const stop of cleanup.reverse()) stop?.() }, get disposed() { return disposed } }
+  return { routes, calls, call, route, streamHooks, dispose() { for (const stop of cleanup.reverse()) stop?.() }, get disposed() { return disposed } }
 }
+
+test('额度账号 RPC 仅返回命中的会话和模型，不写入设置快照，且经宿主授权', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-quota-account-'))
+  let note, reject, order
+  const f = fixture({ snapshotFile: join(dir, 'settings.json'), requestRejection: () => reject,
+    testDeps: { createManagedManager(_host, _spec, deps) {
+      note = deps.noteQuotaAccount
+      order = deps.quotaAccountOrder
+      return { call: async () => ({ accounts: [] }), dispose() {} }
+    } } })
+  const route = { provider: 'codearts', model: 'test-model', sessionId: 'session-one' }
+  try {
+    await f.call('managed.snapshot', { provider: route.provider })
+    assert.equal(typeof note, 'function')
+    assert.equal(typeof order, 'function')
+    const stream = f.streamHooks[0](route, async function* () { note('codearts', 'account-two', route.model); yield 1 })
+    await stream.next()
+    assert.deepEqual((await f.call('quota.account', route)).result, { ok: true, value: { accountId: 'account-two', live: true } })
+    // 智能选号模式接线：sticky 下 managed 的选号重排把最近服务账号置顶，
+    // manual 下原样返回（模式经 automation.setConfig 动态切换，无需重启）。
+    assert.equal((await f.call('automation.setConfig', { routingMode: 'sticky' })).result.ok, true)
+    assert.deepEqual(order('codearts', ['account-one', 'account-two', 'account-three'], { modelId: route.model }),
+      ['account-two', 'account-one', 'account-three'])
+    assert.deepEqual(order('codearts', ['account-one', 'account-three'], { modelId: route.model }), ['account-one', 'account-three'])
+    assert.equal((await f.call('automation.setConfig', { routingMode: 'manual' })).result.ok, true)
+    assert.deepEqual(order('codearts', ['account-one', 'account-two'], { modelId: route.model }), ['account-one', 'account-two'])
+    assert.equal((await f.call('quota.account', { ...route, sessionId: 'session-two' })).result.value, null)
+    assert.equal((await f.call('quota.account', { ...route, model: 'other' })).result.value, null)
+    await stream.return()
+    assert.equal((await f.call('quota.account', route)).result.value.live, false)
+    assert.doesNotMatch(JSON.stringify(await f.call('settings.snapshot', {})), /session-one|account-two/)
+    reject = 403
+    assert.equal((await f.call('quota.account', route)).result.error.code, 'unified-router/forbidden')
+  } finally { f.dispose(); await rm(dir, { recursive: true, force: true }) }
+})
 test('安装清单仅提供 Web 设置客户端，没有原生胶囊或面板贡献', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
   assert.equal(pkg.dshGo, undefined); assert.equal(pkg.main, 'lib/web-host.js')
@@ -39,6 +77,34 @@ test('安装清单仅提供 Web 设置客户端，没有原生胶囊或面板贡
   // 做 provider.status 与模型 RPC；账号只有一个池（`raccoon`），卡片也只有一张。
   assert.deepEqual(PROVIDERS.map(p => p.id), ['loomy','raccoon','raccoon-pro','qodercn','trae'])
 })
+test('宿主忽略退役渠道快照，拒绝转发旧模型、账号和自动化调用', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-retired-provider-'))
+  const snapshotFile = join(dir, 'settings.json')
+  const prior = JSON.stringify({ version: 1, entries: {
+    'coze/managed.models': { at: 1, value: { provider: 'coze', models: [{ id: 'legacy' }] } },
+    'coze/managed.snapshot': { at: 1, value: { provider: 'coze', accounts: [{ id: 'legacy' }] } },
+    'doubaowork/managed.models': { at: 1, value: { provider: 'doubaowork', models: [{ id: '9' }] } },
+    'doubaowork/managed.snapshot': { at: 1, value: { provider: 'doubaowork', accounts: [{ id: 'legacy' }] } },
+    'codearts/managed.models': { at: 1, value: { provider: 'codearts', models: [{ id: 'openpangu-2.0-flash' }] } },
+  } })
+  await writeFile(snapshotFile, prior)
+  const host = fixture({ snapshotFile })
+  try {
+    const { result } = await host.call('settings.snapshot', {})
+    assert.equal(result.ok, true)
+    assert.ok(result.value.entries['codearts/managed.models'])
+    for (const provider of ['coze', 'doubaowork']) {
+      assert.ok(!Object.keys(result.value.entries).some(key => key.startsWith(`${provider}/`)))
+      for (const method of ['managed.models', 'managed.snapshot', 'managed.login', 'automation.run']) {
+        assert.equal((await host.call(method, { provider })).result.ok, false)
+      }
+      assert.equal((await host.call('quota.account', { provider, sessionId: 'old', model: '9' })).result.value, null)
+      assert.ok(!host.calls.some(call => call.payload?.provider === provider))
+    }
+    assert.equal(await readFile(snapshotFile, 'utf8'), prior, '只读检查不清理历史状态盘')
+  } finally { host.dispose(); await rm(dir, { recursive: true, force: true }) }
+})
+
 test('account.list 投影白名单带 plan，枚举外的值一律丢弃', async () => {
   const { publicResult } = await import('../lib/web-host.js')
   const rows = publicResult('account.list', { accounts: [
@@ -61,6 +127,15 @@ test('共享主机注册独立接口，保持 RPC 信封并投影公开账号字
   } finally { f.dispose() }
   assert.equal(f.disposed, true); assert.equal(f.routes.size, 0)
 })
+test('共用模式不向外部旧后端转发上下文单字段写入', async () => {
+  const f = fixture()
+  try {
+    const body = await f.call('model.setParams', { provider: 'loomy', modelId: 'm1', contextOnly: true, params: { contextWindow: 200_000 } })
+    assert.equal(body.result.ok, false)
+    assert.ok(!f.calls.some(call => call.method === 'model.setParams'))
+  } finally { f.dispose() }
+})
+
 test('接口拒绝其它渠道和跨渠道账号', async () => {
   const f = fixture()
   try {
@@ -205,16 +280,52 @@ test('商汤 Plan RPC 走独立白名单，快照只投影公开字段', async (
 test('商汤 Plan 写操作拒绝跨 Origin 请求，不触发后端或旧渠道', async () => {
   const f = fixture()
   try {
-    const response = await f.route.fetch(new Request('http://dsh.internal/api/unified-router', {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
-      body: JSON.stringify({ type: 'client-request', rpcId: 'plan-rpc', method: 'unified-router', payload: { method: 'plan.setEnabled', payload: { provider: 'sensenova-token-plan', enabled: true } } }),
-    }))
-    const body = await response.json()
-    assert.equal(body.result.ok, false)
-    assert.equal(body.result.error.code, 'unified-router/forbidden')
-    assert.deepEqual(body.result.error.details, {}, '失败信封须符合 DSH 客户端 RPC 协议')
+    for (const method of ['plan.setEnabled', 'plan.consoleLogin', 'automation.query']) {
+      const response = await f.route.fetch(new Request('http://dsh.internal/api/unified-router', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'plan-rpc', method: 'unified-router', payload: { method, payload: { provider: 'sensenova-token-plan', enabled: true } } }),
+      }))
+      const body = await response.json()
+      assert.equal(body.result.ok, false)
+      assert.equal(body.result.error.code, 'unified-router/forbidden')
+      assert.deepEqual(body.result.error.details, {}, '失败信封须符合 DSH 客户端 RPC 协议')
+    }
     assert.equal(f.calls.length, 0)
   } finally { f.dispose() }
+})
+
+test('宿主手动查询只触发渠道核实，已确认的签到不再提交', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-query-'))
+  const calls = []
+  let deny
+  const host = fixture({ snapshotFile: join(dir, 'settings.json'), requestRejection: () => deny, testDeps: {
+    createManagedManager(_ctx, spec) {
+      return {
+        async listAccounts() { return [{ id: 'fixture-account', name: '测试' }] },
+        async call(method) {
+          calls.push([spec.id, method])
+          return { outcome: 'done', credit: 80, token: 'NEVER_DISPLAY' }
+        },
+        dispose() {},
+      }
+    },
+  } })
+  const target = { provider: 'codearts', mode: 'checkin', accountId: 'fixture-account' }
+  try {
+    deny = 403
+    assert.equal((await host.call('automation.query', target)).result.error.code, 'unified-router/forbidden')
+    deny = undefined
+    const { result } = await host.call('automation.query', target)
+    assert.equal(result.ok, true)
+    assert.equal(result.value.results[0].verified, true)
+    assert.equal(result.value.results[0].outcome.kind, 'already-claimed')
+    assert.doesNotMatch(JSON.stringify(result), /NEVER_DISPLAY/)
+    const ledger = (await host.call('automation.query', target)).result.value.results[0]
+    assert.equal(ledger.outcome.kind, 'already-claimed')
+    assert.equal((await host.call('managed.checkin', target)).result.value.outcome, 'done')
+    assert.ok(calls.length >= 1)
+    assert.ok(calls.every(([id, method]) => id === 'codearts' && method === 'managed.checkinStatus'))
+  } finally { host.dispose(); await rm(dir, { recursive: true, force: true }) }
 })
 
 test('WorkBuddy 投影逐账号白名单：错误码、窗口与登录地址过滤，凭据与上游原文不外放', () => {

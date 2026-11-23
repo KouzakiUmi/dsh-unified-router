@@ -1,15 +1,72 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createManagedChannelManager } from '../lib/managed-channel.js'
 import { createManagedAdapter, toManagedModelDescriptor } from '../lib/managed-llm.js'
 import { astudioSpec, parseAStudioCatalog, sanitizeAStudioCredential } from '../lib/managed-providers/astudio.js'
-import { doubaoworkSpec, parseDoubaoSsrModels, parseDoubaoSseBlock, extractDoubaoToolCalls, sanitizeDoubaoWorkCredential } from '../lib/managed-providers/doubaowork.js'
-import { cozeSpec, parseCozeModelList, sanitizeCozeCredential } from '../lib/managed-providers/coze.js'
-import { codeartsSpec, signHuaweiRequest, parseCodeArtsBuiltinModels, mergeConsecutiveTurns, sanitizeCodeArtsCredential } from '../lib/managed-providers/codearts.js'
+import { createVerify, generateKeyPairSync } from 'node:crypto'
+import { codeartsSpec, createDpopJwt, signHuaweiRequest, parseCodeArtsBuiltinModels, mergeConsecutiveTurns, sanitizeCodeArtsCredential } from '../lib/managed-providers/codearts.js'
 import { MANAGED_PROVIDERS, MANAGED_PROVIDER_IDS } from '../lib/managed-providers/index.js'
+
+test('码道兼容累计正文和旧版增量，标准帧与用量原样保留', async () => {
+  const { normalizeCodeArtsStream } = await import('../lib/managed-providers/codearts-stream.js')
+  const model = 'openpangu-2.0-flash'
+  const source = frames => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(''),
+    { headers: { 'content-type': 'text/event-stream', 'content-length': '100' } })
+  const read = async response => (await normalizeCodeArtsStream(response, { model }).text()).trim().split('\n\n')
+    .map(line => line.slice(6)).map(data => data === '[DONE]' ? data : JSON.parse(data))
+  const legacy = await read(source([{ type: 'answer' }, { text: '你' }, { text: '你好' }, { text: '你好' },
+    { delta: { content: '！' } }, { text: '[DONE]', error_code: '0' }]))
+  assert.deepEqual(legacy.slice(0, 3).map(event => event.choices[0].delta.content), ['你', '好', '！'])
+  assert.equal(legacy.at(-2).choices[0].finish_reason, 'stop')
+  assert.equal(legacy.at(-1), '[DONE]')
+  const standard = [{ model, choices: [{ index: 0, delta: { content: '你好', reasoning_content: '思考' }, finish_reason: 'stop' }] },
+    { model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 4 } }]
+  assert.deepEqual(await read(source(standard)), standard)
+  const failed = await read(source([{ error_code: 'fixture-error', error_msg: 'raw fixture' }, { text: '[DONE]' }]))
+  assert.equal(failed.length, 1)
+  assert.match(failed[0].error.message, /CodeArts/)
+  assert.doesNotMatch(failed[0].error.message, /raw fixture/)
+})
+
+test('码道完整消息中的 Context7 工具调用：JSON 和 SSE 都可还原给 PiAi', async () => {
+  const { normalizeCodeArtsStream } = await import('../lib/managed-providers/codearts-stream.js')
+  const model = 'openpangu-2.0-flash'
+  const call = { id: 'call_fixture', type: 'function', function: { name: 'mcp__context7__resolve-library-id', arguments: '{}' } }
+  const message = { role: 'assistant', content: null, tool_calls: [call] }
+  const object = { model, choices: [{ index: 0, delta: {}, message, finish_reason: 'stop' }], usage: { completion_tokens: 5 } }
+  for (const response of [Response.json(object), new Response(`data: ${JSON.stringify(object)}\n\ndata: [DONE]\n\n`,
+    { headers: { 'content-type': 'text/event-stream' } })]) {
+    const normalized = normalizeCodeArtsStream(response, { model })
+    assert.equal(normalized.headers.get('content-type'), 'text/event-stream')
+    const lines = (await normalized.text()).trim().split('\n\n')
+    const first = JSON.parse(lines[0].slice(6))
+    assert.deepEqual(first.choices[0].delta.tool_calls, [{ ...call, index: 0 }])
+    assert.equal(first.choices[0].finish_reason, 'tool_calls')
+    assert.deepEqual(first.usage, object.usage)
+    assert.equal(lines.at(-1), 'data: [DONE]')
+  }
+})
+
+test('码道工具增量保留原样，按真实终止帧结束且不重发消息快照', async () => {
+  const { normalizeCodeArtsStream } = await import('../lib/managed-providers/codearts-stream.js')
+  const model = 'openpangu-2.0-flash'
+  const call = { index: 0, id: 'call_fixture', type: 'function', function: { name: 'mcp__context7__query-docs', arguments: '{}' } }
+  const delta = { choices: [{ index: 0, delta: { content: '查阅文档', tool_calls: [call] }, finish_reason: null }] }
+  const terminal = { choices: [{ index: 0, message: { content: '查阅文档', tool_calls: [call] }, delta: {}, finish_reason: 'other' }] }
+  const frames = (end = '') => new Response(`data: ${JSON.stringify(delta)}\n\n${end}`,
+    { headers: { 'content-type': 'text/event-stream' } })
+  const read = async response => (await normalizeCodeArtsStream(response, { model }).text()).trim().split('\n\n')
+  const [original, final] = await read(frames(`data: ${JSON.stringify(terminal)}\n\ndata: [DONE]\n\n`))
+  assert.deepEqual(JSON.parse(original.slice(6)), delta)
+  assert.deepEqual(JSON.parse(final.slice(6)).choices[0].delta, {})
+  assert.equal(JSON.parse(final.slice(6)).choices[0].finish_reason, 'tool_calls')
+  const [, finish] = await read(frames('data: [DONE]\n\n'))
+  assert.equal(JSON.parse(finish.slice(6)).choices[0].finish_reason, 'tool_calls')
+  assert.equal((await read(frames())).length, 1, '没有明确的服务端终止信号，不能合成成功')
+})
 
 function memoryHost() {
   const store = new Map()
@@ -39,9 +96,9 @@ function memoryHost() {
   }
 }
 
-test('MANAGED_PROVIDERS 注册表包含全部四个新渠道', () => {
-  assert.deepEqual(MANAGED_PROVIDER_IDS, ['astudio', 'doubaowork', 'coze', 'codearts'])
-  assert.equal(MANAGED_PROVIDERS.length, 4)
+test('自管注册表只提供 AStudio 和 CodeArts', () => {
+  assert.deepEqual(MANAGED_PROVIDER_IDS, ['astudio', 'codearts'])
+  assert.equal(MANAGED_PROVIDERS.length, 2)
 })
 
 test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭据脱敏/compat 模型参数', async t => {
@@ -49,6 +106,7 @@ test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭�
   t.after(() => rm(dir, { recursive: true, force: true }))
   const host = memoryHost()
   let savedRefHandle = null
+  let preferredAccount, passedModel
   const spec = {
     id: 'demo',
     title: 'Demo',
@@ -75,7 +133,11 @@ test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭�
     stateFile: join(dir, 'state.json'),
     catalogFile: join(dir, 'catalog.json'),
     modelSettingsFile: join(dir, 'models.json'),
-    createAdapter: async ({ rows, providerId }) => ({ providerIds: [providerId], adapter: { id: providerId, rows } }),
+    quotaAccountOrder: (_provider, ids, context) => {
+      passedModel = context?.model?.id ?? context?.modelId
+      return ids.includes(preferredAccount) ? [preferredAccount, ...ids.filter(id => id !== preferredAccount)] : ids
+    },
+    createAdapter: async ({ rows, providerId, selectTransport }) => ({ providerIds: [providerId], adapter: { id: providerId, rows, selectTransport } }),
   })
   try {
     const imported = await manager.call('managed.importLocal', { provider: 'demo' })
@@ -90,6 +152,11 @@ test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭�
     const pasted = await manager.call('managed.importCredential', { provider: 'demo', credential: 'SECRET_PASTE_2' })
     assert.equal(pasted.signedIn, true)
     assert.notEqual(pasted.id, imported.id)
+    preferredAccount = pasted.id
+    const pick = host.registered[0].adapter.selectTransport
+    assert.equal((await pick('demo-1', {})).accountId, pasted.id)
+    assert.equal(passedModel, 'demo-1')
+    assert.equal((await pick('demo-1', {}, new Set([pasted.id]))).accountId, imported.id)
 
     const snap = await manager.collectSnapshot()
     assert.equal(snap.accounts.length, 2)
@@ -154,48 +221,6 @@ test('AStudio：目录解析与补位规则、隐藏模型不补位、凭据收�
   }, { request: { reasoningEffort: 'off' } })
   assert.equal(sentBody.store, false)
   assert.equal(sentBody.reasoning.effort, 'none')
-})
-
-test('豆包工作：SSR 双路径模型解析、SSE 补丁流解析与图片拒绝', () => {
-  const html = `<script>window.__DATA__={"modeSelectData":{"menuConfV2":{"model_list":{"item_list":[{"model_item_key":"ds-v4","name":"DeepSeek V4.1","conversation_mode_list":["office"],"model_extra_params":{"total_window_size":300000},"reasoning_effort_config":{"option_list":[{"level":3},{"level":5},{"level":7}],"default_level":5},"tag_list":[{"type":6,"text":"限时优惠 0.01x"}]},{"model_item_key":"locked-pro","name":"Locked","subscribe_config":{"need_upgrade":true}}]}}}};</script>`
-  const models = parseDoubaoSsrModels(html)
-  assert.equal(models.length, 1)
-  assert.equal(models[0].id, 'ds-v4')
-  assert.equal(models[0].context, 300_000)
-  assert.equal(models[0].rate, 0.01)
-  assert.deepEqual(models[0].efforts, ['low', 'high', 'max'])
-  assert.equal(models[0].attachment, false)
-
-  const state = { thinkingBlocks: new Set(), lastIsThinking: false, conversationId: '' }
-  const ev1 = parseDoubaoSseBlock('STREAM_CHUNK', {
-    patch_op: [{ patch_value: { content_block: [{ block_id: 'b1', block_type: 10040, content: { text_block: { text: '思考中' } } }] } }],
-  }, state)
-  assert.deepEqual(ev1, [{ kind: 'thinking', text: '思考中' }])
-  const ev2 = parseDoubaoSseBlock('CHUNK_DELTA', { text: '继续思考' }, state)
-  assert.deepEqual(ev2, [{ kind: 'thinking', text: '继续思考' }])
-  const ev3 = parseDoubaoSseBlock('STREAM_CHUNK', {
-    patch_op: [{ patch_value: { content_block: [{ block_id: 'b2', block_type: 10000, content: { text_block: { text: '正文回答' } } }] } }],
-  }, state)
-  assert.deepEqual(ev3, [{ kind: 'text', text: '正文回答' }])
-  assert.equal(sanitizeDoubaoWorkCredential({ cookie: 'foo=bar' }), null)
-  assert.ok(sanitizeDoubaoWorkCredential({ cookie: 'sessionid=abc123; s_v_web_id=fp1' }))
-
-  const tc = extractDoubaoToolCalls('```json\n{"content":"查一下","tool_calls":[{"name":"read","arguments":{"file_path":"a.js"}}]}\n```', ['read'])
-  assert.equal(tc.content, '查一下')
-  assert.equal(tc.toolCalls.length, 1)
-  assert.equal(tc.toolCalls[0].name, 'read')
-  assert.deepEqual(tc.toolCalls[0].arguments, { file_path: 'a.js' })
-  // 混排解释文本中的示例代码块不得误触发工具调用
-  assert.equal(
-    extractDoubaoToolCalls('这是工具调用 JSON 示例：\n```json\n{"content":"","tool_calls":[{"name":"read","arguments":{}}]}\n```', ['read']),
-    null,
-    '带前后自然语言说明的示例代码不得触发 toolUse',
-  )
-  // 未声明在工具白名单内的名称不得触发
-  assert.equal(
-    extractDoubaoToolCalls('{"content":"","tool_calls":[{"name":"evil_tool","arguments":{}}]}', ['read']),
-    null,
-  )
 })
 
 test('managed-llm 429 处理：单账号保留原始 429 响应体可读，三账号 A/B=429 时自动轮换至 C=200', async () => {
@@ -324,71 +349,127 @@ test('自管管理器异步注册竞态与多账号故障切换：删号/dispose
   } finally { manager.dispose() }
 })
 
-test('豆包工作：兼容额度备用结构及任务状态，只读取不领奖', async () => {
-  const usage = await doubaoworkSpec.fetchUsage({
-    getCredential: async () => ({ cookie: 'sessionid=fixture' }),
-    saveCredential: async () => true,
-    fetch: async url => {
-      const path = new URL(url).pathname
-      if (path.includes('/account/info/')) return Response.json({ data: { user_id_str: '123' } })
-      if (path.endsWith('/launch')) return Response.json({ data: { ug_campaign_info: { campaign_group_code: 'fixture' } } })
-      if (path.endsWith('/summary/')) return Response.json({}, { status: 503 })
-      if (path.endsWith('/overview/')) return Response.json({ data: { quota_package_section: { window_limit_groups: [{
-        window_limits: [{ window_type: 3, total_amount: '2,100', used_amount: '1,700' }],
-      }] } } })
-      assert.ok(path.endsWith('/detail/'), '不提交任何领取或完成请求')
-      return Response.json({ data: { tasks: [{ task_status: 2 }, { task_status: 3 }, { task_status: 1, reward_mode: 2 }] } })
+test('CodeArts：按模型发布思考档位并应用输出硬上限', async () => {
+  const { createManagedModelSettings } = await import('../lib/managed-models.js')
+  const codeartsParsed = await codeartsSpec.fetchModels({
+    getCredential: async () => ({ accessKey: 'a', secretKey: 's', securityToken: 't' }),
+    fetch: async (url, init) => {
+      if (url.endsWith('/v1/model/builtin')) return Response.json({ builtinModels: [
+        { model_id: 'glm-5.3-flash', display_name: 'GLM-5.3-Flash', context_window: 1_048_576, max_tokens: 131_072 },
+        { model_id: 'openpangu-2.1-pro', think_level: 'high', context_window: 200_000, max_tokens: 32_000 },
+      ] })
+      if (url.endsWith('/api/v1/gateway/config')) return Response.json({ result: { models: [] } })
+      assert.match(url, /\/v1\/model\/thinking-variants$/)
+      assert.equal(init.method, 'POST')
+      assert.deepEqual(JSON.parse(init.body), { model_names: ['glm-5.3-flash', 'openpangu-2.1-pro'] })
+      return Response.json({ variants: {
+        'GLM-5.3-FLASH': { strengths: ['low', 'high', 'max', 'invalid', 'low'], default_strength: 'high' },
+        'openpangu-2.1-pro': { strengths: [], default_strength: 'high' },
+      } })
     },
   }, {})
-  assert.equal(usage.balance, 400)
-  assert.equal(usage.windows[0].name, '活动赠送')
-  assert.equal(usage.windows[1].display, '待领取 2 项 · 已领取 1 项')
-  assert.equal(doubaoworkSpec.completeTasks, undefined)
+  assert.deepEqual(codeartsParsed[0].efforts, ['low', 'high', 'max'])
+  assert.deepEqual(codeartsParsed[1].efforts, [])
+  const reasoning = toManagedModelDescriptor(codeartsParsed[0], 'codearts', codeartsSpec)
+  const plain = toManagedModelDescriptor(codeartsParsed[1], 'codearts', codeartsSpec)
+  assert.equal(reasoning.reasoning, true)
+  assert.equal(reasoning.thinkingLevelMap.high, 'high')
+  assert.equal(reasoning.thinkingLevelMap.max, 'max')
+  assert.equal(reasoning.thinkingLevelMap.off, null)
+  assert.equal(plain.reasoning, false)
+  assert.equal(plain.thinkingLevelMap, undefined)
+  const caModels = await createManagedModelSettings(null, 'codearts').list(codeartsParsed)
+  assert.equal(caModels[0].output, 131_072, '保留目录规格')
+  assert.equal(caModels[0].maxOutputLength, 65_536, '默认输出按 CodeArts v2 网关硬上限 65,536 夹取（64K）')
+  const zxModels = await createManagedModelSettings(null, 'codearts').list([codeartsSpec.fallbackModels[1]])
+  assert.equal(zxModels[0].defaultMaxOutputLength, 65_536, 'GLM-5.2-ZX 兜底命中官方规格并收口到 64K')
 })
 
-test('Coze：额度业务失败不撤销登录状态，明确鉴权失败才标过期', async () => {
-  const run = code => cozeSpec.fetchUsage({
-    getCredential: async () => ({ patToken: 'cztei_fixture', ownerId: 'fixture' }),
-    fetch: async () => Response.json({ code }),
-  }, {})
-  assert.deepEqual(await run(500), { error: 'upstream_error' })
-  assert.deepEqual(await run(700012006), { signedIn: false, error: 'auth_expired' })
-})
-
-test('Coze：实时模型目录与倍率/多模态能力解析、凭据收敛', async () => {
-  const models = parseCozeModelList({
-    data: {
-      models: [
-        { name: 'glm-5.3-flash', display_name: 'GLM-5.3-Flash', capability: ['图片理解', '推理能力'], consumption_multiplier: 0.1 },
-        { name: 'deepseek-v4-pro', display_name: 'DeepSeek-V4-Pro', capability: ['推理能力'], consumption_multiplier: 0.62 },
-      ],
+test('CodeArts：共用账号会话并保持模型档位；最后一条流取消后空闲释放', async () => {
+  const calls = []
+  const transport = await codeartsSpec.createTransport({
+    entry: { id: 'codearts-fixture' },
+    getCredential: async () => ({ accessKey: 'a', secretKey: 's', securityToken: 't' }),
+    fetch: async (url, init) => {
+      const status = new URL(url).searchParams.get('status')
+      assert.equal(init.headers['user-session-id'], 'fixture-session')
+      if (status) {
+        assert.equal(init.method, 'PUT')
+        assert.equal(init.signal.aborted, false, '释放不能复用请求已取消的 signal')
+        calls.push(status)
+        return Response.json({ status: 'ok' })
+      }
+      assert.equal(init.headers['x-ot-session-id'], 'fixture-session')
+      const body = JSON.parse(init.body)
+      assert.equal(body.enable_thinking, undefined)
+      assert.equal(body.max_tokens, 65_536)
+      assert.equal(body.max_completion_tokens, 65_536)
+      calls.push([body.model, body.reasoning_effort])
+      return new Response(new ReadableStream({}), { headers: { 'content-type': 'text/event-stream' } })
     },
   })
-  assert.equal(models.length, 2)
-  assert.equal(models[0].attachment, true)
-  assert.equal(models[0].reasoning, true)
-  assert.equal(models[0].rate, 0.1)
-  assert.equal(models[1].attachment, false)
-  assert.equal(models[1].context, null)
-  assert.equal(sanitizeCozeCredential({}), null)
-  assert.equal(sanitizeCozeCredential({ patToken: 'cztei_abc' }).patToken, 'cztei_abc')
-
-  // 无 efforts 的 Coze 模型绝不能产出 reasoning: true + 全 null thinkingLevelMap（否则 DSH Core 报 invalid reasoning metadata）
-  const desc = toManagedModelDescriptor({ ...models[0], contextWindow: 128_000, maxOutputLength: 32_768 }, 'coze', cozeSpec)
-  assert.equal(desc.reasoning, false)
-  assert.equal(desc.thinkingLevelMap, undefined)
-
-  // 无 Cookie 的桌面 PAT 账号 claimRewards 不误报 failed
-  const noCookieRes = await cozeSpec.claimRewards({
-    entry: { source: 'local' },
-    fetch: async () => { throw new Error('不应发起请求') },
-    getCredential: async () => ({ patToken: 'cztei_only', ownerId: 'u1' }),
-    saveCredential: async () => false,
-  }, {})
-  assert.equal(noCookieRes.kind, 'empty')
+  const send = (model, reasoningEffort, efforts, signal) => transport.fetch(`${codeartsSpec.baseUrl}/chat/completions`, {
+    body: JSON.stringify({ model, max_tokens: 131_072, max_completion_tokens: 131_072, enable_thinking: true, reasoning_effort: 'unverified' }), signal,
+  }, { row: { id: model, efforts }, request: { sessionId: 'fixture-session', model, reasoningEffort } })
+  const controller = new AbortController()
+  const a = await send('glm-5.3-flash', 'low', ['low', 'high', 'max'])
+  const b = await send('openpangu-2.1-pro', 'high', [], controller.signal)
+  assert.deepEqual(calls, ['busy', ['glm-5.3-flash', 'low'], ['openpangu-2.1-pro', undefined]])
+  await a.body.cancel()
+  assert.equal(calls.includes('idle'), false)
+  controller.abort()
+  await b.body.cancel().catch(() => {})
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.at(-1), 'idle')
 })
 
-test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）与相邻消息合并', async () => {
+test('CodeArts 已计量协议保留零用量与结束帧', async () => {
+  const usage = { type: 'usage', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } }
+  const finish = { type: 'finish', reason: { kind: 'stop' } }
+  const provider = spec => createManagedAdapter({ spec, rows: [], selectTransport: () => assert.fail() }, {
+    assemblePiAiAdapter: ({ wrapStream }) => ({ adapter: { wrapStream } }),
+    openAICompletionsApi: () => ({}), anthropicMessagesApi: () => ({}),
+  })
+  const generated = async function* () { yield usage; yield finish }
+  assert.deepEqual(await Array.fromAsync((await provider(codeartsSpec)).adapter.wrapStream(generated(), {})), [usage, finish])
+})
+
+test('CodeArts：旧输出覆盖受 64K（65,536）硬上限约束，拒绝新超限写入', async () => {
+  const { createManagedModelSettings } = await import('../lib/managed-models.js')
+  const home = await mkdtemp(join(tmpdir(), 'unified-router-budget-'))
+  try {
+    const file = join(home, 'models.json')
+    const modelId = 'openpangu-2.0-flash'
+    await writeFile(file, JSON.stringify({ params: { [modelId]: { maxTokens: 131_072, reasoningEffort: 'high' } } }))
+    const catalog = [{ id: modelId, context: 200_000, output: 65_536, efforts: [] }]
+    const settings = createManagedModelSettings(file, 'codearts')
+    const [row] = await settings.list(catalog)
+    assert.equal(row.effectiveEffort, undefined)
+    assert.equal(row.maxOutputLength, 65_536)
+    assert.equal(toManagedModelDescriptor(row, 'codearts', codeartsSpec).maxTokens, 65_536)
+    const change = params => settings.change('managed.setModelParams', { modelId, params }, () => catalog)
+    await assert.rejects(change({ maxTokens: 65_537 }), /输出上限超出渠道限制/)
+    await assert.rejects(change({ contextWindow: 65_536 }), /输出上限须小于上下文窗口/)
+    const [repaired] = await change({ maxTokens: 10_000, contextWindow: 65_536 })
+    assert.equal(repaired.maxOutputLength, 10_000)
+    assert.equal(repaired.contextWindow, 65_536)
+  } finally { await rm(home, { recursive: true, force: true }) }
+})
+
+test('缺少 Responses peer 时不向 AStudio 发送 Chat Completions 请求', async () => {
+  let chatCalls = 0
+  const { adapter } = await createManagedAdapter({ spec: astudioSpec, rows: [{ id: 'fixture', enabled: true }],
+    selectTransport: () => assert.fail('不应选择传输账号') }, {
+    assemblePiAiAdapter: ({ api, models }) => ({ adapter: { api, model: models[0] } }),
+    openAICompletionsApi: () => ({ streamSimple() { chatCalls++ } }),
+    anthropicMessagesApi: () => ({}),
+  })
+  assert.equal(adapter.model.api, 'openai-responses')
+  assert.throws(() => adapter.api.streamSimple(adapter.model, {}, {}), /宿主缺少 openai-responses 协议支持/)
+  assert.equal(chatCalls, 0)
+})
+
+test('CodeArts：SDK-HMAC-SHA256 签名、builtin 目录输出与相邻消息合并', async () => {
   const signed = signHuaweiRequest({
     method: 'POST',
     url: 'https://snap-access.cn-north-4.myhuaweicloud.com/api/v1/chat/completions',
@@ -406,13 +487,21 @@ test('CodeArts：SDK-HMAC-SHA256 签名、builtin 模型解析（32000 夹取）
     builtinModels: [
       { model_id: 'GLM-5.2', model_name: 'GLM-5.2\n', context_window: 1048576, max_tokens: 65536, think_level: 'high', supports_images: true, credit: { ratio_display: '0.62x' } },
       { model_id: 'maas-glm-4.7', model_name: 'Hidden' },
+      { model_id: 'unknown-output', max_tokens: -1 },
+      { model_id: 'alternate-output', max_tokens: '', output_context_window: '32768' },
     ],
   })
-  assert.equal(models.length, 1)
+  assert.equal(models.length, 3)
   assert.equal(models[0].name, 'GLM-5.2')
-  assert.equal(models[0].output, 32_000, '/api/v1 输出上限必须夹到 32000')
+  assert.equal(models[0].output, 65_536)
+  assert.equal(models[1].output, null)
+  assert.equal(models[2].output, 32_768)
   assert.equal(models[0].rate, 0.62)
-  assert.deepEqual(models[0].efforts, ['off', 'high'])
+  assert.deepEqual(models[0].efforts, [], '旧目录标记不能代替官方档位列表')
+  const oldRow = { ...models[0], efforts: ['off', 'high'], reasoning: true, defaultEffort: 'high' }
+  assert.deepEqual(codeartsSpec.restoreLegacyCatalog(oldRow), {
+    ...oldRow, output: null, efforts: [], reasoning: false, defaultEffort: undefined,
+  })
 
   const merged = mergeConsecutiveTurns([
     { role: 'user', content: 'A' },
@@ -456,7 +545,348 @@ test('CodeArts：已领取不重复提交，空列表和查询失败分别处理
       return path.endsWith('/delivery') ? Response.json(data) : Response.json({ code: 0 })
     },
   }, {})
-  assert.equal((await run({ code: 0, data: { items: [{ type: 'USER_LOGIN', status: 'CLAIMED', claimable: true }] } })).outcome, 'already-claimed')
+  assert.equal((await run({ code: 0, data: { items: [{ type: 'USER_LOGIN', status: 'CONFIRMED', claimable: false }] } })).outcome, 'already-claimed')
+  assert.equal((await run({ code: 0, data: { items: [{ type: 'USER_LOGIN', status: 'CLAIMED', claimable: true }] } })).outcome, 'pending')
   assert.deepEqual(await run({ code: 0, data: { items: [] } }), { outcome: 'inactive', unsubmitted: true })
   assert.deepEqual(await run({ code: 500, data: { items: [] } }), { outcome: 'failed', unsubmitted: true })
+})
+
+test('CodeArts：DPoP ES256 签名合法、本机字符串 JWK 保留，推理遇 APIG.0602 自动刷新重试', async () => {
+  const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  const pubJwk = publicKey.export({ format: 'jwk' })
+  const privJwk = privateKey.export({ format: 'jwk' })
+
+  // 1. 本机 secretStorage 把 DPoP 密钥存为 JSON 字符串，sanitize 必须解析保留而非丢弃。
+  const sanitized = sanitizeCodeArtsCredential({
+    accessKey: 'AK_OLD',
+    secretKey: 'SK_OLD',
+    securityToken: 'ST_OLD',
+    refreshToken: 'RT_OLD',
+    codeVerifier: 'v'.repeat(128),
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    dpopPrivateJwk: JSON.stringify(privJwk),
+    dpopPublicJwk: JSON.stringify(pubJwk),
+  })
+  assert.ok(sanitized?.dpopPrivateJwk?.d)
+  assert.ok(sanitized?.dpopPublicJwk?.x)
+  assert.ok(Number.isFinite(sanitized.expiresAt))
+
+  // 2. createDpopJwt 使用 createPrivateKey 签出 64 字节 IEEE-P1363 签名并能被对应公钥验签。
+  const jwt = createDpopJwt({
+    method: 'POST',
+    url: 'https://sts.cn-north-4.myhuaweicloud.com/v1/oauth2/tokens',
+    privateJwk: sanitized.dpopPrivateJwk,
+    publicJwk: sanitized.dpopPublicJwk,
+  })
+  const parts = jwt.split('.')
+  assert.equal(parts.length, 3)
+  const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'))
+  assert.equal(header.alg, 'ES256')
+  assert.equal(header.typ, 'dpop+jwt')
+  const verifier = createVerify('sha256')
+  verifier.update(`${parts[0]}.${parts[1]}`)
+  assert.equal(verifier.verify({ key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(parts[2], 'base64url')), true)
+
+  // 3. 推理命中 APIG.0602（security token has expired）时，通过 DPoP + refresh_token 自动刷新并重签重发一次。
+  let stored = { ...sanitized }
+  const seenTokens = []
+  const inferUrl = 'https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions'
+  assert.equal(`${codeartsSpec.baseUrl}/chat/completions`, inferUrl)
+  let dpopHeaderSeen = ''
+  const transport = await codeartsSpec.createTransport({
+    entry: { id: 'codearts-test', source: 'browser', deviceId: 'dev-1' },
+    getCredential: async () => stored,
+    saveCredential: async next => { stored = next; return true },
+    fetch: async (url, init) => {
+      const target = String(url)
+      if (target.includes('/chat-session/heartbeat')) return Response.json({ status: 'ok' })
+      if (target.includes('/v1/oauth2/tokens')) {
+        dpopHeaderSeen = init.headers.DPoP || ''
+        return Response.json({
+          credentials: {
+            access_key_id: 'AK_NEW',
+            secret_access_key: 'SK_NEW',
+            security_token: 'ST_NEW',
+            expiration: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          refresh_token: 'RT_NEW',
+        })
+      }
+      assert.equal(target, inferUrl)
+      const tok = init.headers['X-Security-Token']
+      seenTokens.push(tok)
+      if (tok === 'ST_OLD') {
+        return new Response(JSON.stringify({ error_msg: 'Bad request: the security token has expired', error_code: 'APIG.0602' }), { status: 400 })
+      }
+      return new Response('data: [DONE]\n\n', { status: 200 })
+    },
+  })
+  const res = await transport.fetch(inferUrl, {
+    method: 'POST',
+    body: JSON.stringify({ model: 'GLM-5.2', messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(seenTokens, ['ST_OLD', 'ST_NEW'])
+  assert.equal(dpopHeaderSeen.split('.').length, 3)
+  assert.equal(stored.securityToken, 'ST_NEW')
+  assert.equal(stored.refreshToken, 'RT_NEW')
+})
+
+// —— 已确认状态误报修复：CodeArts 多活动汇总、歧义重查、严格 claimable 与只读状态方法 ——
+
+const codeartsHandle = fetch => ({
+  fetch,
+  getCredential: async () => ({ accessKey: 'AK', secretKey: 'SK', securityToken: 'ST', expiresAt: Date.now() + 3_600_000 }),
+  saveCredential: async () => true,
+})
+
+test('CodeArts 签到：双通道多个每日活动全部处理，不遗漏首个之外的活动', async () => {
+  const claimedIds = []
+  const res = await codeartsSpec.checkin(codeartsHandle(async (url, init) => {
+    const target = String(url)
+    if (target.includes('/delivery?channel=DESKTOP')) {
+      return Response.json({ code: 0, data: { items: [
+        { type: 'daily_claim', campaignId: 'desk-1', claimable: true, status: 'PENDING', benefitAmount: 100 },
+        { type: 'USER_LOGIN', campaignId: 'dup-in-both', claimable: true, status: 'PENDING', benefitAmount: 50 },
+      ] } })
+    }
+    if (target.includes('/delivery?channel=IDE')) {
+      return Response.json({ code: 0, data: { items: [
+        { type: 'USER_LOGIN', campaignId: 'ide-1', claimable: true, status: 'PENDING', benefitAmount: 200 },
+        { type: 'USER_LOGIN', campaignId: 'dup-in-both', claimable: true, status: 'PENDING', benefitAmount: 50 },
+      ] } })
+    }
+    if (target.endsWith('/v1/ops/claim')) {
+      claimedIds.push(JSON.parse(init.body).campaignId)
+      const credit = { 'desk-1': 100, 'ide-1': 200, 'dup-in-both': 50 }[claimedIds.at(-1)] ?? 0
+      return Response.json({ code: 0, data: { id: `ben-${claimedIds.length}`, benefitAmount: credit } })
+    }
+    if (target.endsWith('/v1/ops/confirm')) return Response.json({ code: 0, data: {} })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(res.outcome, 'claimed')
+  assert.equal(res.credit, 350, '三个去重活动（desk-1 + ide-1 + dup-in-both）的积分应累加')
+  assert.equal(claimedIds.length, 3)
+  assert.equal(new Set(claimedIds).size, 3, '同 campaignId 跨通道出现两次时只领一次')
+})
+
+test('CodeArts 签到：claim 存疑先重查活动状态，已入账则不重发', async () => {
+  let claimPosts = 0
+  let deliveryCalls = 0
+  const res = await codeartsSpec.checkin(codeartsHandle(async (url, init) => {
+    const target = String(url)
+    if (target.includes('/v1/ops/delivery')) {
+      deliveryCalls++
+      return Response.json({ code: 0, data: { items: [
+        { type: 'USER_LOGIN', campaignId: 'camp-9', claimable: deliveryCalls <= 2, status: deliveryCalls <= 2 ? 'PENDING' : 'CONFIRMED' },
+      ] } })
+    }
+    if (target.endsWith('/v1/ops/claim')) {
+      claimPosts++
+      assert.equal(init.method, 'POST')
+      return Response.json({ code: 500, message: 'gateway error' })
+    }
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(res.outcome, 'already-claimed', '重查发现已入账应按已领处理')
+  assert.equal(claimPosts, 1, '领取请求只发出一次，绝不重复提交')
+})
+
+test('CodeArts 签到：claim 成功但 confirm 失败且重查未结算时记 pending', async () => {
+  let claimPosts = 0
+  const res = await codeartsSpec.checkin(codeartsHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/v1/ops/delivery')) {
+      return Response.json({ code: 0, data: { items: [
+        // 初始列出为可领取；confirm 失败后重查仍停留在 CLAIMED（已提交未结算），用于验证 pending 分支
+        { type: 'USER_LOGIN', campaignId: 'camp-2', claimable: true, status: 'PENDING' },
+      ] } })
+    }
+    if (target.endsWith('/v1/ops/claim')) {
+      claimPosts++
+      return Response.json({ code: 0, data: { id: 'ben-9' } })
+    }
+    if (target.endsWith('/v1/ops/confirm')) return Response.json({ code: 409, message: 'confirm failed' })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(res.outcome, 'pending')
+  assert.equal(claimPosts, 1)
+})
+
+test('CodeArts 日常活动只有签到一个入口，业务拒绝不计已领', async () => {
+  assert.equal(codeartsSpec.claimRewards, undefined)
+  let claimPosts = 0
+  const res = await codeartsSpec.checkin(codeartsHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/delivery?channel=IDE')) {
+      return Response.json({ code: 0, data: { items: [
+        { type: 'USER_LOGIN', campaignId: 'claimable-1', claimable: true, status: 'PENDING' },
+        { type: 'USER_LOGIN', campaignId: 'settled-1', claimable: false, status: 'CONFIRMED' },
+        { type: 'UNKNOWN_TYPE', campaignId: 'unknown-1', claimable: true, status: 'PENDING' },
+      ] } })
+    }
+    if (target.includes('/delivery?channel=DESKTOP')) return Response.json({ code: 0, data: { items: [] } })
+    if (target.endsWith('/v1/ops/claim')) {
+      claimPosts++
+      return Response.json({ code: 9001, message: 'no reward' })
+    }
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(claimPosts, 1, 'UNKNOWN_TYPE 与非 claimable 项不得触发领取')
+  assert.equal(res.outcome, 'pending')
+  assert.notEqual(res.unsubmitted, true)
+})
+
+test('CodeArts 签到：claim+confirm 全成功才计 claimed', async () => {
+  const res = await codeartsSpec.checkin(codeartsHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/delivery?channel=IDE')) {
+      return Response.json({ code: 0, data: { items: [
+        { type: 'USER_LOGIN', campaignId: 'camp-ok', claimable: true, status: 'PENDING' },
+      ] } })
+    }
+    if (target.includes('/delivery?channel=DESKTOP')) return Response.json({ code: 0, data: { items: [] } })
+    if (target.endsWith('/v1/ops/claim')) return Response.json({ code: 0, data: { id: 'ben-ok' } })
+    if (target.endsWith('/v1/ops/confirm')) return Response.json({ code: 0, data: {} })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.deepEqual(res, { outcome: 'claimed', credit: null })
+})
+
+test('CodeArts 只读签到状态按证据分级，查询不提交申请', async () => {
+  const writes = []
+  const run = delivery => {
+    const handle = codeartsHandle(async (url, init) => {
+      if (init?.method && init.method !== 'GET') writes.push(String(url))
+      return Response.json(delivery)
+    })
+    return handle
+  }
+  const evidence = { code: 0, data: { items: [{ type: 'USER_LOGIN', campaignId: 'c1', status: 'CONFIRMED', claimable: false, benefitAmount: 80 }] } }
+  assert.equal((await codeartsSpec.checkinStatus(run(evidence), {})).outcome, 'done')
+  const claimable = { code: 0, data: { items: [{ type: 'USER_LOGIN', campaignId: 'c2', status: 'PENDING', claimable: true }] } }
+  assert.equal((await codeartsSpec.checkinStatus(run(claimable), {})).outcome, 'pending')
+  const empty = { code: 0, data: { items: [] } }
+  assert.equal((await codeartsSpec.checkinStatus(run(empty), {})).outcome, 'inactive')
+  const broken = { code: 500, message: 'boom' }
+  assert.equal((await codeartsSpec.checkinStatus(run(broken), {})).outcome, 'failed')
+  assert.equal(writes.length, 0, '状态查询不得触发 trigger/claim/confirm 等写端点')
+})
+
+// —— 已确认状态误报修复：AStudio 入账证据、业务码判定与只读状态方法 ——
+
+const ASTUDIO_CRED = { ssoSessionId: 'sso-1', sessionToken: 'tok-1', accountId: 'acc-1' }
+const astudioHandle = fetch => ({ fetch, getCredential: async () => ASTUDIO_CRED })
+
+test('AStudio 签到：无入账证据记 pending，查询失败记 failed，不再误报 done', async () => {
+  // 触发写入后流水仍无 GRANT：旧实现误报 done，现在必须 pending
+  const pendingRes = await astudioSpec.checkin(astudioHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/points/details')) return Response.json({ code: 0, data: { records: [] } })
+    if (target.includes('/client-popups/pending')) return Response.json({ code: 0, data: [] })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(pendingRes.outcome, 'pending')
+
+  // 流水查询直接失败：不能继续写，记 failed + unsubmitted
+  let wrote = false
+  const failedRes = await astudioSpec.checkin(astudioHandle(async (url, init) => {
+    if (init?.method === 'POST') wrote = true
+    throw new Error('network down')
+  }), {})
+  assert.equal(failedRes.outcome, 'failed')
+  assert.equal(failedRes.unsubmitted, true)
+  assert.equal(wrote, false)
+
+  // 业务拒绝（非死会话）：同样不能断言未入账
+  const refusedRes = await astudioSpec.checkin(astudioHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/points/details')) return Response.json({ code: 9001, message: 'denied' })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(refusedRes.outcome, 'failed')
+
+  // 有今日 GRANT 流水：already-claimed，不触发任何写
+  let wrote2 = false
+  const grantRow = { operation: 'GRANT', reason: '每日登录奖励', amount: 30 }
+  const doneRes = await astudioSpec.checkin(astudioHandle(async (url, init) => {
+    if (init?.method === 'POST') wrote2 = true
+    const target = String(url)
+    if (target.includes('/points/details')) return Response.json({ code: 0, data: { records: [grantRow] } })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(doneRes.outcome, 'already-claimed')
+  assert.equal(doneRes.credit, 30)
+  assert.equal(wrote2, false)
+})
+
+test('AStudio claimRewards：业务码判定成败，HTTP 200 但 code 拒绝不得计已领', async () => {
+  const popup = { componentType: 'NEW_USER_DIALOG', popupId: 7, instanceKey: 'inst-7' }
+  // /complete 业务拒绝：claimed 不得增长，记 failed 且不可盲目重试
+  const refused = await astudioSpec.claimRewards(astudioHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/client-popups/pending')) return Response.json({ code: 0, data: [popup] })
+    if (target.includes('/client-popups/complete')) return Response.json({ code: 5001, message: 'already taken' })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(refused.kind, 'failed')
+
+  // /complete 业务成功：才计 claimed
+  const ok = await astudioSpec.claimRewards(astudioHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/client-popups/pending')) return Response.json({ code: 0, data: [popup] })
+    if (target.includes('/client-popups/complete')) return Response.json({ code: 0, data: {} })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.deepEqual(ok, { kind: 'claimed', claimed: 1 })
+
+  // 无可领弹窗：done
+  const none = await astudioSpec.claimRewards(astudioHandle(async (url) => {
+    const target = String(url)
+    if (target.includes('/client-popups/pending')) return Response.json({ code: 0, data: [{ ...popup, componentType: 'DAILY_REWARD_DIALOG' }] })
+    assert.fail('每日弹窗只能由签到提交')
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.deepEqual(none, { kind: 'empty', claimed: 0, retryable: true })
+
+  // 弹窗查询传输失败：failed + retryable
+  const boom = await astudioSpec.claimRewards(astudioHandle(async () => { throw new Error('down') }), {})
+  assert.equal(boom.kind, 'failed')
+  assert.equal(boom.retryable, true)
+})
+
+test('AStudio 只读状态：checkinStatus 按流水证据分级，rewardStatus 按弹窗分级', async () => {
+  const grantRow = { operation: 'GRANT', reason: '每日登录奖励', amount: 10 }
+  // 有入账证据 → done；无证据 → pending；查询异常 → failed
+  const done = await astudioSpec.checkinStatus(astudioHandle(async (url) => {
+    if (String(url).includes('/points/details')) return Response.json({ code: 0, data: { records: [grantRow] } })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(done.outcome, 'done')
+  assert.equal(done.credit, 10)
+  const pendingRes = await astudioSpec.checkinStatus(astudioHandle(async (url) => {
+    if (String(url).includes('/points/details')) return Response.json({ code: 0, data: { records: [] } })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(pendingRes.outcome, 'pending')
+  const failedRes = await astudioSpec.checkinStatus(astudioHandle(async () => { throw new Error('down') }), {})
+  assert.equal(failedRes.outcome, 'failed')
+
+  // rewardStatus：可领弹窗 → pending；无弹窗 → empty；死会话/查询失败 → failed
+  const popup = { componentType: 'NEW_USER_DIALOG', popupId: 3, instanceKey: 'k3' }
+  const p1 = await astudioSpec.rewardStatus(astudioHandle(async (url) => {
+    if (String(url).includes('/client-popups/pending')) return Response.json({ code: 0, data: [popup] })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(p1.kind, 'pending')
+  const p2 = await astudioSpec.rewardStatus(astudioHandle(async (url) => {
+    if (String(url).includes('/client-popups/pending')) return Response.json({ code: 0, data: [] })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(p2.kind, 'empty')
+  const p3 = await astudioSpec.rewardStatus(astudioHandle(async (url) => {
+    if (String(url).includes('/client-popups/pending')) return Response.json({ code: 1002 })
+    return Response.json({ code: 0, data: {} })
+  }), {})
+  assert.equal(p3.kind, 'failed')
 })

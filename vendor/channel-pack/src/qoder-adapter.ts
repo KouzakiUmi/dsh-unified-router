@@ -35,7 +35,7 @@ import { unwrapQoderEnvelopeStream } from './qoder-envelope.js'
 import { QODER, type QoderFallbackModel, type QoderModelPromotion, type QoderProduct } from './qoder-product.js'
 import { defaultRunQoderCli, readQoderCatalog, refreshQoderCatalog, saveQoderCatalog, type QoderCliResult, type QoderCatalogIssue } from './qoder-cli.js'
 import { defaultModelEffort, defaultModelOutputTokens, readableModelName, modelRecommendationExclusions } from '../../../lib/model-catalog.js'
-import { reasoningRankOf } from './reasoning-ladder.js'
+import { reasoningRankOf, canonicalEffortId, privateEffortFor, uniqueCanonicalEfforts } from './reasoning-ladder.js'
 import { projectRequestImage, type ImageRequestTarget } from './image-budget.js'
 import {
   registerAdapterIdempotent,
@@ -164,7 +164,7 @@ export const PROVIDER = 'qoder'
  * ⚠️ `minimal` 当前目录未下发，但白名单 `Qj` 里有，保留以备上游启用。
  */
 const QODER_EFFORT_NAMES: Readonly<Record<string, string>> = {
-  none: '关闭思考',
+  off: '关闭思考',
   minimal: '最小',
   low: '低',
   medium: '中',
@@ -227,10 +227,20 @@ export function sortEffortsByStrength(efforts: readonly string[]): string[] {
  * （用户 2026-09-28 确认「上面两个没有思考档位就是关闭的意思」），
  * **不要**给它们补默认档位。
  */
-export function qoderEffortsFor(model: QoderFallbackModel): string[] {
+/** 该模型声明的上游私有档位（出站翻译用，保持原样）。 */
+function qoderPrivateEfforts(model: QoderFallbackModel): string[] {
   const efforts = [...(model.efforts ?? [])]
   if (model.supportsDisable === true && !efforts.includes('none')) efforts.push('none')
-  return sortEffortsByStrength(efforts)
+  return efforts
+}
+
+export function qoderEffortsFor(model: QoderFallbackModel): string[] {
+  // 对外统一成 DSH 规范档位名（none→off）：宿主聚合会丢弃不认识的 id。
+  return sortEffortsByStrength(uniqueCanonicalEfforts(qoderPrivateEfforts(model)).map(effort => effort.id))
+}
+
+function qoderDefaultEffort(model: QoderFallbackModel, efforts = qoderEffortsFor(model)) {
+  return defaultModelEffort(efforts, model.defaultEffort === undefined ? undefined : canonicalEffortId(model.defaultEffort))
 }
 
 /**
@@ -647,7 +657,7 @@ export class QoderAdapter extends LlmAdapter {
     return { source: this.catalogSource, issue: this.catalogIssue }
   }
 
-  listAllModels(): readonly { id: string; name: string; contextWindow?: number; maxTokens?: number; defaultMaxTokens?: number; efforts?: readonly string[]; defaultEffort?: string; supportsImage?: boolean; stale?: boolean; staleReason?: string; rateBadge?: ModelRateBadge }[] {
+  listAllModels(): readonly { id: string; name: string; contextWindow?: number; maxTokens?: number; defaultMaxTokens?: number; efforts?: readonly string[]; defaultEffort?: string; supportsImage?: boolean; subscriptionOnly?: boolean; stale?: boolean; staleReason?: string; rateBadge?: ModelRateBadge }[] {
     return (this.cliCatalog ?? this.product.fallbackModels).map((model) => {
       const fallback = this.fallbackIndex.get(model.id)
       return {
@@ -655,10 +665,11 @@ export class QoderAdapter extends LlmAdapter {
         name: readableModelName(model.id, qoderDisplayName(model)),
         defaultMaxTokens: defaultModelOutputTokens(model.maxTokens, model.contextWindow),
         rateBadge: qoderRateBadge(model),
+        ...((model as any).subscriptionOnly === true || fallback?.subscriptionOnly === true ? { subscriptionOnly: true } : {}),
         ...(typeof (model as any).contextWindow === 'number' ? { contextWindow: (model as any).contextWindow } : {}),
         ...(typeof (model as any).maxTokens === 'number' ? { maxTokens: (model as any).maxTokens } : {}),
         efforts: qoderEffortsFor(model),
-        defaultEffort: defaultModelEffort(qoderEffortsFor(model), model.defaultEffort),
+        defaultEffort: qoderDefaultEffort(model),
         ...(typeof (model as any).supportsImage === 'boolean' ? { supportsImage: (model as any).supportsImage } : {}),
         ...(typeof fallback?.stale === 'boolean' ? { stale: fallback.stale } : {}),
         ...(typeof fallback?.staleReason === 'string' ? { staleReason: fallback.staleReason } : {}),
@@ -690,7 +701,7 @@ export class QoderAdapter extends LlmAdapter {
     } else {
       this.catalogSource = this.cliCatalog ? 'cached' : 'fallback'
     }
-    return { ...result, count: this.cliCatalog?.length ?? result.count }
+    return { ...result, source: this.catalogSource, count: this.cliCatalog?.length ?? result.count }
   }
 
   async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
@@ -747,7 +758,7 @@ export class QoderAdapter extends LlmAdapter {
     if (entry !== undefined) {
       const efforts = qoderEffortsFor(entry)
       if (efforts.length > 0) {
-        const fallback = defaultModelEffort(efforts, entry.defaultEffort)
+        const fallback = qoderDefaultEffort(entry, efforts)
         resolved.reasoning = {
           efforts: efforts.map((id) => ({
             id: ReasoningEffortId(id),
@@ -865,7 +876,7 @@ export class QoderAdapter extends LlmAdapter {
 
     const fallback = this.modelEntry(options.model)
     const maxTokens = options.maxTokens ?? defaultModelOutputTokens(fallback?.maxTokens, fallback?.contextWindow)
-    const reasoningEffort = options.reasoningEffort ?? (fallback && defaultModelEffort(qoderEffortsFor(fallback), fallback.defaultEffort))
+    const reasoningEffort = options.reasoningEffort ?? (fallback && qoderDefaultEffort(fallback))
 
     /** 用给定凭据构造一次加密请求（首次与 401 重试共用，避免两处漂移）。 */
     const buildRequest = async (c: QoderCredential): Promise<QoderInferRequest> => {
@@ -882,13 +893,13 @@ export class QoderAdapter extends LlmAdapter {
         modelKey: options.model,
         userText,
         ...(systemText !== undefined ? { systemText } : {}),
-        isReasoning: fallback?.supportsThinking ?? false,
+        isReasoning: fallback?.supportsThinking ?? (fallback !== undefined && qoderEffortsFor(fallback).some(effort => effort !== 'off')),
         history,
         // 工具定义：这是模型**唯一**能学到函数 schema 的通道，
         // 缺了它模型只能用正文 XML 臆造调用（真实缺陷）。
         tools,
         maxTokens,
-        ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        ...(reasoningEffort !== undefined ? { reasoningEffort: privateEffortFor(reasoningEffort, fallback ? qoderPrivateEfforts(fallback) : undefined) ?? reasoningEffort } : {}),
         ...(this.inputModalitiesFor(options.model).includes('image') ? { isVl: true }
           : fallback?.supportsImage === false ? { isVl: false } : {}),
         // 官方 `model_config` 的 display_name / max_input_tokens 必须带上。

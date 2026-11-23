@@ -9,6 +9,7 @@
 | WorkBuddy 登录与用量原语 | [`@magpie-community/opencode-workbuddy-auth`](https://github.com/magpie-community/plugins) | 0.2.35 | MIT（上游 package.json `license` 字段，见 `vendor/workbuddy/NOTICE.md`） | `vendor/workbuddy/` |
 | Qoder 中国版加密推理 WASM | 上游 Qoder 运行时随渠道包带入 | 与 channel-pack 同一上游提交 | 见 `vendor/channel-pack/NOTICE.md` | `lib/qoder-auth-wasm.wasm`（构建时自 `vendor/channel-pack/` 复制） |
 | 思维链死循环保护（`dsh-cot-loop-guard`） | 本地仓库 `dsh-cot-loop-guard`（周期 + 子句池三态滞回检测与有界续跑） | 2026 | MIT | `lib/cot-loop-guard/` |
+| 上下文分段控件 | [KouzakiUmi/dsh-opendesign-corouter](https://github.com/KouzakiUmi/dsh-opendesign-corouter)，其输入栏样式源于 `dsh-kxyai-provider` | CoRouter 0.3.4 / KXY 0.6.3 | MIT（Copyright (c) 2026 KouzakiUmi；Copyright (c) 2026 dsh-kxyai-provider contributors；许可正文见 `LICENSE`） | `src/client/context-pill.js`、`src/client/styles.js` |
 
 ## 构建期捆绑进 `lib/backend.js` 的组件
 

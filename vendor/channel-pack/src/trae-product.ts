@@ -43,6 +43,11 @@ export interface TraeFallbackModel {
   multimodal?: boolean
   /** 已知的上游内部/隐藏条目（远端不可用时也不该出现在目录里）。 */
   isHidden?: boolean
+  /**
+   * 订阅限定：仅付费会员（Pro / Pro+ / Ultra / Express）可调用，免费账号不可用。
+   * 判据来自官方内置模型文档的会员门槛声明（见各条目注释），不按倍率推断。
+   */
+  subscriptionOnly?: boolean
   stale?: boolean
   staleReason?: string
 }
@@ -231,8 +236,11 @@ const TRAE_EFFORTS_3_XHIGH = Object.freeze({ options: ['light', 'high', 'extra_h
 const TRAE_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   { id: 'Doubao-Seed-2.1-Turbo', name: 'Seed-2.1-Turbo', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
   { id: 'Doubao-Seed-2.1-Pro', name: 'Seed-2.1-Pro-0915', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
-  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000, multimodal: true },
-  { id: 'Doubao-Seed-Code', name: 'Seed-Code', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
+  // 官方内置模型文档：Seed-Evolving 仅限会员 Pro / Pro+ / Ultra / Express 使用。
+  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000, multimodal: true, subscriptionOnly: true },
+  // 远端目录已由同用途的 Seed-2.0-Code 接替（兜底表不收该 id，只能靠策展标记
+  // 表达「旧版默认关」；远端真拉时由 model-catalog 的 TRAE 命名后继规则表达）。
+  { id: 'Doubao-Seed-Code', name: 'Seed-Code', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2, stale: true, staleReason: '上游目录已有同用途后继 Seed-2.0-Code。' },
   { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
   { id: 'glm-5.3-flashx', name: 'GLM-5.3-FlashX', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
   { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200_000, multimodal: false, reasoningConfig: TRAE_EFFORTS_3_XHIGH },

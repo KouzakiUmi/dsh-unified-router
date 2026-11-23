@@ -11,27 +11,65 @@ Agnes 与云知声共用同一套实现，差异只在 `lib/apikey-providers.js`
 |---|---|---|
 | 端点 | `https://api.agnes-ai.cn`，OpenAI 兼容 `POST /v1/chat/completions`，Bearer 鉴权 | 官方文档 + 实测 |
 | 目录 | `GET /v1/models` → `{data:[{id, supported_endpoint_types}]}`，只有 id，没有上下文与能力字段 | 实测 2026-11-19 |
-| 文本模型 | `agnes-2.5-flash`、`agnes-3.0-flash`：512K 上下文 / 65536 输出，文本+图片 URL | 官方文档 |
-| | `agnes-2.5-pro`、`agnes-2.5-pro-alpha`、`agnes-2.5-pro-beta`：1M 上下文 / 65536 输出，文本+图片 URL，推理 | 官方文档 |
-| | `agnes-2.5-pro-theta`：目录里存在，规格文档未给出 → 上下文与输出按未知（0） | 实测目录 |
-| 非聊天模型 | `agnes-image-*`、`agnes-video-*` 出现在同一目录，聊天适配器必须过滤掉 | 实测目录 |
+| 文本模型 | `agnes-3.0-flash`、`agnes-2.5-flash`：512K 上下文 / 65536 输出，文本+图片 URL，**免费账号可用**（标「免费」） | 官方文档 |
+| | `agnes-3.0-pro`、`agnes-2.5-pro`、`agnes-2.5-pro-alpha`、`agnes-2.5-pro-beta`：1M 上下文 / 65536 输出，文本+图片 URL，推理，**需付费余额或 Agent Plan 订阅**（标「需付费」） | 官方文档 |
+| | `agnes-2.5-pro-theta`：目录里存在，规格文档未给出 → 上下文与输出按未知（0），属付费 Pro 系列（标「需付费」）；全部 `2.5` 老一代已移出默认推荐 | 实测目录 + 官方文档 |
+| 非聊天模型 | `agnes-image-*`、`agnes-video-*` 以及 `supported_endpoint_types: []` 的内部决策模型（如 `agnes-sys1-1.0`）出现在同一目录，聊天适配器必须过滤掉 | 实测目录 |
+| 图像生成与编辑 | `agnes_image_generate` 默认 Agnes Image 2.5 Flash；在「Agnes → 渠道 → 图像生成与编辑」启用，与聊天模型开关独立 | [官方接口](https://www.agnes-ai.cn/zh-Hans/docs/agnes-image-25-flash)，文生图和图生图均实测通过 |
 | 思考 | 默认不思考；`reasoning_effort: "none"` 保持关闭；`low` 起开启思考并返回 `reasoning_content`。`thinking:{type:"disabled"}` 实测**关不掉**思考，不使用 | 实测（agnes-3.0-flash） |
-| 用量 | 兼容账单接口返回的巨大名义上限与零用量组合按无数据处理；套餐窗口、积分包和余额由国内站控制台接口读取 | 兼容账单已实测；控制台解析基于前端协议与离线样例 |
+| 用量 | 站点是 New API 分支：`GET /v1/dashboard/billing/subscription`（`hard_limit_usd`）与 `GET /v1/dashboard/billing/usage`（`total_usage`）；套餐窗口、积分包和余额由国内站控制台接口读取。账单或控制台额度读取为 0 时识别为「免费用户」 | 兼容账单已实测；控制台解析基于前端协议与离线样例 |
 | 不可用 | `/api/user/self`、`/api/usage/token` 被 Cloudflare 挡（403），不使用 | 实测 |
+
+图像工具复用 Agnes API Key。无参考图时文生图，有参考图时按顺序发送最多 4 张当前对话可见图片，主图放第一张。结果在对话中预览，也可用于下一次编辑。支持 `1K` 至 `4K` 和八种宽高比；宿主附件服务缩放时记录原尺寸。生图模型不进入聊天模型选择器。
 
 ### 云知声 MaaS
 
 | 项 | 值 | 来源 |
 |---|---|---|
 | 端点 | OpenAI 兼容 `https://maas-api.unisound.com/v1`（`POST /v1/chat/completions`），Bearer 鉴权 | 官方文档 |
-| 目录 | `GET /anthropic/v1/models`（`x-api-key` 或 Bearer），返回 `{data:[{id, display_name, context_window, max_output}], has_more, last_id}`，支持 `limit`/`after_id` 分页 | 官方文档，未用真实 Key 实测 |
+| 目录 | `GET /anthropic/v1/models`（`x-api-key` 或 Bearer），返回 `{data:[{id, display_name, type, created_at, max_input, context_window, max_output}], has_more, last_id}`，支持 `limit`/`after_id` 分页 | 官方文档 + 2026-11-23 真实 Key 实测（HTTP 200，付费 API Key 返 30 条、`has_more:false`） |
+| 目录范围 | **U Plan 订阅与付费 API 的目录范围不同**：U Plan Key 只列 u2 系列（3–4 条），付费 API Key 列全部 30 条（含第三方模型）。这是套餐差异，不是缺陷，代码不做补齐或过滤 | 2026-11-23 实测对照 |
 | 模型 | Unisound：`u2-flash`、`u2`、`u2-med`、`u2-radimed`；另有 DeepSeek、豆包、混元、MiMo、Kimi、GLM、MiniMax、Qwen 等第三方模型，同一 Key 调用 | 官方文档 |
-| 思考 | `u2`、`u2-flash`：`reasoning_effort` 取 `none/minimal/low/medium/high/xhigh`，默认 `high`，`max` 映射为 `xhigh`；`u2-flash` 产品页另写 `none/low/high/max` 四档。`u2-radimed` 默认关闭且不支持开启 | 官方文档 |
-| 余额 | 推理 API Key 无公开余额接口；控制台会话可读取 U Plan 的 5 小时与每周积分 | [U Plan 订阅概要](https://maas.unisound.com/docs/token-plan/overview)、控制台前端协议与离线样例 |
+| 对话附图 | `u2-flash`、`u2-med`、`u2-radimed` 接受文本和图片（`u2-med` 官方产品页「输入模态：文本、图片」，2026-11-23 核对；`u2` 只声明文本输入）；走宿主附件服务，由 OpenAI 兼容请求内联为 Base64 `image_url`。不依赖 OCR 工具 | [U2-Flash-1118](https://maas.unisound.com/models/u2-flash) · [U2-Med](https://maas.unisound.com/models/insure-med) · [模型广场](https://maas.unisound.com/model-hub/u2-med) · [接口概览](https://maas.unisound.com/docs/api/overview) |
+| 模型参数 | 优先使用目录返回的 `context_window` 与 `max_output`；目录缺字段时用**真实 Key 拉取的目录真值**（2026-11-23 核对）：`u2-flash` 1,048,576 / 262,144、`u2` 160,000 / 64,000、`u2-med` 262,144、`u2-radimed` 40,960。`u2-med` 与 `u2-radimed` 的上游 `max_output` 就是 `null`（**不公开**）→ 记 0，输出预算走通用推导，不编造官方值。离线兜底表用同组真值 | 真实 Key 拉取 `GET /anthropic/v1/models`（30 条，`has_more:false`） |
+| 思考 | `u2`、`u2-flash`、`u2-med`：`reasoning_effort` 取 `none/minimal/low/medium/high/xhigh`，默认 `high`，`max` 映射为 `xhigh`（`off` 出站发 `none`）；`u2-flash` 产品页另写 `none/low/high/max` 四档。`u2-radimed` 默认关闭且不支持开启。第三方模型未获确认，不挂思考档位 | 官方文档 |
+| 默认输出上限 | 每个渠道可在「渠道」分区单独设定（`automation.json` 的 `providers[id].defaultMaxOutput`，分档 默认 / 64K / 128K / 256K）。**只在上游没给输出规格时生效**：目录 `max_output` 缺失或为 `null` 的模型（如 `u2-med` / `u2-radimed`）用它，上游有值仍用上游值；结果始终受「输出 < 上下文」约束 | `test/apikey-providers.test.mjs` 分渠道默认输出上限用例 |
+| u2 系列元数据（权威快照） | 2026-11-23 付费 API Key 真拉，`context_window` / `max_output` / `display_name` 原样记录：`u2-flash` 1,048,576 / 262,144 / "U2 Flash"；`u2` 160,000 / 64,000 / "U2"；`u2-med` 262,144 / **null** / "U2 Med"；`u2-radimed` 40,960 / **null** / "U2-RadiMed"。**这两条 `null` 是上游不公开，不是解析失败**：记 0 后输出预算按 `min(上下文, 32K)` 推导，不用第三方转述值覆盖 | 真拉响应逐条核对（30 条全量无损解析） |
+| 余额 | 推理 API Key 无公开余额接口（官方 API 参考 24 页无 billing/usage/quota 页，第三方 pi-provider-unisound 同结论）；控制台会话可读取 U Plan 的 5 小时与每周积分、赠送额度，按量计费余额走 `/manager/bd/users/remain?model=<id>` | [U Plan 订阅概要](https://maas.unisound.com/docs/token-plan/overview)、控制台前端 bundle 逐条核验（2026-11-20） |
+| 多模态能力 | 官方 U2 SkillHub 六个模型 Skill（u2-asr-pro / u2-tts-pro / u2-tts-clone-pro / u1-ocr-parser-pro / u1-ocr-extract-pro / u1-ocr-med-pro）已移植为 Host 工具，见 §1.2 | skill.unisound.com 公开包脚本（2026-11-20 下载核验） |
+
+### 1.2 云知声多模态能力工具（`lib/unisound-tools.js`）
+
+官方 SkillHub 的六个模型 Skill 移植为 DSH Host 工具，设置页云知声「渠道」分区有独立开关（`toolsEnabled`，与模型提供方开关互不影响），需要已配置 API Key 才能注册。
+
+| 工具 | 能力 | 上游端点（`https://maas-api.unisound.com`） |
+|---|---|---|
+| `unisound_transcribe` | U2-ASR 语音转写（本地文件/公网 URL，多语种/方言、说话人分离、热词） | 上传 `/v1/files/upload`（purpose `a2t_async_input`）→ `POST /v1/audio/asr/tasks` → `GET /v1/audio/asr/tasks/{id}` 轮询 |
+| `unisound_list_voices` | 查询系统/已克隆音色 | `POST /v1/audio/voices/query` |
+| `unisound_synthesize` | U2-TTS 语音合成（≤5 万字；克隆音色 ≤2 万字），音频落盘返回路径 | `POST /v1/audio/speech/tasks` → `GET /v1/audio/speech/tasks?task_id=` 轮询 → `GET /v1/files/retrieve_content?file_id=` 下载 |
+| `unisound_clone_voice` | 声音克隆（参考音频 WAV → 自定义 voice_id） | 上传 purpose `voice_clone`/`prompt_audio` → `POST /v1/audio/voices/clone` |
+| `unisound_parse_document` | U2-OCR 文档解析（JPG/PNG/PDF → Markdown） | 上传 purpose `ocr_async_input` → `POST /v1/files/parser/tasks` → `GET /v1/files/parser/tasks/{id}` 轮询 → 下载 `md_file_url` |
+| `unisound_extract_image` | 图片信息抽取与分类（general/medical × classify/extract） | [POST /v1/ocr/image/extract](https://maas.unisound.com/docs/api/ocr-extract)：multipart `model=u2-ocr/u2-ocr-med`、`type=image`、`file`（Base64 Data URL）、`prompt`；图片 ≤10 MB |
+
+设计取舍：
+- **凭据不落盘**：调用时经 `resolveKey()` 从宿主 credentials 服务取 `UNIFIED_ROUTER_UNISOUND_API_KEY`，不写官方 Skill 的 `.env.local` / `api-keys.json`；Key 不进入返回值与错误文案。
+- **医疗分类候选 prompt** 从官方包提取到 `lib/unisound-tools-prompts/medical-classify.txt`（随 `lib` 打包）。[U Plan 订阅概要](https://maas.unisound.com/docs/token-plan/overview) 列明套餐包含 `u2-ocr-med` 赠送额度。
+- **输出有界**：转写/Markdown 超过 60K 字符时截断并落盘到状态目录 `unisound-tools-output/`，返回文件路径；音频下载到调用方指定路径或状态目录。
+- **注册契约**：`ctx.tools.register(defineTool(...))`（`@deepseek-ai/dsh-tools`，动态 import，optional peer；旧核心无 tools 服务时开关报「未能启用」但不影响推理）。注册串行化，dispose 释放全部工具。
+- 业务码 `base_resp.status_code` 非 0 即失败，错误文案只带业务码与截断后的 `status_msg`。
+
+### 1.3 控制台会话自动获取（云知声）
+
+额度读取的控制台 Cookie 不再要求手工配环境变量，设置页云知声「渠道」分区提供「控制台会话」行：
+- **浏览器登录**（`apikey.consoleLogin`）：复用 `lib/browser-login.js` 的 `launchIsolatedBrowserCookieLogin`，独立临时 Profile **直达 `https://maas.unisound.com/login` 登录页**（而非 `/admin/subscript` SPA shell——未登录时 SPA 先下发匿名 JSESSIONID 再前端跳转，收割易抓到登录换发前的旧会话），用户扫码/验证码登录后经 CDP 收割 `maas.unisound.com` 域 Cookie，用 `GET /manager/account/info`（`errorCode '0'` 且 `result` 非空）验证。**两轮稳定复验**：首次 verify 通过只记候选，≥1.5s 后下一轮收割拿到同一会话且仍有效才接受——防登录成功瞬间服务端换发 JSESSIONID（session fixation 防护）时存到换发前短暂仍有效的旧 ID。验证通过后写入凭据引用 `UNIFIED_ROUTER_UNISOUND_CONSOLE`。登录地址经快照 `consoleLoginUrl` 透出供界面展示。
+- **粘贴 Cookie**（`apikey.setConsoleSession`）：同样先验证再存；**清除**（`apikey.clearConsoleSession`）删除凭据。
+- 额度读取（`readApiKeyQuota`）**凭据会话优先于环境变量** `UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE`；只读 GET 也随 Cookie 带 `X-XSRF-TOKEN` 头（取自 `XSRF-TOKEN` Cookie，与浏览器行为一致）。实测 `/manager/u-plan/subscription/current` 返回的 `weeklyPointsTotal` / `weeklyPointsRemain` / `weeklyPointsUsed` 为十进制字符串（未激活 5 小时窗口时省略 `window5hLimit` / `window5hRemain`），且超出窗口时偶发负剩余字符串；读数层在未开启 5 小时窗口时按套餐档位（`U-FREE`: 500 / `U-STANDARD`: 2000 / `U-PLUS`: 12000 或 `weeklyPointsTotal / 5`）补齐完整 5 小时积分窗口，并将负剩余归零。返回另附带 `giftQuotas[]`（`modelId` / `remainAmount` / `totalAmount` / `usedAmount` / `unit`），`apiQuotaAmount` 兼容纯非负十进制字符串，`projectApiKeyQuota` 同步白名单投影 `gifts`。
+- 同一接口可返回 `window5hResetIn*` 和 `weeklyResetIn*` 倒计时；额度药丸和设置页以最近采集时间为基准展示约多久后重置。未给出倒计时的窗口只显示余量，不使用套餐结束时间代替重置时间。
+- 控制台会话只发往 `maas.unisound.com`，读取禁止重定向；Cookie 原文不进任何返回值、日志与错误文案。
 
 ### 控制台额度与限速提醒
 
-- 在宿主启动环境中配置 `UNIFIED_ROUTER_AGNES_CONSOLE_TOKEN`（Agnes 国内站控制台 Bearer 会话）或 `UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE`（云知声控制台 Cookie）。推理仍使用原 API Key；控制台会话只发往对应固定域名，读取请求禁止重定向。
+- 控制台会话来源：设置页浏览器登录/粘贴（存凭据引用，见 §1.3），或宿主启动环境变量 `UNIFIED_ROUTER_AGNES_CONSOLE_TOKEN`（Agnes）/ `UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE`（云知声，作回退）。推理仍使用原 API Key。
 - 设置页「渠道」展示读取到的控制台额度。会话缺失或失效时显示对应状态及控制台入口；额度状态不改变推理注册或模型开关。
 - 推理命中 HTTP 429 后显示限速倒计时，优先用 `Retry-After`，缺失时估算 60 秒。云知声 JSON 业务码 `100501` / `100502` 分别显示 RPM / TPM，已识别的余额或套餐耗尽不生成倒计时。提醒不自动重试，也不拦截请求。
 
@@ -99,6 +137,10 @@ createApiKeyManager(ctx, spec, deps = {}) -> { call(method, payload, signal), co
 | `apikey.setModelEnabled` | `{provider, modelId, enabled}` | `{modelId, enabled}` |
 | `apikey.setModelParams` | `{provider, modelId, params}` | `{modelId, ...模型字段}` |
 | `apikey.resetModels` | `{provider}` | `{enabledModelIds}` |
+| `apikey.setToolsEnabled` | `{provider, enabled}` | `{toolsEnabled, toolsRegistered}`（仅 `spec.tools` 渠道） |
+| `apikey.setConsoleSession` | `{provider, cookie}` | `{hasConsoleSession}`（仅 `spec.consoleCredentialRef` 渠道；先验证再存） |
+| `apikey.clearConsoleSession` | `{provider}` | `{hasConsoleSession:false}` |
+| `apikey.consoleLogin` | `{provider}` | `{signedIn, hasConsoleSession?}`（浏览器登录收割 Cookie，单飞） |
 
 `payload.provider !== spec.id` 一律抛 `不支持此渠道`。
 
@@ -113,6 +155,10 @@ createApiKeyManager(ctx, spec, deps = {}) -> { call(method, payload, signal), co
   models: [ { ...row, enabled, contextWindow, maxOutputLength, vision, effectiveEffort, params,
               defaultContextWindow, defaultMaxOutputLength, defaultVision, defaultEffort } ],
   balance: null | { used, limit, unlimited, unit, updatedAt } | { error: true },
+  // 仅 spec.tools 渠道：
+  toolsSupported, toolsEnabled, toolsRegistered,
+  // 仅 spec.consoleCredentialRef 渠道：
+  hasConsoleSession, consoleLoginUrl,
 }
 ```
 
@@ -140,9 +186,12 @@ createApiKeyManager(ctx, spec, deps = {}) -> { call(method, payload, signal), co
 
 | 文件 | 职责 |
 |---|---|
-| `lib/apikey-providers.js` | 渠道规格：端点、目录解析、兜底表、思考方言、余额解析 |
+| `lib/apikey-providers.js` | 渠道规格：端点、目录解析、兜底表、思考方言、余额解析、控制台登录与工具声明 |
 | `lib/apikey-llm.js` | 推理适配器：把启用的目录行装配成 pi-ai 适配器，限制请求地址，合并思考字段 |
 | `lib/apikey-models.js` | 模型开关与参数的落盘存储（每渠道一个文件） |
-| `lib/apikey-channel.js` | 管理器：Key、目录、注册、快照、写操作 |
+| `lib/apikey-channel.js` | 管理器：Key、目录、注册、快照、写操作、工具开关、控制台会话 |
+| `lib/unisound-tools.js` | 云知声多模态能力工具（六个官方 Skill 的 Host 移植）+ `unisound-tools-prompts/` 资产 |
+| `lib/apikey-quota.js` | 控制台额度读取（凭据会话优先于 env）与限速识别 |
+| `lib/browser-login.js` | 独立临时 Profile 浏览器登录 + CDP Cookie 收割（云知声控制台会话复用） |
 | `lib/rpc.js`、`lib/web-host.js`、`lib/settings-providers.js` | 方法白名单、管理器装配、公开投影、设置快照资源 |
 | `src/client/providers/apikey.js`、`agnes.js`、`unisound.js` | 设置页视图 |

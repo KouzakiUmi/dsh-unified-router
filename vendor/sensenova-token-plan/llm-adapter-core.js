@@ -1,5 +1,5 @@
 import { b as name, i as assertProviderOwnership } from "./llm-models.js";
-import { createProvider } from "@earendil-works/pi-ai";
+import { createProvider, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import { resolveImageAttachmentAccess, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
@@ -423,9 +423,18 @@ const INERT_AUTH = {
 * @param {object} inner - the `PiAiAdapter` to wrap.
 * @returns {object} the wrapped adapter.
 */
-function withReclassifiedStream(inner, defaults = options => options, wrapStream = source => source, modelEfforts = new Map()) {
+function withReclassifiedStream(inner, wrapStream = source => source, modelEfforts) {
 	const run = (stream, options) => {
-		const request = defaults(options);
+		// An absent selection inherits the model's default, not an empty string or "off".
+		// Keep nonempty explicit values intact so the peer can reject unsupported selections.
+		const selected = options.reasoningEffort;
+		const omitted = selected == null || typeof selected === "string" && selected.trim() === "";
+		const fallback = omitted ? modelEfforts.get(options.model) : void 0;
+		let request = options;
+		if (omitted && (selected !== void 0 || fallback !== void 0)) {
+			const { reasoningEffort, ...rest } = options;
+			request = fallback === void 0 ? rest : { ...rest, reasoningEffort: fallback };
+		}
 		return reclassifyStream(wrapStream(stream(request), request));
 	};
 	const describe = model => {
@@ -467,8 +476,12 @@ function withReclassifiedStream(inner, defaults = options => options, wrapStream
 * @returns {{adapter: object, providerIds: string[]}} the adapter and the ids
 *   it owns.
 */
-function assemblePiAiAdapter({ providerId, displayName, apiKeyName, models, resolveCredential, get, reasoning, requestImagePixelBudget, configuredMaxTokens = new Map(), requestDefaults, api = openAICompletionsApi(), wrapStream, modelEfforts }) {
+function assemblePiAiAdapter({ providerId, displayName, apiKeyName, models, resolveCredential, get, requestImagePixelBudget, configuredMaxTokens = new Map(), api = openAICompletionsApi(), wrapStream, modelEfforts = new Map() }) {
 	assertProviderOwnership(models, providerId);
+	const supportedDefaults = new Map(models.flatMap(model => {
+		const effort = modelEfforts.get(model.id);
+		return model.reasoning && effort !== void 0 && getSupportedThinkingLevels(model).includes(effort) ? [[model.id, effort]] : [];
+	}));
 	const provider = {
 		...createProvider({
 			id: providerId,
@@ -500,7 +513,6 @@ function assemblePiAiAdapter({ providerId, displayName, apiKeyName, models, reso
 		retryPolicy: resolveRetryPolicy(buildRetryPolicyConfig(), `${name}.${providerId}.retryPolicy`),
 		configuredMaxTokens,
 		modelErrors: /* @__PURE__ */ new Map(),
-		...reasoning !== void 0 ? { reasoning } : {},
 		...imageBudgets(requestImagePixelBudget),
 		piProvider: provider
 	}]]);
@@ -511,7 +523,7 @@ function assemblePiAiAdapter({ providerId, displayName, apiKeyName, models, reso
 			resolveApiKey: async () => resolveCredential(),
 			resolveAttachments: () => get?.("attachments"),
 			resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => (get?.("fs"))?.processPathFromHostPath?.(hostPath), ref)
-		}), requestDefaults, wrapStream, modelEfforts),
+		}), wrapStream, supportedDefaults),
 		providerIds: [providerId]
 	};
 }

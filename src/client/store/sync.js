@@ -40,15 +40,29 @@ export function createHostSync({
       const credits = get('credits.balances')
       const checkin = get('checkin.status', 'daily')
       const automation = get('automation.status', 'automation')
+      const loomyRoute = get('loomy.routeStatus', 'loomy')
       const patch = {}
       if (checkin?.value) patch.checkin = checkin.value
       if (automation?.value) patch.automation = automationFrom(automation.value)
+      if (loomyRoute?.value) patch.loomyRoute = loomyRouteFrom(loomyRoute.value)
       if (status?.value && status.at >= newestStatusReadRef.current) patch.statuses = statusFrom(status.value)
       if (accounts?.value && accounts.at >= (newestAccountRead.get(state.provider) ?? 0) && (!state.loading || !state.accounts.length)) {
         patch.accounts = accountsFrom(accounts.value, state.provider)
       }
+      if (loomyRoute?.value && state.provider === 'loomy') {
+        const list = patch.accounts ?? state.accounts
+        patch.accounts = list.map(({ route: _old, ...account }) => ({
+          ...account,
+          ...(patch.loomyRoute.accounts[account.id] ? { route: patch.loomyRoute.accounts[account.id] } : {}),
+        }))
+      }
       if (packAllowed(state.provider)) {
         const sides = modelProvidersOf(state.provider)
+        const paramEntries = sides.map(side => [side, get('model.params', side)])
+          .filter(([side, entry]) => entry?.value && entry.at >= (newestModelRead?.get(side) ?? 0))
+        if (paramEntries.length) {
+          patch.params = paramEntries.reduce((params, [side, entry]) => replaceProviderParams(params, entry.value, side), state.params)
+        }
         const sideEntries = sides.map(side => [side, get('model.list', side)])
         const freshSides = sideEntries.filter(([side, entry]) => entry?.value && entry.at >= (newestModelRead?.get(side) ?? 0))
         if (freshSides.length && (!state.loading || !state.models.length)) {
@@ -67,7 +81,7 @@ export function createHostSync({
       if (Object.keys(patch).length) {
         publish(patch)
         const next = getState()
-        if (packAllowed(next.provider) && (accounts || credits)) cache.rememberChannel(next.provider, next)
+        if (packAllowed(next.provider) && (accounts || credits || patch.params || patch.models || patch.modelSource)) cache.rememberChannel(next.provider, next)
         else cache.persistCards(next)
       }
       return true

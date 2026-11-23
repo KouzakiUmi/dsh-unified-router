@@ -112,8 +112,9 @@ const forbiddenCall = (f, method, payload) => f.call(method, payload, { origin: 
 test('APIKEY 方法白名单与渠道 id 与规格表一致', () => {
   assert.deepEqual([...APIKEY_PROVIDER_IDS], ['agnes', 'unisound'])
   assert.deepEqual([...APIKEY_METHODS].sort(), [
-    'apikey.resetModels', 'apikey.setEnabled', 'apikey.setKey',
-    'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.snapshot',
+    'apikey.clearConsoleSession', 'apikey.consoleLogin', 'apikey.resetModels',
+    'apikey.setConsoleSession', 'apikey.setEnabled', 'apikey.setKey',
+    'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.setToolsEnabled', 'apikey.snapshot',
   ])
 })
 

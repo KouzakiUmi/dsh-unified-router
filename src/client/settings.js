@@ -44,7 +44,7 @@ export function Settings({ ctx }) {
     setSelection({ provider: state.provider, panel: tab })
     if (open) setMore(previous => ({ ...previous, [`${state.provider}:channel:${open}`]: true }))
   }
-  React.useEffect(() => installStyles(), [])
+  React.useEffect(() => { if (typeof ctx.effect !== 'function') return installStyles() }, [ctx])
   React.useEffect(() => {
     const store = createRouterStore((method, payload, signal) =>
       ctx.connection.rpc.call('/api', 'unified-router', { method, payload }, signal), rememberedProvider())
@@ -105,8 +105,8 @@ export function Settings({ ctx }) {
       ...PROVIDERS.map((item, index) => {
         const value = item.statusFrom(state)
         const selected = state.provider === item.id
-        return h('button', { key: item.id, type: 'button', role: 'tab', className: 'eac-provider',
-          'aria-selected': selected, tabIndex: selected ? 0 : -1, 'aria-label': `切换到 ${item.title}`,
+        return h('button', { key: item.id, id: `eac-provider-${item.id}`, type: 'button', role: 'tab', className: 'eac-provider',
+          'aria-selected': selected, tabIndex: selected ? 0 : -1, 'aria-label': `切换到 ${item.title}`, 'aria-controls': 'eac-provider-workspace',
           onClick: () => { if (!selected) selectProvider(item.id) },
           onKeyDown: event => tabKeys(event, index, PROVIDERS.map(value => value.id), id => { if (id !== state.provider) selectProvider(id) }) },
           h('span', { className: 'eac-provider-name' }, item.title),
@@ -114,12 +114,13 @@ export function Settings({ ctx }) {
             h('span', { className: 'eac-provider-dot', 'data-tone': toneFor(value) }),
             value ? value.cardMeta ?? (value.closed ? '已关闭' : `${value.totalAccounts ?? value.accounts ?? '—'} 账号 · ${value.models ?? '—'} 模型`) : '待读取'))
       })),
-    h('div', { className: 'eac-workspace', 'data-panel': panel },
+    h('div', { className: 'eac-workspace', 'data-panel': panel, role: 'tabpanel', id: 'eac-provider-workspace', 'aria-labelledby': `eac-provider-${state.provider}` },
       h('header', { className: 'eac-header' },
         h('h2', { className: 'eac-title' }, provider.title),
         h('div', { className: 'eac-header-actions' },
           h('span', { className: 'eac-status-chip', 'data-tone': toneFor(status) }, statusLabel),
-          provider.panelIds || panel === 'models' ? null : button('刷新', () => act('refreshSettings'), state.busy, { 'aria-label': '刷新账号与额度' }))),
+          panel === 'models' ? null : button('刷新', () => act('refreshSettings'), state.busy, {
+            'aria-label': provider.panelIds ? '刷新渠道与用量' : '刷新账号与额度' }))),
       h('div', { className: 'eac-panels', role: 'tablist', 'aria-label': '设置分区' },
         ...panels.map((item, index) =>
           h('button', { key: item.id, id: `eac-tab-${item.id}`, type: 'button', role: 'tab', className: 'eac-panel-tab',
@@ -135,5 +136,8 @@ export function Settings({ ctx }) {
 }
 
 export function apply(ctx) {
+  if (typeof ctx.effect === 'function') ctx.effect(installStyles, 'unified-router: styles')
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'unified-router', order: 23, label: 'Unified Router', inject: () => ({ ctx }) }, Settings))
+  registerContextPill(ctx)
+  registerQuotaPill(ctx)
 }

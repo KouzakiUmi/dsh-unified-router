@@ -26,6 +26,66 @@ test('控制台额度使用独立凭据，按渠道投影且丢弃敏感字段',
   assert.deepEqual(denied, { status: 'expired' })
 })
 
+test('云知声控制台额度：兼容字符串积分与赠送额度 giftQuotas 投影', async () => {
+  // 真实接口返回 weeklyPointsTotal/Remain/Used 为十进制字符串，且未开启 5 小时窗口时省略 window5h*。
+  const u = await readApiKeyQuota('unisound', async () => ({
+    errorCode: '0',
+    result: {
+      weeklyPointsTotal: '10000',
+      weeklyPointsUsed: '0',
+      weeklyPointsRemain: '10000',
+      giftQuotas: [
+        { modelId: 'u2-asr', remainAmount: 30, totalAmount: 30, usedAmount: 0, unit: 'HOUR', displayUnit: '小时' },
+        { modelId: 'u2-tts', remainAmount: '150000', totalAmount: '150000', usedAmount: '0', unit: 'CHAR', displayUnit: '字' },
+        { modelId: 'u2-ocr', remainAmount: 29500000, totalAmount: 29500000, usedAmount: 0, unit: 'TOKEN', displayUnit: 'Token' },
+        { modelId: 'bad id with spaces', remainAmount: 1, totalAmount: 1, unit: 'TOKEN' },
+      ],
+      apiKey: 'NEVER_DISPLAY',
+    },
+  }), undefined, {}, 'session=fake')
+  assert.equal(u.status, 'ready')
+  assert.deepEqual(u.windows, [
+    { id: 'window-points', used: null, limit: 2000, remaining: 2000 },
+    { id: 'weekly-points', used: 0, limit: 10000, remaining: 10000 },
+  ])
+  const projected = projectApiKeyQuota(u)
+  assert.equal(projected.status, 'ready')
+  assert.deepEqual(projected.windows, [
+    { id: 'window-points', used: null, limit: 2000, remaining: 2000 },
+    { id: 'weekly-points', used: 0, limit: 10000, remaining: 10000 },
+  ])
+  assert.deepEqual(projected.gifts, [
+    { modelId: 'u2-asr', used: 0, limit: 30, remaining: 30, unit: '小时' },
+    { modelId: 'u2-tts', used: 0, limit: 150000, remaining: 150000, unit: '字' },
+    { modelId: 'u2-ocr', used: 0, limit: 29500000, remaining: 29500000, unit: 'Token' },
+  ])
+  assert.doesNotMatch(JSON.stringify(projected), /NEVER_DISPLAY/)
+  const freeIdle = await readApiKeyQuota('unisound', async () => ({
+    errorCode: '0',
+    result: { planCode: 'U-FREE', weeklyPointsTotal: '2500', weeklyPointsUsed: '100', weeklyPointsRemain: '2400' },
+  }), undefined, {}, 'session=fake')
+  assert.deepEqual(freeIdle.windows[0], { id: 'window-points', used: null, limit: 500, remaining: 500 })
+  const clamped = await readApiKeyQuota('unisound', async () => ({
+    errorCode: '0',
+    result: { window5hLimit: '500', window5hRemain: '-3.5', weeklyPointsTotal: 10000, weeklyPointsRemain: -1 },
+  }), undefined, {}, 'session=fake')
+  assert.deepEqual(clamped.windows, [
+    { id: 'window-points', used: null, limit: 500, remaining: 0 },
+    { id: 'weekly-points', used: null, limit: 10000, remaining: 0 },
+  ])
+})
+
+test('云知声保留窗口重置倒计时，不借用套餐结束时间', async () => {
+  const quota = await readApiKeyQuota('unisound', async () => ({ errorCode: '0', result: {
+    weeklyPointsTotal: 2500, weeklyPointsRemain: 2000, weeklyResetInDays: 2, weeklyResetInHours: 3,
+    window5hLimit: 500, window5hRemain: 300, window5hResetInLessThanOneMinute: true,
+    periodEnd: '2030-01-01',
+  } }), undefined, {}, 'session=fake')
+  assert.deepEqual(projectApiKeyQuota(quota).windows.map(row => row.resetInMs), [60000, 51 * 3600000])
+  assert.ok(Number.isFinite(quota.updatedAt))
+  assert.doesNotMatch(JSON.stringify(quota), /periodEnd/)
+})
+
 test('限速区分 RPM/TPM、账单耗尽、明确等待时间与估算', async () => {
   const now = 1_800_000_000_000
   const rpm = Response.json({ base_resp: { status_code: 100501 } })
@@ -94,12 +154,14 @@ test('Agnes catalog.request：URL 与 Bearer 头；next 恒 undefined', () => {
   assert.equal(agnes.catalog.next(undefined), undefined)
 })
 
-test('Agnes parse：规格合并、图片/视频过滤、未知 id 零值、去重', () => {
+test('Agnes parse：规格合并、图片/视频与无端点决策模型过滤、免费/付费区分、去重', () => {
   const rows = agnes.catalog.parse({ data: [
     { id: 'agnes-2.5-flash', supported_endpoint_types: ['chat'] },
     { id: 'agnes-image-pro' },
     { id: 'agnes-video-x' },
+    { id: 'agnes-sys1-1.0', supported_endpoint_types: [] }, // 非聊天决策模型：过滤
     { id: 'agnes-3.0-flash' },
+    { id: 'agnes-3.0-pro' },
     { id: 'agnes-2.5-pro' },
     { id: 'agnes-2.5-pro-beta' },
     { id: 'agnes-2.5-pro-alpha' },
@@ -108,19 +170,21 @@ test('Agnes parse：规格合并、图片/视频过滤、未知 id 零值、去�
     { id: 'agnes-2.5-flash' },   // 重复 id 去重（保留首个）
   ] })
   assert.deepEqual(rows.map(row => row.id), [
-    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-2.5-pro',
+    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-3.0-pro', 'agnes-2.5-pro',
     'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha', 'agnes-2.5-pro-theta', 'agnes-9.9-new',
   ])
   assert.deepEqual(rows[0], {
     id: 'agnes-2.5-flash', name: 'Agnes 2.5 Flash', context: 524_288, output: 65_536,
-    attachment: true, reasoning: true, efforts: AGNES_EFFORTS, defaultEffort: 'off',
+    attachment: true, reasoning: true, efforts: AGNES_EFFORTS, defaultEffort: 'off', free: true,
   })
-  for (const id of ['agnes-2.5-pro', 'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha']) {
+  assert.equal(rows.find(entry => entry.id === 'agnes-3.0-flash').free, true)
+  for (const id of ['agnes-3.0-pro', 'agnes-2.5-pro', 'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha']) {
     const row = rows.find(entry => entry.id === id)
     assert.equal(row.context, 1_048_576, id)
     assert.equal(row.output, 65_536, id)
     assert.equal(row.attachment, true, id)
     assert.equal(row.reasoning, true, id)
+    assert.equal(row.paidOnly, true, id)
   }
   // 文档未给规格的 theta 与表外新 id：context/output 记 0，不假设图片输入。
   const theta = rows.find(row => row.id === 'agnes-2.5-pro-theta')
@@ -183,7 +247,10 @@ test('Agnes balance：两个请求、美分换算、unlimited 阈值、缺字段
     agnes.balance.parse([{ hard_limit_usd: 10_000_000 }, { total_usage: 100 }]),
     { used: 1, limit: null, unlimited: true, unit: 'USD' },
   )
-  assert.equal(agnes.balance.parse([{ hard_limit_usd: 100_000_000 }, { total_usage: 0 }]), null, '兼容账单占位值不是实时额度')
+  assert.deepEqual(
+    agnes.balance.parse([{ hard_limit_usd: 100_000_000 }, { total_usage: 0 }]),
+    { used: 0, limit: null, unlimited: true, unit: 'USD' },
+  )
   assert.equal(agnes.balance.parse([{ hard_limit_usd: 9_999_999 }, { total_usage: 0 }]).unlimited, false)
   for (const bad of [
     undefined, null, [], [{}, {}], [null, null],
@@ -197,9 +264,9 @@ test('Agnes balance：两个请求、美分换算、unlimited 阈值、缺字段
   }
 })
 
-test('Agnes fallback：六个确认存在的文本模型，字段与 parse 一致', () => {
+test('Agnes fallback：七个确认存在的文本模型，字段与 parse 一致', () => {
   assert.deepEqual(agnes.fallback.map(row => row.id), [
-    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-2.5-pro',
+    'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-3.0-pro', 'agnes-2.5-pro',
     'agnes-2.5-pro-beta', 'agnes-2.5-pro-alpha', 'agnes-2.5-pro-theta',
   ])
   const parsed = Object.fromEntries(
@@ -241,8 +308,9 @@ test('云知声 parse：字段映射、校验、去重', () => {
   const doubao = rows.find(row => row.id === 'doubao-seed-1-6')
   assert.equal(doubao.context, 0)
   assert.equal(doubao.output, 0)
-  // 不确认就不声明：第三方模型一律无图片输入、无思考档位。
-  assert.ok(rows.every(row => row.attachment === false))
+  // 官方模型页「输入模态」声明：u2-flash / u2-med 为「文本、图片」，
+  // u2-radimed 为影像与文本混合输入；u2 只声明文本输入。
+  assert.deepEqual(rows.filter(row => row.attachment).map(row => row.id), ['u2-flash', 'u2-med', 'u2-radimed'])
   assert.deepEqual(doubao.efforts, [])
   assert.equal(doubao.reasoning, false)
   for (const bad of [undefined, null, 'x', [], { data: {} }, { data: 'list' }]) {
@@ -302,15 +370,52 @@ test('云知声 effortBody：只在行档位表内发 reasoning_effort', () => {
   assert.equal(unisound.effortBody('low', {}), undefined)
 })
 
-test('云知声 fallback：四个官方确认的 u2 模型；无余额接口', () => {
+test('云知声 fallback：四个官方确认的 u2 模型取官方规格；无余额接口', () => {
   assert.deepEqual(unisound.fallback.map(row => row.id), ['u2-flash', 'u2', 'u2-med', 'u2-radimed'])
   const flash = unisound.fallback[0]
   assert.equal(flash.context, 1_048_576) // 官方产品页：上下文 1M
-  assert.equal(flash.output, 131_072)    // 官方产品页：最大输出 128K
-  for (const row of unisound.fallback.slice(1)) {
-    assert.equal(row.context, 0)
-    assert.equal(row.output, 0)
-  }
-  assert.ok(unisound.fallback.every(row => row.attachment === false))
+  assert.equal(flash.output, 262_144)    // 1118 官方规格：最大输出 256K
+  const u2 = unisound.fallback[1]
+  // 上游目录真值（2026-11-23 真实 Key 拉取），优先于第三方转述的 163K/65K
+  assert.equal(u2.context, 160_000)
+  assert.equal(u2.output, 64_000)
+  const med = unisound.fallback[2]
+  assert.equal(med.context, 262_144)
+  assert.equal(med.output, 0, '上游 max_output 为 null，记 0 不编造')
+  const radimed = unisound.fallback[3]
+  assert.equal(radimed.context, 40_960, '上游目录真值')
+  assert.equal(radimed.output, 0, '上游 max_output 为 null')
+  assert.deepEqual(unisound.fallback.filter(row => row.attachment).map(row => row.id), ['u2-flash', 'u2-med', 'u2-radimed'])
   assert.equal(unisound.balance, null)
+})
+
+test('云知声断网时沿用旧目录并修正图片标记', () => {
+  const source = { id: 'u2-flash', name: '缓存名称', attachment: false, context: 1048576, output: 131072 }
+  assert.deepEqual(unisound.catalog.restore(source), { ...source, attachment: true })
+  // u2-med 官方声明支持图片：旧缓存里 attachment=false 也要按当前声明修正。
+  assert.equal(unisound.catalog.restore({ ...source, id: 'u2-med', attachment: false }).attachment, true)
+  // u2 只声明文本输入：旧缓存里的 true 同样按当前声明修正。
+  assert.equal(unisound.catalog.restore({ ...source, id: 'u2', attachment: true }).attachment, false)
+})
+
+test('分渠道默认输出上限：只在上游缺输出规格时生效，上游有值不覆盖', async () => {
+  const { createApiKeyModelSettings } = await import('../lib/apikey-models.js')
+  const remote = [
+    // 上游给了真实规格 → 必须用上游值，即使配了默认上限
+    { id: 'u2-flash', name: 'U2 Flash', context: 1_048_576, output: 262_144, attachment: true, efforts: [], defaultEffort: undefined },
+    // 上游 max_output 为 null → 用渠道默认上限（受上下文约束）
+    { id: 'u2-med', name: 'U2 Med', context: 262_144, output: 0, attachment: true, efforts: [], defaultEffort: undefined },
+    // 上下文比配置值小时取上下文
+    { id: 'small', name: 'Small', context: 40_960, output: 0, attachment: false, efforts: [], defaultEffort: undefined },
+  ]
+  const none = await createApiKeyModelSettings(null, 'unisound').list(remote)
+  assert.equal(none.find(r => r.id === 'u2-med').maxOutputLength, 32_768, '未配置时按上下文推导')
+  const capped = await createApiKeyModelSettings(null, 'unisound', { defaultMaxOutput: () => 131_072 }).list(remote)
+  assert.equal(capped.find(r => r.id === 'u2-flash').maxOutputLength, 262_144, '上游有值不覆盖')
+  assert.equal(capped.find(r => r.id === 'u2-med').maxOutputLength, 131_072, '上游缺失时用渠道默认')
+  // modelTokenBudget 始终保留「输出 < 上下文」的保护，故取 context - 1。
+  assert.equal(capped.find(r => r.id === 'small').maxOutputLength, 40_959, '不超过上下文窗口')
+  // 设置清除后回到推导
+  const cleared = await createApiKeyModelSettings(null, 'unisound', { defaultMaxOutput: () => undefined }).list(remote)
+  assert.equal(cleared.find(r => r.id === 'u2-med').maxOutputLength, 32_768)
 })
