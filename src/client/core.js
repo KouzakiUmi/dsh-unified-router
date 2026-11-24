@@ -5,7 +5,7 @@
 
 export const MODEL_PAGE_SIZE = 15
 export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.setKey', 'plan.setModelEnabled', 'plan.setModelParams', 'plan.resetModels', 'plan.consoleLogin'])
-export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
+export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.setAccountEnabled', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
 // API Key 渠道（Agnes、云知声）共用的宿主方法；渠道 id 在 payload.provider 里带。
 export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels', 'apikey.setToolsEnabled', 'apikey.setConsoleSession', 'apikey.consoleLogin', 'apikey.clearConsoleSession'])
 // 自管多账号渠道（AStudio / CodeArts）共用的宿主方法。
@@ -453,6 +453,8 @@ export function workbuddyAccountFrom(value) {
   const rawError = text(value.error, 40)
   return {
     id, name: text(value.name, 80) || id, uid: text(value.uid, 120),
+    // 账号开关（缺省启用）：与宿主投影、索引三处同一判据。
+    enabled: value.enabled !== false,
     signedIn: value.signedIn === true, plan: text(value.plan, 160),
     signIn: text(value.signIn, 20) === 'renewed' ? 'renewed' : 'kept',
     windows: Array.isArray(value.windows) ? value.windows.slice(0, 16).map(workbuddyWindowFrom).filter(Boolean) : [],

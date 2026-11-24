@@ -72,8 +72,12 @@ export const workbuddy = {
         const checkin = checkinEntry(state, workbuddy.id, account.id)
         return {
           id: account.id, name, updatedAt: account.updatedAt,
+          // 账号开关：停用账号不参与选号与 429 轮换。
+          enabled: account.enabled !== false,
+          toggle: ['workbuddySetAccountEnabled', account.id, account.enabled === false],
           tags: [
             account.plan && [account.plan, 'info'],
+            account.enabled === false && ['已停用'],
             !account.signedIn && ['待登录', 'warn'],
             (account.error || state.workbuddyStale) && [account.windows.length ? '上次额度' : '额度读取失败', 'warn'],
             checkin?.tag,
@@ -196,6 +200,18 @@ function createWorkBuddyActions({ getState, isDisposed, hasSnapshots, request, p
     workbuddyLogout(accountId) {
       if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
       return mutate('workbuddy.logout', { accountId }, { message: '已退出该 WorkBuddy 账号。' })
+    },
+    /**
+     * 账号开关：停用后该账号不参与选号与 429 轮换（凭据保留，重新启用即可用）。
+     * WorkBuddy 每个账号的 DS-V4.1-Flash 额度用尽后上游回 429，此开关用于
+     * 主动把耗尽的账号摘出轮换池。
+     */
+    workbuddySetAccountEnabled(accountId, enabled) {
+      if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)
+      if (typeof enabled !== 'boolean') return Promise.resolve(false)
+      return mutate('workbuddy.setAccountEnabled', { accountId, enabled }, {
+        message: enabled ? '已启用该 WorkBuddy 账号。' : '已停用该 WorkBuddy 账号（不再参与选号）。',
+      })
     },
     workbuddyCheckin(accountId) {
       if (typeof accountId !== 'string' || !accountId) return Promise.resolve(false)

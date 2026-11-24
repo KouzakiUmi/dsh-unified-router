@@ -689,3 +689,86 @@ test('WorkBuddy 签到收到上游 5xx 后只提交一次', async () => {
     })
   } finally { manager.dispose() }
 })
+
+test('账号开关：停用写入索引并反映到快照，凭据保留', async () => {
+  const creds = credentialsFixture()
+  const id = 'workbuddy-aaaaaaaa', ref = `${WORKBUDDY_ACCOUNT_REF_PREFIX}AAAAAA`
+  creds.values.set(WORKBUDDY_ACCOUNTS_REF, JSON.stringify([{ id, credentialRef: ref, name: '主号', uid: 'u-1', createdAt: 1 }]))
+  creds.values.set(ref, JSON.stringify({ type: 'oauth', access: 'a1', accountId: 'u-1' }))
+  const manager = createWorkBuddyManager(context(creds))
+  try {
+    await withFetch(usageStub(), async () => {
+      await manager.call('workbuddy.setAccountEnabled', { provider: 'workbuddy', accountId: id, enabled: false })
+      assert.equal(indexOf(creds)[0].enabled, false, '停用必须写进索引')
+      assert.ok(creds.values.has(ref), '停用不得删除凭据（重新启用即恢复）')
+      const snapshot = await manager.call('workbuddy.snapshot', { provider: 'workbuddy' })
+      assert.equal(snapshot.accounts.find(row => row.id === id).enabled, false)
+      await manager.call('workbuddy.setAccountEnabled', { provider: 'workbuddy', accountId: id, enabled: true })
+      assert.equal(indexOf(creds)[0].enabled, undefined, '启用时不写字段（缺省即启用）')
+      await assert.rejects(
+        manager.call('workbuddy.setAccountEnabled', { provider: 'workbuddy', accountId: id, enabled: 'yes' }),
+        /账号开关无效/,
+      )
+    })
+  } finally { manager.dispose() }
+})
+
+test('推理 429：自动切到下一个启用账号，跳过已停用账号', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wb-failover-'))
+  const creds = credentialsFixture()
+  const [a, b, c] = [['aaaaaaaa', 'AAAAAA'], ['bbbbbbbb', 'BBBBBB'], ['cccccccc', 'CCCCCC']].map(([hex, ref6]) => ({
+    id: `workbuddy-${hex}`, credentialRef: `${WORKBUDDY_ACCOUNT_REF_PREFIX}${ref6}`, uid: `u-${hex}`,
+  }))
+  creds.values.set(WORKBUDDY_ACCOUNTS_REF, JSON.stringify([
+    { ...a, name: '主号', createdAt: 1 },
+    { ...b, name: '停用号', createdAt: 2, enabled: false },
+    { ...c, name: '备号', createdAt: 3 },
+  ]))
+  for (const row of [a, b, c]) {
+    creds.values.set(row.credentialRef, JSON.stringify({ type: 'oauth', access: `token-${row.uid}`, accountId: row.uid }))
+  }
+  const hits = []
+  let lastBuild
+  const provider = 'workbuddy'
+  const catalog = [
+    { id: 'glm-5.3', name: 'GLM 5.3', enabled: true, api: { npm: '@ai-sdk/openai-compatible' }, limit: { context: 128_000, output: 64_000 } },
+  ]
+  const ctx = context(creds, { llm: { registerAdapter() { return () => {} } } })
+  const deps = {
+    plugin: {
+      provider: { models: async () => catalog },
+      auth: {
+        async loader(getAuth) {
+          const auth = await getAuth()
+          return {
+            fetch: async () => {
+              hits.push(auth.accountId)
+              // 主号额度耗尽：上游回 429；备号正常。
+              return auth.accountId === a.uid
+                ? new Response('{"error":"rate_limited"}', { status: 429 })
+                : new Response('{"ok":true}', { status: 200 })
+            },
+          }
+        },
+      },
+    },
+    loadLlmAdapter: async () => ({
+      createWorkBuddyAdapter(options) {
+        lastBuild = options
+        return { adapter: { listModels: () => options.catalog }, providerIds: [provider] }
+      },
+    }),
+  }
+  const config = { modelSettingsFile: join(dir, 'preferences.json'), catalogFile: join(dir, 'catalog.json') }
+  const manager = createWorkBuddyManager(ctx, config, deps)
+  try {
+    await manager.call('workbuddy.models', { provider })
+    const fetch = await lastBuild.getFetch()
+    const response = await fetch('https://copilot.tencent.com/v2/chat/completions', { method: 'POST', body: '{"messages":[]}' })
+    assert.equal(response.status, 200, '主号 429 后应拿到备号的正常响应')
+    assert.deepEqual(hits, [a.uid, c.uid], '先试主号，再跳过停用账号直接用备号')
+  } finally {
+    manager.dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
