@@ -79,7 +79,10 @@ export function packSettings(provider) {
             id: accountId, name: nickname, enabled,
             toggle: ['save', accountId, nickname, !enabled],
             tags: [
-              caps.accountPlan && (plan === 'pro' ? ['订阅', 'info'] : plan === 'free' ? ['免费', 'success'] : ['套餐未知', 'warn']),
+              // 统一模型开关打开后不再区分免费/订阅：合并的意义就是「一个模型面」，
+              // 再挂套餐标签会让人以为还要按套餐挑账号。关闭时照旧按套餐标注。
+              caps.accountPlan && !unifiedModelsOn(state)
+                && (plan === 'pro' ? ['订阅', 'info'] : plan === 'free' ? ['免费', 'success'] : ['套餐未知', 'warn']),
               !enabled && ['已停用'],
               account.expiresAt > 0 && account.expiresAt <= Date.now() && ['凭据过期', 'warn'],
               limited > 0 && [`受限 ${limited}`, 'warn'],
@@ -164,7 +167,9 @@ export function packSettings(provider) {
         }))),
         ...(caps.unifiedModels && state.automation?.unifiedModelProviders?.includes(id) ? [{
           id: 'unified-models', name: '统一免费与订阅模型',
-          meta: '先走免费账号，免费额度用尽自动改用订阅账号',
+          // 合并后是一个模型面：说明按「谁有额度用谁」讲，不再强调免费/订阅的先后，
+          // 否则用户会以为还要按套餐挑账号。
+          meta: '合并为一个模型面 · 额度用尽自动切换账号',
           enabled: state.automation?.config?.raccoonUnifiedModels === true,
           toggle: ['setAutomationConfig', { raccoonUnifiedModels: !(state.automation?.config?.raccoonUnifiedModels === true) }],
           toggleLabel: '统一免费与订阅模型',

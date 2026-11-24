@@ -92,7 +92,7 @@ test('药丸只对 Unified Router 渠道出现，非本插件 provider 渲染 nu
 
 test('pack 渠道按目录容量出档，覆盖档位高亮，点击发 contextOnly 单字段写', async () => {
   const calls = []
-  const directory = store({ current: { provider: 'loomy', model: 'm1' } })
+  const directory = store({ current: { provider: 'qodercn', model: 'm1' } })
   const f = setup({
     directory,
     rpc: async (method, payload) => {
@@ -101,8 +101,8 @@ test('pack 渠道按目录容量出档，覆盖档位高亮，点击发 contextO
         { id: 'm1', name: 'm1', contextWindow: 1_000_000 },
         { id: 'm2', name: 'm2', contextWindow: 400_000 },
       ] } }
-      if (method === 'model.params') return { ok: true, value: { contextQuickWrite: true, provider: 'loomy', params: { m1: { contextWindow: 500_000 } } } }
-      if (method === 'model.setParams') return { ok: true, value: { provider: 'loomy', params: { m1: { contextWindow: payload.params?.contextWindow } } } }
+      if (method === 'model.params') return { ok: true, value: { contextQuickWrite: true, provider: 'qodercn', params: { m1: { contextWindow: 500_000 } } } }
+      if (method === 'model.setParams') return { ok: true, value: { provider: 'qodercn', params: { m1: { contextWindow: payload.params?.contextWindow } } } }
       return { ok: false, error: { code: 'x', message: 'x' } }
     },
   })
@@ -121,7 +121,7 @@ test('pack 渠道按目录容量出档，覆盖档位高亮，点击发 contextO
   await tick(); tree = f.render()
   const write = calls.find(c => c.method === 'model.setParams')
   // payload 在 VM 内构造，原型不同，逐字段断言
-  assert.equal(write.payload.provider, 'loomy')
+  assert.equal(write.payload.provider, 'qodercn')
   assert.equal(write.payload.modelId, 'm1')
   assert.equal(write.payload.contextOnly, true)
   assert.equal(write.payload.params.contextWindow, 256_000)
@@ -131,14 +131,14 @@ test('pack 渠道按目录容量出档，覆盖档位高亮，点击发 contextO
 })
 
 test('已设输出上限时冲突档位置灰，默认档在默认窗口装不下时同样不可选', async () => {
-  const directory = store({ current: { provider: 'loomy', model: 'm1' } })
+  const directory = store({ current: { provider: 'qodercn', model: 'm1' } })
   const calls = []
   const f = setup({
     directory,
     rpc: async (method, payload) => {
       calls.push({ method, payload })
       if (method === 'model.list') return { ok: true, value: { models: [{ id: 'm1', contextWindow: 200_000 }] } }
-      if (method === 'model.params') return { ok: true, value: { contextQuickWrite: true, provider: 'loomy', params: { m1: { maxTokens: 300_000, contextWindow: 500_000 } } } }
+      if (method === 'model.params') return { ok: true, value: { contextQuickWrite: true, provider: 'qodercn', params: { m1: { maxTokens: 300_000, contextWindow: 500_000 } } } }
       return { ok: true, value: {} }
     },
   })
@@ -181,7 +181,7 @@ test('plan 渠道走 plan.snapshot/plan.setModelParams，恢复默认写 context
 
 test('切换 provider/模型会重新取数，不沿用旧档位', async () => {
   const calls = []
-  const directory = store({ current: { provider: 'loomy', model: 'm1' } })
+  const directory = store({ current: { provider: 'qodercn', model: 'm1' } })
   const f = setup({
     directory,
     rpc: async (method, payload) => {
@@ -198,7 +198,7 @@ test('切换 provider/模型会重新取数，不沿用旧档位', async () => {
   await tick(); tree = f.render()
   assert.equal(f.tierButtons(tree).find(b => b.children.includes('1M')).props['aria-pressed'], true)
   // 换到 m2（无覆盖、容量 400K）：不得沿用 m1 的 1M 高亮
-  directory.set({ current: { provider: 'loomy', model: 'm2' } })
+  directory.set({ current: { provider: 'qodercn', model: 'm2' } })
   await tick()
   assert.equal(f.render(), null, '切换后新目录准备好前不能点旧模型的档位')
   await tick(); tree = f.render()
@@ -328,7 +328,7 @@ test('等待保存时立即高亮目标档并锁定组，结算后只在原控�
 
 test('共用渠道后端未确认单字段写能力时不显示药丸', async () => {
   const f = setup({
-    directory: store({ current: { provider: 'loomy', model: 'm1' } }),
+    directory: store({ current: { provider: 'qodercn', model: 'm1' } }),
     rpc: async method => method === 'model.list'
       ? { ok: true, value: { models: [{ id: 'm1', contextWindow: 500_000 }] } }
       : { ok: true, value: { params: {} } },
