@@ -738,6 +738,11 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
     plugin: {
       provider: { models: async () => catalog },
       auth: {
+        // usage hook：额度为空即可，本用例只验证 429 记账追加的那条窗口。
+        async usage(getAuth) {
+          const auth = await getAuth()
+          return { accountId: auth.accountId, windows: [], signIn: 'kept' }
+        },
         async loader(getAuth) {
           const auth = await getAuth()
           return {
@@ -745,7 +750,8 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
               hits.push(auth.accountId)
               // 主号额度耗尽：上游回 429；备号正常。
               return auth.accountId === a.uid
-                ? new Response('{"error":"rate_limited"}', { status: 429 })
+                // 上游真实文案：429 会在文案里给出重置时刻（浏览器面板靠它显示「已满」）。
+                ? new Response('429 usage exceeds frequency limit, but don\'t worry, your usage will reset at 2026-11-25 19:47:41 UTC+8, alternatively, you can switch to the other models to continue using it.', { status: 429 })
                 : new Response('{"ok":true}', { status: 200 })
             },
           }
@@ -767,6 +773,18 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
     const response = await fetch('https://copilot.tencent.com/v2/chat/completions', { method: 'POST', body: '{"messages":[]}' })
     assert.equal(response.status, 200, '主号 429 后应拿到备号的正常响应')
     assert.deepEqual(hits, [a.uid, c.uid], '先试主号，再跳过停用账号直接用备号')
+    // 429 的「重置时刻」必须记下来（换号成功会吞掉 429，所以记账发生在换号之前）。
+    const limits = JSON.parse((await import('node:fs')).readFileSync(join(dir, 'workbuddy-limits.json'), 'utf8'))
+    assert.equal(limits[a.id], Date.parse('2026-11-25T19:47:41+08:00'), '应按上游文案记下重置时刻')
+    assert.equal(limits[c.id], undefined, '成功的账号不记账')
+    // 快照要如实多出一条「已满」窗口：credits 窗口无法回答「这个号还能不能继续用」。
+    const snapshot = await manager.call('workbuddy.snapshot', { provider })
+    const limitedRow = snapshot.accounts.find(row => row.id === a.id)
+    const limitedWindow = limitedRow.windows.find(window => window.name === '免费额度（token 窗口）')
+    assert.ok(limitedWindow, '撞过 429 的账号应显示该窗口')
+    assert.equal(limitedWindow.balance, 0)
+    assert.equal(limitedWindow.estimate, true, '这是基于被拒信号的估算，不是精确 token 统计')
+    assert.equal(limitedWindow.resetsAt, new Date(Date.parse('2026-11-25T19:47:41+08:00')).toISOString())
   } finally {
     manager.dispose()
     await rm(dir, { recursive: true, force: true })
