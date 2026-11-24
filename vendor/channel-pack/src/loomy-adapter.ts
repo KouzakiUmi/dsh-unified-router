@@ -25,6 +25,7 @@ import { nextUtc8DayStartMs } from './model-queue.js'
 import { RemoteCatalogGate } from './remote-catalog-gate.js'
 import { settingsNamespaceFor } from './settings-compat.js'
 import {
+  LOOMY_CLIENT_BODY_COMMENT,
   isLoomyChatModel,
   isLoomyExpired,
   loomyChatHeaders,
@@ -250,6 +251,13 @@ export interface LoomyAdapterOptions {
     servedModel: string,
     userId?: string,
   ) => void
+  /**
+   * 是否使用**简化请求体**（默认 `false` = 客户端形态）。
+   *
+   * ⚠️ 当前**没有界面入口**：功能保留但不对用户暴露（上游对受限账号一律降级，
+   * 换 body 形态救不回来）。默认走客户端形态以免触发 429。
+   */
+  isPlainBody?: () => boolean
 }
 
 /** Loomy 模型适配器。chat 端点用 Bearer，业务端点用 token。 */
@@ -554,19 +562,34 @@ export class LoomyAdapter extends LlmAdapter {
       : privateEffortFor(this.reasoningFor(entry, fallback)?.defaultEffort,
         effortsForModel)
 
-    /** 构造请求体。 */
+    /**
+     * 构造请求体。
+     *
+     * 默认按**客户端形态**发（补 `$comment` / `stream_options` / `tool_choice`），
+     * 因为简化 body 会被上游直接 429（实证）。**不覆盖**调用方的
+     * `messages` / `tools` / `max_tokens`。
+     *
+     * ⚠️ 这只是让请求不被拒；**不能**改变上游对受限账号的降级（那是账号级的）。
+     */
     const maxTokens = options.maxTokens ?? defaultModelOutputTokens(entry?.maxTokens, entry?.contextWindow)
+    const plainBody = this.options.isPlainBody?.() === true
+    const hasTools = options.tools !== undefined && options.tools.length > 0
     const buildBody = (): string => JSON.stringify({
       model: options.model,
       messages: wireMessages,
       stream: true,
       max_tokens: maxTokens,
+      ...plainBody ? {} : {
+        $comment: LOOMY_CLIENT_BODY_COMMENT,
+        stream_options: { include_usage: true },
+        ...hasTools ? { tool_choice: 'auto' } : {},
+      },
       ...options.temperature !== undefined ? { temperature: options.temperature } : {},
       ...options.stop !== undefined && options.stop.length > 0 ? { stop: options.stop } : {},
       ...effort !== undefined ? { reasoning_effort: effort } : {},
-      ...options.tools !== undefined && options.tools.length > 0
+      ...hasTools
         ? {
-            tools: options.tools.map((tool) => ({
+            tools: options.tools!.map((tool) => ({
               type: 'function',
               function: {
                 name: tool.name,
@@ -584,7 +607,7 @@ export class LoomyAdapter extends LlmAdapter {
         return await this.fetchImpl(`${this.product.apiBase}/chat/completions`, {
           method: 'POST',
           // ⚠️ chat 端点只认 Bearer（业务端点才认 token），这里两个都发。
-          headers: loomyChatHeaders(token),
+          headers: loomyChatHeaders(token, { uid: credential.userid }),
           body: buildBody(),
           signal: options.signal,
         }).then(checkQueuedResponse)

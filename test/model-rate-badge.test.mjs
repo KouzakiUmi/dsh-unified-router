@@ -108,7 +108,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     // 每个渠道一个已登录账号（目录门控要求本侧有可用凭据）；
     // raccoon 家族两侧各一个账号（同一单池，按 `plan` 分流）。
     for (const [provider, id, extra] of [
-      ['loomy', 'loomy-fixture'], ['raccoon', 'raccoon-fixture', { plan: 'free' }],
+      ['raccoon', 'raccoon-fixture', { plan: 'free' }],
       ['raccoon', 'raccoon-pro-fixture', { plan: 'pro' }],
       ['trae', 'trae-fixture'], ['qodercn', 'qoder-fixture'],
     ]) {
@@ -122,17 +122,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
       return { badgeOf: id => models.find(model => model.id === id)?.badge, models }
     }
 
-    // ===== loomy：倍率只在名字里（上游 `name` 的 `(x0.8)` / 兜底表的 `· x0.8`） =====
-    const loomy = await badges('loomy')
-    // `spark-x2.6` 已转为计费倍率（x2.5）：徽标照实显示价格。
-    assert.deepEqual(loomy.badgeOf('spark-x2.6'), rate('2.50'))
-    assert.deepEqual(loomy.badgeOf('GLM-5.3-Flash'), rate('0.80'))
-    assert.deepEqual(loomy.badgeOf('deepseek-v4-flash-1017'), rate('2.00'))
-    // 名字里没有倍率（「自动 · 均衡」）→ 未知，不挂徽标。
-    assert.equal(loomy.badgeOf('auto'), undefined)
-    // ⚠️ 既有行为不变：name 里的倍率文本保持原样（徽标是**附加**信息，不去重）。
-    // 名字里不再带倍率（倍率由 badge 显示，避免同一信息出现两次）；badge 仍按原始名字解析。
-    assert.equal(loomy.models.find(model => model.id === 'GLM-5.3-Flash').name, 'GLM 5.3 Flash')
+    // Loomy 已停用（适配器不注册），其倍率徽标验证随之移除。
 
     // ===== qodercn：兜底表的 priceFactor / promotion（不能真拉上游，需 WASM 签名） =====
     const qoder = await badges('qodercn')
@@ -212,7 +202,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     assert.equal(raccoonPro.badgeOf('sn-unknown'), undefined)
 
     // ===== 徽标只属于**选择列表**：`resolveModel` 不带（与 name 去倍率同口径） =====
-    for (const [provider, model] of [['loomy', 'GLM-5.3-Flash'], ['qodercn', 'auto'], ['trae', 'trae-paid'], ['raccoon', 'sn-paid']]) {
+    for (const [provider, model] of [['qodercn', 'auto'], ['trae', 'trae-paid'], ['raccoon', 'sn-paid']]) {
       const resolved = await adapters.get(provider).resolveModel(provider, model)
       assert.equal('badge' in resolved, false, provider)
     }

@@ -194,7 +194,7 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   react.dispose()
 })
 
-test('渠道卡片十张：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
+test('渠道卡片九张（AStudio 已停用）：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
   const { module, react } = loadClient(undefined, {
     localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'doubaowork' : null },
   }); const host = hostFixture(); let Settings
@@ -205,7 +205,7 @@ test('渠道卡片十张：旧豆包工作选择回到首项，Raccoon 两个模
   const tabs = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
   // `raccoon-pro` 是模型层的第二个 provider，不是一张卡片。
   assert.deepEqual(tabs.map(n => n.props['aria-label'].replace('切换到 ', '')),
-    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'AStudio', 'CodeArts'])
+    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'CodeArts'])
   assert.equal(tabs[0].props['aria-selected'], true)
   assert.ok(tabs.every(tab => tab.props['aria-controls'] === 'eac-provider-workspace'))
   const workspace = treeNodes(render()).find(n => n.props.id === 'eac-provider-workspace')
@@ -215,7 +215,9 @@ test('渠道卡片十张：旧豆包工作选择回到首项，Raccoon 两个模
   const store = module.createRouterStore(host.call)
   try {
     await store.load('raccoon')
-    // Raccoon 家族没有每日签到端点：不发请求，直接返回 false。
+    // 「一键领取每日额度」走 `credits.claimAll`，Raccoon 没有该端点 → 客户端按
+    // `dailyReward: false` 直接短路。**签到是另一条路**（`autoCheckin` 能力位 →
+    // automation 的 checkin 任务），两者不可共用一个标志。
     assert.equal(await store.claim(), false)
     assert.equal(host.calls.filter(c => c.method === 'credits.claimAll').length, 0)
     // 登录奖励按家族放行，且带**账号所在池**的 provider 与账号 id。
@@ -227,6 +229,15 @@ test('渠道卡片十张：旧豆包工作选择回到首项，Raccoon 两个模
     await store.queryAutomationTask('raccoon', 'claimRewards', 'raccoon-a')
     assert.equal(host.calls.filter(c => c.method === 'automation.run').length, 1)
     assert.equal(host.calls.find(c => c.method === 'automation.query').payload.mode, 'claimRewards')
+
+    // 签到是**独立能力位**：Raccoon 渠道分区出现「自动每日签到」开关，
+    // 而没有 `credits.claimAll` 的一键领取入口（靠 `dailyReward: false` 区分）。
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 Raccoon').props.onClick()
+    await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced')?.props.onClick()
+    await tick()
+    const raccoonSwitches = treeNodes(render()).filter(n => n.props?.role === 'switch').map(n => n.props['aria-label'])
+    assert.ok(raccoonSwitches.includes('Raccoon 自动每日签到'), `缺少签到开关：${raccoonSwitches.join(', ')}`)
   } finally { store.dispose(); react.dispose() }
 })
 
@@ -857,7 +868,8 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   render(); await tick()
   // 卡片：一张家族卡，副行是「账号数（单池）· 模型数（两侧之和）」。
   const cards = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  assert.equal(cards.length, 10)
+  // 9 张：AStudio 已停用（`card: false`），不再出现在渠道选择器里。
+  assert.equal(cards.length, 9)
   assert.ok(hasText(render(), '3 账号 · 6 模型'))
   // 默认进入模型页，切换渠道前先配置该渠道的补拉响应。
   host.overrides.set('model.refresh', async payload => ({ ok: true, value: payload.provider === 'raccoon'

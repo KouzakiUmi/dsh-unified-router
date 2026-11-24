@@ -26,6 +26,8 @@
  * 与 qoder 同形，正是 `openai-compat.ts` 的适用场景。
  */
 
+import { createHash } from 'node:crypto'
+
 /** 业务端点基址（推理 / 模型列表 / 积分 / 新手任务）。 */
 export const LOOMY_API_BASE = 'https://loomyad.xunfei.cn/api/v1'
 
@@ -201,6 +203,69 @@ export function isLoomyRefreshable(_credential: LoomyCredential): boolean {
 }
 
 /**
+ * 客户端版本号（`loomy-version` 头）。
+ *
+ * 上游可能据此开关行为；跟客户端升级即可。取值依据抓包实证。
+ */
+export const LOOMY_CLIENT_VERSION = '0.9.39'
+
+/**
+ * 客户端 `User-Agent`。
+ *
+ * ⚠️ **不是 Electron/Chromium 串**：客户端实际发的是 **opencode 运行时**那一串
+ * （抓包实证）。三个版本号要一起跟。
+ * ⚠️ 不设时 Node 的 undici 会发 `user-agent: node`（实测），是最显眼的
+ * 「不是客户端」痕迹之一。
+ */
+export const LOOMY_CLIENT_USER_AGENT = 'opencode/1.14.22 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13'
+
+/** 客户端对话链路发出的 `Accept`（抓包实证：通配符，由 body 的 `stream` 决定是否流式）。 */
+export const LOOMY_CLIENT_ACCEPT = '*/*'
+
+/** 客户端 `Accept-Language`（不设时 undici 发 `*`，形态不同）。 */
+export const LOOMY_CLIENT_ACCEPT_LANGUAGE = 'zh-CN,zh;q=0.9'
+
+/** 对话主链路固定的请求用途。 */
+export const LOOMY_REQUEST_PURPOSE_CHAT = 'chat.message'
+
+/** 一个 8 位十六进制片段。 */
+function randomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes)
+  globalThis.crypto.getRandomValues(buf)
+  let out = ''
+  for (const b of buf) out += b.toString(16).padStart(2, '0')
+  return out
+}
+
+/**
+ * 生成一个 W3C `traceparent`：`00-<32hex>-<16hex>-01`。
+ *
+ * ⚠️ **每次请求都要新生成**：客户端每请求一个新 ID；复用同一个会被当成重放。
+ */
+export function newTraceparent(): string {
+  return `00-${randomHex(16)}-${randomHex(8)}-01`
+}
+
+/**
+ * 由账号身份派生一个**稳定**的 `ses_<20 位 [A-Za-z0-9]>`（`X-Session-Affinity`）。
+ *
+ * 这是「会话粘性」信号：同一个 uid 恒定、不同 uid 不同，纯派生不落盘。
+ */
+export function sessionAffinity(uid: string | undefined): string {
+  const key = String(uid ?? '').trim()
+  if (key.length === 0) return ''
+  const digest = createHash('sha256').update(key).digest()
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let n = BigInt(`0x${digest.toString('hex')}`)
+  let out = ''
+  for (let i = 0; i < 20; i += 1) {
+    out += alphabet[Number(n % 62n)]
+    n /= 62n
+  }
+  return `ses_${out}`
+}
+
+/**
  * 业务端点请求头（`/models`、`/points/*`、`/onboarding/*`）。
  *
  * ⚠️ 这些端点**只认小写 `token` 头**，带 `Authorization: Bearer` 会被判
@@ -218,11 +283,30 @@ export function loomyBusinessHeaders(token: string): Record<string, string> {
  * 保持一致可避免上游将来改判据。
  * ⚠️ `Bearer ` 前缀**必需**：实测无前缀同样回 `100002 缺少 token`。
  */
-export function loomyChatHeaders(token: string): Record<string, string> {
+export function loomyChatHeaders(
+  token: string,
+  opts: { uid?: string } = {},
+): Record<string, string> {
+  const affinity = sessionAffinity(opts.uid)
   return {
-    Accept: 'text/event-stream',
+    Accept: LOOMY_CLIENT_ACCEPT,
     'Content-Type': 'application/json',
+    // ⚠️ 缺 traceparent 时上游 chat/completions 会挂死到超时（客户端注释实证）。
+    // 每次请求都要新生成，复用同一个等于重放。
+    traceparent: newTraceparent(),
+    'loomy-version': LOOMY_CLIENT_VERSION,
+    'X-Loomy-Request-Purpose': LOOMY_REQUEST_PURPOSE_CHAT,
+    'User-Agent': LOOMY_CLIENT_USER_AGENT,
+    'Accept-Language': LOOMY_CLIENT_ACCEPT_LANGUAGE,
+    ...affinity.length > 0 ? { 'X-Session-Affinity': affinity } : {},
     Authorization: `Bearer ${token}`,
     token,
   }
 }
+
+/**
+ * 官方客户端请求体里带的 `$comment`（构建遗留注释，每个请求都发）。
+ *
+ * 内容无业务含义，作用只是让出站 body 与客户端**形态一致**。
+ */
+export const LOOMY_CLIENT_BODY_COMMENT = '双写约束：下方 prompt 字面必须与 src/data/builtin-souls.js 的 BUILTIN_SOULS[id=loomy].prompt 完全一致。本文件是 bootstrap fallback，运行时以 BUILTIN_SOULS 注入为准；任何修改需两处同步。'

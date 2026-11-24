@@ -268,9 +268,13 @@ function ModelsPanel({ groups }, ui) {
 
 function automationRowsFor(provider, state) {
   const id = provider.id
-  const supportsCheckin = provider.pack
-    ? provider.caps?.dailyReward !== false
-    : (id === WORKBUDDY_ID || provider.caps?.dailyReward === true)
+  // `autoCheckin` 是显式覆盖位：签到（automation 任务）与「一键领取每日额度」
+  // （`credits.claimAll`，由 `dailyReward` 控制）是不同端点，不能共用一个标志。
+  // 例：Raccoon 有签到（靠只读 `setting_info` 触发），但没有 claimAll 入口。
+  const supportsCheckin = provider.caps?.autoCheckin === true
+    || (provider.caps?.autoCheckin !== false && (provider.pack
+      ? provider.caps?.dailyReward !== false
+      : (id === WORKBUDDY_ID || provider.caps?.dailyReward === true)))
   const capabilities = state.automation?.tasks?.[id]?.capabilities
   const supportsRewards = capabilities?.claimRewards ?? (provider.caps?.onboarding === true && provider.caps?.completeTasks !== true || provider.caps?.claimRewards === true)
   const supportsTasks = capabilities?.completeTasks ?? (provider.caps?.completeTasks === true)

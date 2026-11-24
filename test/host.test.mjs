@@ -610,9 +610,11 @@ test('每日定时任务跨日继续运行，Qoder 在 10:00 港时开始当轮�
   } finally { checkin.dispose() }
 })
 
-test('独立模式使用四个签到渠道，共用模式由原后端负责共用账号池', () => {
+test('独立模式使用五个签到渠道（含 Raccoon），共用模式由原后端负责共用账号池', () => {
   const standalone = settingsCheckinAdapters({ standalone: true })
-  assert.deepEqual([...standalone.keys()], ['loomy', 'qodercn', 'trae', 'workbuddy'])
+  // Raccoon 走专用 `raccoon.checkin`（无专门签到端点，由 setting_info 触发），
+  // 不走 `credits.claimAll`，故单独注册而不是从 PROVIDERS 的 claim 派生。
+  assert.deepEqual([...standalone.keys()], ['loomy', 'qodercn', 'trae', 'workbuddy', 'raccoon'])
   assert.deepEqual([...settingsCheckinAdapters({ standalone: false }).keys()], ['workbuddy'])
 })
 

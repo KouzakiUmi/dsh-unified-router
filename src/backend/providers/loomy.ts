@@ -15,6 +15,18 @@ export interface LoomyRouteController {
   observeServedModel?: (accountId: string | undefined, requestedModel: string, servedModel: string, userId?: string) => void
 }
 
+/**
+ * Loomy 渠道**已停用**（2026-11-24）。
+ *
+ * 全部账号被上游标记为受限：请求一律落到 `spark-x2.6-low`，响应体仍谎报
+ * `DeepSeek-V4.1-Flash`，1:1 复制官方客户端请求同样被降级——换请求形态救不回
+ * 账号级限制。因此关闭适配器注册（模型选择器不再出现 Loomy 模型）。
+ *
+ * **实现完整保留**：认证、目录、余额选择器、路由检测、签到都还在。恢复时把本常量
+ * 改回 `true`，并把 `lib/rpc.js` 的 `PROVIDERS` 条目与客户端 `card` 一并恢复。
+ */
+const LOOMY_CHANNEL_ENABLED = false
+
 export function mountLoomy(
   { ctx, pool, throwIfAllAccountsRateLimited, readImage, catalogFile, noteQuotaAccount }: ProviderContext,
   useQuotaPriority = () => false,
@@ -72,7 +84,7 @@ export function mountLoomy(
     return excluded
   }
 
-  const loomyAdapter = registerLoomyLlm(ctx, {
+  const loomyAdapter = LOOMY_CHANNEL_ENABLED ? registerLoomyLlm(ctx, {
     credentialRef: credentialRef(LOOMY.defaultCredentialRef),
     onServedModel: loomyRoute?.observeServedModel
       ? (accountId, requestedModel, servedModel, userId) => {
@@ -251,7 +263,11 @@ export function mountLoomy(
     readImage: readImage,
     accountPool: pool,
     product: LOOMY,
-  })
+  }) : undefined
 
-  return { auth: loomy, adapters: { [LOOMY.id]: loomyAdapter }, maintain: () => loomy.refreshAll(pool) }
+  return {
+    auth: loomy,
+    adapters: LOOMY_CHANNEL_ENABLED && loomyAdapter ? { [LOOMY.id]: loomyAdapter } : {},
+    maintain: () => loomy.refreshAll(pool),
+  }
 }

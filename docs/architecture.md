@@ -122,7 +122,7 @@ Raccoon 是**一张卡片 + 一个账号池 + 两个相互独立的模型 provid
 - 选号按 plan 圈候选：免费侧只取 `plan !== 'pro'`（`free`、`unknown`、缺省都算免费侧），订阅侧只取 `plan === 'pro'`。实现是把对侧账号放进 `getAvailableAccount` 的 `excludeAccountIds`，选号核心不改。
 - 目录完全独立：两侧各用**本侧账号的凭据**调用 `RaccoonAuth.fetchModelsWithCredential` 拉上游目录，上游返回什么就展示什么，不做任何倍率过滤。没有本侧账号时返回空，适配器回退本侧兜底表。
 - `raccoon-pro` 的适配器拿到的是「按 plan 门控」的池视图（只覆盖 `hasLoggedInAccount`），其余方法转发真池；否则订阅面会因池为空在对话模型选择器里被整组隐藏。
-- vendor 侧 RPC 按**家族**分派（`raccoonFamily` / `isRaccoonFamily` / `requireRaccoonFamily`），订阅版实例经 `ChannelPackRpcConfig.raccoonPro` 注入。两侧都有登录奖励（onboarding），都没有每日签到与 permanentLock。
+- vendor 侧 RPC 按**家族**分派（`raccoonFamily` / `isRaccoonFamily` / `requireRaccoonFamily`），订阅版实例经 `ChannelPackRpcConfig.raccoonPro` 注入。两侧都有登录奖励（onboarding），也都有每日签到（`raccoon.checkin`：无专门端点，由带桌面端头的 `GET office/v3/setting_info` 触发 `daily_grant`，再由账单差值确认新增积分）；都没有 permanentLock。
 
 ## 目录只认上游，黑名单只是显隐标记
 

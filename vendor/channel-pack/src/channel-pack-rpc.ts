@@ -2344,6 +2344,40 @@ if (provider === LOBSTERAI.id) {
         }
       }
 
+      // ── 每日签到（Raccoon 家族）：触发服务端当日积分发放 ──
+      case 'raccoon.checkin': {
+        const req = payload as { provider?: string; accountId?: string }
+        if (req.provider !== undefined && !isRaccoonFamily(req.provider)) {
+          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
+        }
+        if (typeof req.accountId !== 'string' || req.accountId.length === 0) {
+          return { ok: false, error: { code: 'bad-request', message: '缺少账号' } }
+        }
+        const account = pool.findAccount(req.accountId)
+        if (account === undefined) {
+          return { ok: false, error: { code: 'bad-request', message: '账号不存在' } }
+        }
+        const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
+        if (!resolved) {
+          return { ok: false, error: { code: 'bad-request', message: '凭据未配置' } }
+        }
+        // ⚠️ 签到是**账号级**：同一账号池只有 `raccoon` 一方代表签到。
+        // `raccoon-pro` 只是同一账号的订阅面视图，两侧各跑一次会重复调度
+        // 同一账号（服务端虽幂等，但账本会记两条）。
+        const raccoonAuth = requireRaccoonFamily(req.provider ?? account.provider).auth
+        const credential = JSON.parse(resolved.value) as RaccoonCredential
+        const outcome = await raccoonAuth.checkIn(credential)
+        if (outcome.kind === 'failed') {
+          return { ok: false, error: { code: 'upstream-error', message: outcome.message } }
+        }
+        return {
+          ok: true,
+          value: outcome.kind === 'claimed'
+            ? { outcome: 'claimed', credit: outcome.credit, message: outcome.delayedMessage ?? '' }
+            : { outcome: outcome.kind === 'already-claimed' ? 'done' : outcome.kind, message: outcome.message },
+        }
+      }
+
       // ── 限流标记：重测（发真实请求验证）──
       // 标记只反映"上一次 429 时的快照"，服务端常在重置时间前提前放行。
       // 重测发一次最小对话请求：正常返回才清除标记，仍受限则保留并回报原因。

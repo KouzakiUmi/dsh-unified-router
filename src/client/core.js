@@ -483,7 +483,7 @@ export function workbuddySnapshotFrom(value, previous) {
 }
 
 // 自管多账号渠道快照收编（与 WorkBuddy 同构，额外支持 balance / source / authMethods / enabled / registered）。
-export const MANAGED_ERROR_CODES = new Set(['not_configured', 'credential_error', 'auth_expired', 'auth_error', 'upstream_error', 'checkin_error', 'task_error', 'import_error', 'unsupported'])
+export const MANAGED_ERROR_CODES = new Set(['not_configured', 'credential_error', 'auth_expired', 'auth_error', 'upstream_error', 'checkin_error', 'task_error', 'import_error', 'unsupported', 'no_web_session'])
 export function managedAccountFrom(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const id = text(value.id, 64)
@@ -557,6 +557,8 @@ export function automationFrom(value) {
       if (typeof entry.autoClaimRewards === 'boolean') clean.autoClaimRewards = entry.autoClaimRewards
       if (typeof entry.autoCompleteTasks === 'boolean') clean.autoCompleteTasks = entry.autoCompleteTasks
       if (typeof entry.cotLoopGuard === 'boolean') clean.cotLoopGuard = entry.cotLoopGuard
+      // Loomy 请求体形态：true = 简化体。当前无界面入口，仅为配置往返保留。
+      if (typeof entry.loomyPlainBody === 'boolean') clean.loomyPlainBody = entry.loomyPlainBody
       // 分渠道默认输出上限：只在上游缺输出规格时生效。
       if (Number.isSafeInteger(entry.defaultMaxOutput) && entry.defaultMaxOutput > 0) clean.defaultMaxOutput = entry.defaultMaxOutput
       if (Object.keys(clean).length) providers[id] = clean

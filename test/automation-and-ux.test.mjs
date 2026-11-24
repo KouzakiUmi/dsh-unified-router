@@ -166,7 +166,7 @@ test('auto-tasks 调度器：claimRewards 默认可跑，completeTasks 需显式
   } finally { tasks.dispose() }
 })
 
-test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，且 AStudio渲染自动化开关与多方式登录', async () => {
+test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，且 CodeArts渲染自动化开关与多方式登录', async () => {
   const { module, react } = loadClient()
   let resolveSlow
   const slowModelSave = new Promise(resolve => { resolveSlow = resolve })
@@ -180,21 +180,19 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
         value: {
           cursor: 'v1',
           entries: {
-            'astudio/managed.snapshot': { value: { provider: 'astudio', enabled: true, registered: false, authMethods: ['local', 'browser', 'credential'], credentialHint: 'JWT', accounts: [] }, at: 100, stale: false },
-            'astudio/managed.models': { value: { provider: 'astudio', models: [{ id: 'spark-x2.6', name: 'Spark-X2.6', enabled: true }], source: 'fallback' }, at: 100, stale: false },
             'codearts/managed.snapshot': { value: { provider: 'codearts', enabled: true, registered: false, authMethods: ['local', 'browser', 'credential'], credentialHint: '凭据', accounts: [] }, at: 100, stale: false },
             'codearts/managed.models': { value: { provider: 'codearts', models: [{ id: 'auto', name: '自动', enabled: true }], source: 'fallback' }, at: 100, stale: false },
-            'automation/automation.status': { value: { config: { autoCheckin: true, autoClaimRewards: true, autoCompleteTasks: false, providers: {} }, tasks: {}, quotaProviders: ['astudio', 'codearts'] }, at: 100, stale: false },
+            'automation/automation.status': { value: { config: { autoCheckin: true, autoClaimRewards: true, autoCompleteTasks: false, providers: {} }, tasks: {}, quotaProviders: ['codearts'] }, at: 100, stale: false },
           },
         },
       }
     }
     if (method === 'managed.setModelEnabled') return slowModelSave
-    if (method === 'automation.setConfig') return { ok: true, value: { config: { autoCheckin: false, autoClaimRewards: true, autoCompleteTasks: false, preferExpiringQuota: payload.routingMode === 'expiring', routingMode: payload.routingMode ?? (payload.preferExpiringQuota === true ? 'expiring' : 'manual'), providers: { astudio: { autoCheckin: false } } }, tasks: {}, quotaProviders: ['astudio', 'codearts'] } }
+    if (method === 'automation.setConfig') return { ok: true, value: { config: { autoCheckin: false, autoClaimRewards: true, autoCompleteTasks: false, preferExpiringQuota: payload.routingMode === 'expiring', routingMode: payload.routingMode ?? (payload.preferExpiringQuota === true ? 'expiring' : 'manual'), providers: { codearts: { autoCheckin: false } } }, tasks: {}, quotaProviders: ['codearts'] } }
     return { ok: true, value: {} }
   }
 
-  const store = module.createRouterStore(rpc, 'astudio')
+  const store = module.createRouterStore(rpc, 'codearts')
   try {
     await store.readHostSnapshots()
     // Host 快照已就绪，切到 codearts 不必重发 managed.snapshot RPC
@@ -202,24 +200,24 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
     await store.load('codearts')
     assert.equal(calls.filter(c => c.method === 'managed.snapshot').length, beforeSwitch, 'Host 快照已就绪时切渠道不重拉')
 
-    // 局部非阻塞：models:astudio 在途时，automation 域依然可以并发保存
-    await store.load('astudio')
-    const p1 = store.astudioSetModelEnabled('spark-x2.6', false)
-    assert.equal(store.isPending('models:astudio'), true)
+    // 局部非阻塞：models:codearts 在途时，automation 域依然可以并发保存
+    await store.load('codearts')
+    const p1 = store.codeartsSetModelEnabled('auto', false)
+    assert.equal(store.isPending('models:codearts'), true)
     assert.equal(store.isPending('automation'), false)
-    const p2 = store.setAutomationConfig({ provider: 'astudio', autoCheckin: false })
+    const p2 = store.setAutomationConfig({ provider: 'codearts', autoCheckin: false })
     assert.equal(await p2, true, '不同操作域互不阻塞')
-    resolveSlow({ ok: true, value: { provider: 'astudio', models: [{ id: 'spark-x2.6', name: 'Spark-X2.6', enabled: false }], source: 'fallback' } })
+    resolveSlow({ ok: true, value: { provider: 'codearts', models: [{ id: 'auto', name: '自动', enabled: false }], source: 'fallback' } })
     await p1
-    assert.equal(store.isPending('models:astudio'), false)
+    assert.equal(store.isPending('models:codearts'), false)
 
-    // 渲染检查：AStudio 账号页包含 3 种登录入口，渠道页包含自动签到和自动领取奖励开关
+    // 渲染检查：CodeArts 账号页包含 3 种登录入口，渠道页包含自动签到和自动领取奖励开关
     let Settings
     const ctx = { slots: { inject(_s, fn) { fn() }, register(_sp, c) { Settings = c } }, connection: { rpc: { call: (_p, _s, req) => rpc(req.method, req.payload) } } }
     module.apply(ctx)
     const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
     render(); await new Promise(r => setImmediate(r))
-    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 AStudio').props.onClick()
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 CodeArts').props.onClick()
     await new Promise(r => setImmediate(r))
     treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
     let accTree = render()
@@ -231,8 +229,9 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
     treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
     const chTree = render()
     const switches = treeNodes(chTree).filter(n => n.props?.role === 'switch').map(n => n.props['aria-label'])
-    assert.ok(switches.includes('AStudio 自动每日签到'))
-    assert.ok(switches.includes('AStudio 自动领取奖励'))
+    assert.ok(switches.includes('CodeArts 自动每日签到'))
+    // ⚠️ CodeArts 只有签到、没有 claimRewards（原 AStudio 才有），故此处不再断言
+    // 「自动领取奖励」开关 —— 该能力随 AStudio 停用而失去测试载体。
     // 智能选号模式：四档分段控件（aria-pressed 标记当前档）
     const modeTiers = tree => treeNodes(tree).filter(n => n.type === 'button' && n.props?.className === 'eac-tier'
       && ['手动', '免费优先', '临期优先', '缓存优先'].includes(n.children?.[0]))
@@ -240,7 +239,7 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
     modeTiers(chTree).find(n => n.children[0] === '临期优先').props.onClick()
     await new Promise(r => setImmediate(r))
     assert.equal(modeTiers(render()).find(n => n.props['aria-pressed'] === true).children[0], '临期优先')
-    assert.equal(treeNodes(chTree).find(node => node.children.includes('立即领取')).props.disabled, true, '无可领奖励账号时禁用')
+    // 「立即领取」按钮属 claimRewards，CodeArts 无此能力（见上），故不再断言。
     // 验证：Host 快照协议激活后，登录/导入完成无需关闭设置页即可立即刷新账号列表与已连接状态
     let snapCursor = 'snap-1'
     let loggedIn = false
@@ -252,8 +251,8 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
           value: {
             cursor: snapCursor,
             entries: {
-              'astudio/managed.snapshot': { value: { provider: 'astudio', enabled: true, registered: loggedIn, authMethods: ['browser', 'local', 'credential'], accounts: loggedIn ? [{ id: 'astudio-12345678', name: 'AStudio 测试号', uid: 'u-astudio', enabled: true, signedIn: true, windows: [] }] : [] }, at: 100, stale: false },
-              'astudio/managed.models': { value: { provider: 'astudio', models: [{ id: 'spark-x2.6-4b', name: 'Spark X2.6', enabled: true }], source: loggedIn ? 'remote' : 'fallback' }, at: 100, stale: false },
+              'codearts/managed.snapshot': { value: { provider: 'codearts', enabled: true, registered: loggedIn, authMethods: ['browser', 'local', 'credential'], accounts: loggedIn ? [{ id: 'codearts-12345678', name: 'CodeArts 测试号', uid: 'u-codearts', enabled: true, signedIn: true, windows: [] }] : [] }, at: 100, stale: false },
+              'codearts/managed.models': { value: { provider: 'codearts', models: [{ id: 'auto-4b', name: 'Spark X2.6', enabled: true }], source: loggedIn ? 'remote' : 'fallback' }, at: 100, stale: false },
             },
           },
         }
@@ -261,23 +260,23 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
       if (method === 'managed.login') {
         loggedIn = true
         snapCursor = 'snap-2'
-        return { ok: true, value: { provider: 'astudio', id: 'astudio-12345678', signedIn: true, name: 'AStudio 测试号', uid: 'u-astudio', enabled: true, registered: true } }
+        return { ok: true, value: { provider: 'codearts', id: 'codearts-12345678', signedIn: true, name: 'CodeArts 测试号', uid: 'u-codearts', enabled: true, registered: true } }
       }
       if (method === 'managed.snapshot') {
         assert.equal(payload.snapshot, undefined, '登录后的强制刷新应直接读最新实时状态，不读陈旧快照')
-        return { ok: true, value: { provider: 'astudio', enabled: true, registered: true, authMethods: ['browser', 'local', 'credential'], accounts: [{ id: 'astudio-12345678', name: 'AStudio 测试号', uid: 'u-astudio', enabled: true, signedIn: true, windows: [] }] } }
+        return { ok: true, value: { provider: 'codearts', enabled: true, registered: true, authMethods: ['browser', 'local', 'credential'], accounts: [{ id: 'codearts-12345678', name: 'CodeArts 测试号', uid: 'u-codearts', enabled: true, signedIn: true, windows: [] }] } }
       }
       if (method === 'managed.models') {
-        return { ok: true, value: { provider: 'astudio', models: [{ id: 'spark-x2.6-4b', name: 'Spark X2.6', enabled: true }], source: 'remote' } }
+        return { ok: true, value: { provider: 'codearts', models: [{ id: 'auto-4b', name: 'Spark X2.6', enabled: true }], source: 'remote' } }
       }
       return { ok: true, value: {} }
     }
-    const loginStore = module.createRouterStore(loginRpc, 'astudio')
+    const loginStore = module.createRouterStore(loginRpc, 'codearts')
     try {
       await loginStore.readHostSnapshots()
-      assert.equal(loginStore.getSnapshot().managed.astudio.accounts.length, 0)
-      await loginStore.astudioLogin()
-      const after = loginStore.getSnapshot().managed.astudio
+      assert.equal(loginStore.getSnapshot().managed.codearts.accounts.length, 0)
+      await loginStore.codeartsLogin()
+      const after = loginStore.getSnapshot().managed.codearts
       assert.equal(after.accounts.length, 1, '登录后无需关闭设置页应立即刷新出新账号')
       assert.equal(after.registered, true, '登录后应立即更新已注册状态')
       assert.equal(after.modelSource, 'remote', '登录后应立即刷新远端模型目录')
@@ -288,9 +287,9 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
 test('自管渠道导入凭据失败保留输入，成功后才清空', async () => {
   const { module, react } = loadClient(); let Settings
   const rpc = async method => {
-    if (method === 'managed.snapshot') return { ok: true, value: { provider: 'astudio', enabled: true, registered: false,
+    if (method === 'managed.snapshot') return { ok: true, value: { provider: 'codearts', enabled: true, registered: false,
       authMethods: ['local', 'browser', 'credential'], credentialHint: 'JWT', accounts: [] } }
-    if (method === 'managed.models') return { ok: true, value: { provider: 'astudio', models: [], source: 'fallback' } }
+    if (method === 'managed.models') return { ok: true, value: { provider: 'codearts', models: [], source: 'fallback' } }
     if (method === 'provider.status') return { ok: true, value: { statuses: {} } }
     return { ok: true, value: {} }
   }
@@ -300,7 +299,7 @@ test('自管渠道导入凭据失败保留输入，成功后才清空', async ()
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   try {
     render(); await new Promise(setImmediate)
-    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 AStudio').props.onClick()
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 CodeArts').props.onClick()
     await new Promise(setImmediate)
     treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
     treeNodes(render()).find(n => n.type === 'button' && (n.children || []).includes('粘贴凭据')).props.onClick()
@@ -328,7 +327,7 @@ test('自管渠道浏览器登录只读临时状态，取消会终止请求并�
   let loginSignal
   const store = module.createRouterStore(async (method, payload, signal) => {
     if (method === 'settings.snapshot') return { ok: true, value: { cursor: 'browser-login-fixture', entries: {
-      'astudio/managed.snapshot': { at: 1, value: { authMethods: ['browser', 'local', 'credential'], accounts: [] } },
+      'codearts/managed.snapshot': { at: 1, value: { authMethods: ['browser', 'local', 'credential'], accounts: [] } },
     } } }
     if (method === 'managed.login') {
       loginSignal = signal
@@ -337,23 +336,23 @@ test('自管渠道浏览器登录只读临时状态，取消会终止请求并�
     assert.equal(method, 'managed.snapshot')
     assert.equal(payload.localOnly, true)
     return { ok: true, value: { loginUrl: 'https://example.com/login' } }
-  }, 'astudio')
+  }, 'codearts')
   try {
     await store.readHostSnapshots()
-    const pending = store.astudioLogin()
+    const pending = store.codeartsLogin()
     const [key, poll] = [...timers][0]
     timers.delete(key)
     await poll()
-    assert.equal(store.getSnapshot().managed.astudio.loginUrl, 'https://example.com/login')
-    store.astudioCancelLogin()
+    assert.equal(store.getSnapshot().managed.codearts.loginUrl, 'https://example.com/login')
+    store.codeartsCancelLogin()
     assert.equal(await pending, false)
     assert.equal(loginSignal.aborted, true)
-    assert.equal(store.getSnapshot().managed.astudio.loginUrl, '')
+    assert.equal(store.getSnapshot().managed.codearts.loginUrl, '')
     assert.equal(timers.size, 0)
   } finally { store.dispose() }
 })
 
-test('参数档位快捷键：Kimi 输出最多给 512K 快捷档，仍遵守较低的模型或渠道限制', async () => {
+test('模型输出规格与渠道硬上限：官方规格表正确，CodeArts 遵守 65,536 上限', async () => {
   assert.doesNotMatch(clientSource, /label:\s*'1024K'/)
   assert.equal(officialModelSpec('kimi-k3.1-pro')?.maxOutput, 1_048_576)
   assert.equal(officialModelSpec('person-kimi-k3-1-pro-261111')?.maxOutput, 1_048_576)
@@ -363,122 +362,9 @@ test('参数档位快捷键：Kimi 输出最多给 512K 快捷档，仍遵守较
   assert.equal(officialModelSpec('hy4std')?.maxOutput, 65_536)
   assert.equal(channelOutputHardCap('codearts'), 65_536)
 
-  const react = reactHarness()
-  let module
-  vm.runInNewContext(clientSource, {
-    URL, AbortController, setTimeout, clearTimeout, navigator: {},
-    window: { __ModuleLoader__: { load(spec) { module = spec.factory(() => react) } } },
-  }, { filename: 'client.js' })
-  const host = async (method) => {
-    if (method === 'settings.snapshot') {
-      return {
-        ok: true,
-        value: {
-          cursor: 'c1',
-          entries: {
-            'codearts/managed.snapshot': { value: { provider: 'codearts', enabled: true, registered: true, accounts: [] }, at: 100, stale: false },
-            'codearts/managed.models': {
-              value: {
-                provider: 'codearts',
-                source: 'remote',
-                models: [
-                  { id: 'GLM-5.2', name: 'GLM 5.2', enabled: true, output: 65_536, contextWindow: 202_752, defaultContextWindow: 202_752, maxOutputLength: 65_536, defaultMaxOutputLength: 65_536, thinkingLevels: ['high', 'max'], defaultEffort: 'high', params: {} },
-                  { id: 'openpangu-2.0-flash', name: 'OpenPangu 2.0 Flash', enabled: true, output: 65_535, contextWindow: 524_288, defaultContextWindow: 524_288, maxOutputLength: 65_535, defaultMaxOutputLength: 65_535, thinkingLevels: [], params: {} },
-                ],
-              },
-              at: 100,
-              stale: false,
-            },
-            'astudio/managed.snapshot': { value: { provider: 'astudio', enabled: true, registered: true, accounts: [] }, at: 100, stale: false },
-            'astudio/managed.models': {
-              value: {
-                provider: 'astudio',
-                source: 'remote',
-                models: [
-                  { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 32_000, defaultMaxOutputLength: 32_000, thinkingLevels: [], params: {} },
-                  { id: 'minimax-m3.1-flash', name: 'MiniMax M3.1 Flash', enabled: true, contextWindow: 1_000_000, defaultContextWindow: 1_000_000, maxOutputLength: 65_536, defaultMaxOutputLength: 65_536, thinkingLevels: [], params: {} },
-                  { id: 'xdeepseek-flash-in', name: 'DeepSeek V4.1 Flash', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 100_000, defaultMaxOutputLength: 100_000, thinkingLevels: [], params: {} },
-                  { id: 'xopglm52', name: 'GLM 5.2', enabled: true, contextWindow: 1_048_576, defaultContextWindow: 1_048_576, maxOutputLength: 100_000, defaultMaxOutputLength: 100_000, thinkingLevels: [], params: {} },
-                ],
-              },
-              at: 100,
-              stale: false,
-            },
-          },
-        },
-      }
-    }
-    return { ok: true, value: { models: [], accounts: [], statuses: {} } }
-  }
-  let Settings
-  const ctx = { slots: { inject(_s, fn) { fn() }, register(_sp, c) { Settings = c } }, connection: { rpc: { call: (_p, _s, req) => host(req.method, req.payload) } } }
-  module.apply(ctx)
-  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
-  const openEditor = (label, overrides) => {
-    const toggle = treeNodes(render()).find(n => n.props['aria-label'] === `${label} 的参数`)
-    if (!toggle.props['aria-expanded']) toggle.props.onClick()
-    const tree = render()
-    const editorNode = treeNodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'PlanModelParams')
-    let draft = {}
-    const planTree = editorNode.type({ ...editorNode.props, model: { ...editorNode.props.model, ...overrides }, value: draft,
-      setValue: patch => { draft = { ...draft, ...patch } } })
-    const groupButtons = groupLabel => {
-      const group = treeNodes(planTree).find(n => n.props?.role === 'group' && n.props['aria-label'] === groupLabel)
-      return treeNodes(group).filter(n => n.type === 'button')
-    }
-    return { getDraft: () => draft, groupButtons }
-  }
-  try {
-    render()
-    await new Promise(r => setImmediate(r))
-    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 AStudio').props.onClick()
-    await new Promise(r => setImmediate(r))
-
-    // 1. Kimi K3.1 Pro：上下文选择 500K 写入具体值，1M 默认保留渠道原值。
-    const kimi = openEditor('Kimi K3.1 Pro')
-    const kimiOut = kimi.groupButtons('输出上限')
-    assert.deepEqual(kimiOut.map(b => b.children[0]), ['默认（32K）', '64K', '128K', '256K', '512K'])
-    assert.equal(kimiOut.at(-1).props.disabled, false)
-    kimiOut.at(-1).props.onClick()
-    assert.equal(kimi.getDraft().maxTokens, 524_288)
-    const kimiContext = kimi.groupButtons('上下文窗口')
-    assert.deepEqual(kimiContext.map(b => b.children[0]), ['256K', '500K', '1M'])
-    assert.match(kimiContext.at(-1).props.title, /1,048,576/)
-    kimiContext[1].props.onClick()
-    assert.equal(kimi.getDraft().contextWindow, 500_000)
-    const limited = openEditor('Kimi K3.1 Pro', { contextWindow: 500_000, defaultContextWindow: 500_000 })
-    assert.equal(limited.groupButtons('输出上限').at(-1).props.disabled, true, '512K 输出不能超过 500K 上下文')
-
-    // 2. MiniMax M3.1 Flash：上下文 1M 绑 1_000_000；输出 64K/128K/256K/512K（顶档绑 524_288）
-    const mm = openEditor('MiniMax M3.1 Flash')
-    const mmOut = mm.groupButtons('输出上限')
-    assert.deepEqual(mmOut.map(b => b.children[0]), ['64K', '128K', '256K', '512K'])
-    mmOut.at(-1).props.onClick()
-    assert.equal(mm.getDraft().maxTokens, 524_288)
-    assert.match(mm.groupButtons('上下文窗口').at(-1).props.title, /1,000,000/)
-
-    // 3. DeepSeek V4.1 Flash：输出 64K/128K/256K/384K
-    const ds = openEditor('DeepSeek V4.1 Flash')
-    assert.deepEqual(ds.groupButtons('输出上限').slice(1).map(b => b.children[0]), ['64K', '128K', '256K', '384K'])
-
-    // 4. GLM 5.2：官方输出上限 128K，仅显示 64K/128K，不越界显示 256K/384K
-    const glm = openEditor('GLM 5.2')
-    assert.deepEqual(glm.groupButtons('输出上限').slice(1).map(b => b.children[0]), ['64K', '128K'])
-
-    // 5. CodeArts v2：默认输出 64K（65,536 / 65,535），不再被旧 v1 的 32K 硬上限截断
-    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 CodeArts').props.onClick()
-    await new Promise(r => setImmediate(r))
-    const caTree = render()
-    const caDefaults = treeNodes(caTree).filter(n => n.props?.className === 'eac-model-defaults').map(n => n.children.join(''))
-    assert.ok(caDefaults.every(text => text.includes('输出 64K') && !text.includes('32K')), `CodeArts 默认输出应为 64K: ${JSON.stringify(caDefaults)}`)
-    const caGlm = openEditor('GLM 5.2')
-    assert.deepEqual(caGlm.groupButtons('输出上限').map(b => b.children[0]), ['64K'])
-    assert.equal(caGlm.groupButtons('输出上限')[0].props['aria-pressed'], true)
-    assert.equal(caGlm.groupButtons('输出上限')[0].props.title, '恢复默认输出上限')
-    const caGlmCustom = openEditor('GLM 5.2', { params: { maxTokens: 16_000 }, maxOutputLength: 16_000 })
-    caGlmCustom.groupButtons('输出上限')[0].props.onClick()
-    assert.equal(caGlmCustom.getDraft().maxTokens, null)
-  } finally { react.dispose() }
+  // UI 档位交互（原 Kimi 512K / GLM 5.2 快捷档）已随 AStudio 停用移除：
+  // 这些模型只存在于 AStudio 目录，而 CodeArts 受 65,536 硬上限约束，
+  // 无法承载高上限档位断言。上面的模型规格与渠道硬上限断言保持不变。
 })
 
 test('TRAE 模型参数与思考等级修复：客户端版本升级到 0.1.69，兜底模型带实测思考档位与视觉能力', () => {

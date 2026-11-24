@@ -210,13 +210,13 @@ test('切换 provider/模型会重新取数，不沿用旧档位', async () => {
 
 test('managed 渠道走 managed.models/managed.setModelParams', async () => {
   const calls = []
-  const directory = store({ current: { provider: 'astudio', model: 'xdeepseek-v4' } })
+  const directory = store({ current: { provider: 'codearts', model: 'openpangu-2.0-flash' } })
   const f = setup({
     directory,
     rpc: async (method, payload) => {
       calls.push({ method, payload })
-      if (method === 'managed.models') return { ok: true, value: { provider: 'astudio', models: [
-        { id: 'xdeepseek-v4', name: 'x', contextWindow: 400_000, params: {} },
+      if (method === 'managed.models') return { ok: true, value: { provider: 'codearts', models: [
+        { id: 'openpangu-2.0-flash', name: 'OpenPangu 2.0 Flash', contextWindow: 524_288, params: {} },
       ] } }
       if (method === 'managed.setModelParams') return { ok: true, value: {} }
       return { ok: false, error: { code: 'x', message: 'x' } }
@@ -229,8 +229,8 @@ test('managed 渠道走 managed.models/managed.setModelParams', async () => {
   pick.props.onClick()
   await tick()
   const write = calls.find(c => c.method === 'managed.setModelParams')
-  assert.equal(write.payload.provider, 'astudio')
-  assert.equal(write.payload.modelId, 'xdeepseek-v4')
+  assert.equal(write.payload.provider, 'codearts')
+  assert.equal(write.payload.modelId, 'openpangu-2.0-flash')
   assert.equal(write.payload.params.contextWindow, 256_000)
 })
 

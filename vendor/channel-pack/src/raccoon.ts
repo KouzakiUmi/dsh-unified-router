@@ -15,8 +15,10 @@
  *    故改为「客户端本地生成 code + 自行轮询」—— 实测任意自造 code 都被接受。
  * 2. **手机号必须 AES-128-CFB 加密**（密钥见 `RACCOON_PHONE_CIPHER_SECRET`），
  *    否则 `send_sms` 回 `100003 params_encryted_error`。
- * 3. **每日 300 积分没有端点**：服务端按日自动发放（`daily_grant`）。
- *    不要把它实现成签到按钮 —— 见 `raccoon-credits.ts`。
+ * 3. **每日积分没有专门的「签到」端点，但可由桌面端请求触发**：服务端按日
+ *    发放（`daily_grant`），触发条件是带桌面端头的
+ *    `GET /api/web/office/v3/setting_info`（该 GET **有副作用**）。
+ *    见 `raccoon-credits.ts` 的 `checkInRaccoon`。
  */
 
 import { createCipheriv, randomBytes } from 'node:crypto'
@@ -32,6 +34,14 @@ export const RACCOON_LLM_PREFIX = '/api/web/llm/v2'
 export const RACCOON_POINTS_PREFIX = '/api/web/points/v1'
 /** 桌面端端点前缀（含一次性登录奖励）。 */
 export const RACCOON_DESKTOP_PREFIX = '/api/web/desktop/v1'
+
+/**
+ * 办公端端点前缀。
+ *
+ * `GET setting_info` 是**签到触发器**：带桌面端头请求一次即触达服务端当日积分
+ * 发放（副作用，见 `raccoon-credits.ts` 的 `checkInRaccoon`）。
+ */
+export const RACCOON_OFFICE_PREFIX = '/api/web/office/v3'
 
 /**
  * 手机号传输层加密密钥。

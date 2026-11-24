@@ -34,6 +34,7 @@ import {
 } from './raccoon.js'
 import {
   claimRaccoonLoginReward,
+  checkInRaccoon,
   fetchRaccoonCreditBalance,
   fetchRaccoonOnboardingStatus,
 } from './raccoon-credits.js'
@@ -697,6 +698,16 @@ export class RaccoonAuth extends Service {
   /** 领取一次性登录奖励。 */
   async claimLoginReward(credential: RaccoonCredential): Promise<ClaimOutcome> {
     return claimRaccoonLoginReward(this.product, credential, this.fetchImpl)
+  }
+
+  /**
+   * 每日签到（触发服务端当日积分发放）。
+   *
+   * 见 `raccoon-credits.ts` 的 `checkInRaccoon`：没有专门的签到端点，
+   * 靠一次带桌面端头的只读 `GET setting_info` 触发，再由账单差值回报新增金额。
+   */
+  async checkIn(credential: RaccoonCredential): Promise<ClaimOutcome> {
+    return checkInRaccoon(this.product, credential, this.fetchImpl)
   }
 
   /** 查询一次性登录奖励是否已领。 */

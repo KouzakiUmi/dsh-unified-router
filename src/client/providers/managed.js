@@ -19,13 +19,22 @@ function managedConnectionStatus(current) {
     : !active.length ? '账号已停用' : '账号需重新登录' }
 }
 
-export function managedChannel({ id, title, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false, accountLinks = [] }) {
+/**
+ * 构造自管渠道的客户端视图。
+ *
+ * `card`：是否在渠道选择器里显示卡片（默认显示）。置 `false` 用于**停用渠道**——
+ * `providers/index.js` 的 `PROVIDERS` 会按 `card !== false` 过滤，于是该渠道的
+ * 卡片、模型分组与轮询都不再出现。⚠️ 这个字段必须在这里**显式解构**，否则会被
+ * 静默丢弃（早期 `astudio` 传了 `card: false` 却没生效，就是这个原因）。
+ */
+export function managedChannel({ id, title, card = true, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false, accountLinks = [] }) {
   const entry = state => state.managed?.[id]
   const withEntry = (state, next) => ({ managed: { ...state.managed, [id]: next } })
 
   const provider = {
     id,
     title,
+    ...card === false ? { card: false } : {},
     rpcMethods: MANAGED_METHODS,
     caps: {
       dailyReward: checkin,
@@ -133,7 +142,10 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
           const rw = claimRewards ? taskEntry(state, id, 'claimRewards', account.id) : null
           const metric = account.balance !== null
             ? { value: account.balance, unit: account.unit || '积分' }
-            : percentMetric(lowest) ?? { value: '额度待更新' }
+            : percentMetric(lowest)
+              // 无网页会话时不存在「待更新」——这个渠道本来就不读积分，
+              // 显示「待更新」会让人一直等。用破折号表示不适用。
+              ?? { value: account.error === 'no_web_session' ? '—' : '额度待更新' }
           return {
             id: account.id,
             name,
@@ -145,7 +157,11 @@ export function managedChannel({ id, title, authMethods = ['browser'], credentia
               account.source && SOURCE_LABELS[account.source] && [SOURCE_LABELS[account.source]],
               account.enabled === false && ['已停用'],
                !account.signedIn && ['凭据失效', 'warn'],
-               (account.error || current.stale) && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
+              // `no_web_session` 不是故障：账号能推理，只是没有网页会话因而读不到积分。
+              // 按 info 呈现原因，不要挂 warn（那会让用户以为账号坏了）。
+              account.error === 'no_web_session' && ['仅推理 Token · 不读积分', 'info'],
+              account.error && account.error !== 'no_web_session' && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
+              !account.error && current.stale && [(account.windows.length || account.balance !== null) ? '上次额度' : '额度读取失败', 'warn'],
               ck?.tag,
               rw?.tag,
             ],

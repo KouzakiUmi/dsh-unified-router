@@ -96,9 +96,11 @@ function memoryHost() {
   }
 }
 
-test('自管注册表只提供 AStudio 和 CodeArts', () => {
-  assert.deepEqual(MANAGED_PROVIDER_IDS, ['astudio', 'codearts'])
-  assert.equal(MANAGED_PROVIDERS.length, 2)
+test('自管注册表只登记 CodeArts（AStudio 已停用）', () => {
+  // AStudio 于 2026-11-24 停用：上游无法回报正确积分（用尽后仍显示满值，
+  // 用户以为有额度却调不动）。实现文件保留，注册表只登记启用的渠道。
+  assert.deepEqual(MANAGED_PROVIDER_IDS, ['codearts'])
+  assert.equal(MANAGED_PROVIDERS.length, 1)
 })
 
 test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭据脱敏/compat 模型参数', async t => {
@@ -889,4 +891,96 @@ test('AStudio 只读状态：checkinStatus 按流水证据分级，rewardStatus 
     return Response.json({ code: 0, data: {} })
   }), {})
   assert.equal(p3.kind, 'failed')
+})
+
+test('AStudio 额度：只有推理 Token 时报 no_web_session，不去请求积分接口', async () => {
+  // 真实报障：账号能推理，但账号行的数值位一直停在「额度待更新」。
+  // 根因：没有网页会话（ssoSessionId）时积分根本读不到，旧实现只返回 balance:null
+  // 且不带 error，界面于是以为「下次会更新」。
+  const requests = []
+  const usage = await astudioSpec.fetchUsage({
+    getCredential: async () => ({ modelBearerToken: 'mb-1', accountId: 'acc-1' }),
+    fetch: async (url) => {
+      requests.push(String(url))
+      return Response.json({ code: 0, data: { models: [] } })
+    },
+  }, {})
+
+  assert.equal(usage.signedIn, true, '推理 Token 有效，账号仍是已登录')
+  assert.equal(usage.error, 'no_web_session')
+  assert.equal(usage.balance, null)
+  assert.deepEqual(usage.windows, [])
+  // 关键：不得拿 account_id / token 去撞积分接口（实测必回 80000 并被误判登录失效）。
+  assert.equal(requests.some(url => url.includes('/points/balance')), false,
+    '无网页会话时不该请求积分接口')
+})
+
+test('AStudio 额度：account_id 不是会话凭据，仍按 no_web_session 处理', async () => {
+  // 实测对照（2026-11-24）：points/balance 只认 ssoSessionId；
+  // 单独带 account_id、单独带 token、或两者同带都回 code 80000。
+  // 旧实现用「cookieHeader 非空」当判据，只有 accountId 的账号会走进联网分支，
+  // 再被 80000 判成 auth_expired —— 用户看到「额度读不到 + 登录已失效」。
+  for (const credential of [
+    { modelBearerToken: 'mb-1', accountId: 'acc-1' },
+    { modelBearerToken: 'mb-1', sessionToken: 'tok-1' },
+    { modelBearerToken: 'mb-1', accountId: 'acc-1', sessionToken: 'tok-1' },
+  ]) {
+    const requests = []
+    const usage = await astudioSpec.fetchUsage({
+      getCredential: async () => credential,
+      fetch: async (url) => {
+        requests.push(String(url))
+        return Response.json({ code: 0, data: { models: [] } })
+      },
+    }, {})
+    assert.equal(usage.error, 'no_web_session', JSON.stringify(credential))
+    assert.equal(usage.signedIn, true, '不能因缺网页会话就报登录失效')
+    assert.equal(requests.some(url => url.includes('/points/balance')), false)
+  }
+})
+
+test('AStudio 额度：有 ssoSessionId 时正常读积分并按分项给出窗口', async () => {
+  const requests = []
+  const usage = await astudioSpec.fetchUsage({
+    getCredential: async () => ({ ssoSessionId: 'sso-1', accountId: 'acc-1' }),
+    fetch: async (url) => {
+      const target = String(url)
+      requests.push(target)
+      if (target.includes('/points/balance')) {
+        return Response.json({
+          code: 0,
+          data: {
+            totalBalance: 1300, memberTotal: 0, memberBalance: 0, buyTotal: 0, buyBalance: 0,
+            activityTotal: 2000, activityBalance: 1300, activityNextExpireTime: '2026-12-23T17:59:17',
+            sparkTotalBalance: 0,
+          },
+        })
+      }
+      if (target.includes('/membership/me')) return Response.json({ code: 0, data: { planName: '体验版' } })
+      return Response.json({ code: 0, data: {} })
+    },
+  }, {})
+
+  assert.ok(!usage.error)
+  assert.equal(usage.balance, 1300)
+  assert.equal(usage.plan, '体验版')
+  assert.equal(usage.windows.length, 1, '只有活动包有额度，其余 0 不进窗口')
+  assert.equal(usage.windows[0].name, '活动赠送积分')
+  assert.equal(usage.windows[0].balance, 1300)
+  // sparkTotalBalance 为 0 时不得编造出「星火积分」窗口。
+  assert.equal(usage.windows.some(w => w.name === '星火积分'), false)
+  assert.ok(requests.some(url => url.includes('/points/balance')))
+})
+
+test('AStudio 额度：只有网页会话（无推理 Token）也能读积分', async () => {
+  // 读额度只需要 ssoSessionId；早期把 modelBearerToken 当前置条件会误报 credential_error。
+  const usage = await astudioSpec.fetchUsage({
+    getCredential: async () => ({ ssoSessionId: 'sso-1' }),
+    fetch: async (url) => {
+      if (String(url).includes('/points/balance')) return Response.json({ code: 0, data: { totalBalance: 42 } })
+      return Response.json({ code: 0, data: {} })
+    },
+  }, {})
+  assert.ok(!usage.error)
+  assert.equal(usage.balance, 42)
 })

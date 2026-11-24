@@ -75,7 +75,7 @@ test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型�
   assert.equal(modelRecommendationExclusions([{ id: 'agnes-2.5-pro' }, { id: 'agnes-3.0-flash' }], 'agnes').has('agnes-2.5-pro'), true)
 })
 
-test('独立后端渠道的精选列表、启停恢复与持久化', async t => {
+test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 停用后整体跳过）', async t => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-router-test-'))
   const kernel = new URL('./kernel.mjs', import.meta.url).href
   const hooks = registerHooks({ resolve(specifier, context, next) { return specifier.startsWith('@deepseek-ai/') ? { url: kernel, shortCircuit: true } : next(specifier, context) } })
@@ -867,18 +867,8 @@ test('TRAE 远端目录：内部模型按 id 剔除、旧版默认关闭可手�
     assert.equal((await rows()).find(model => model.id === 'qwen-3.5')?.disabled, true)
     assert.equal((await publishedIds()).includes('qwen-3.5'), false, '恢复默认后应退出会话选择器')
 
-    // TRAE 专属规则不外溢到其他渠道。
-    const loomy = await rpc('model.list', { provider: 'loomy' })
-    assert.equal(loomy.ok, true)
-    assert.ok(loomy.value.models.length > 0)
-    // loomy 侧 disabled 必须恰好等于其**既有**默认关集合（全局命名后继
-    // `deepseek-v4-1-flash→…-1017` 命中 `DeepSeek-V4.1-Flash`、倍率劣势命中
-    // `mimo-v2.5`），TRAE 专属规则不得在其中新增任何条目。
-    assert.deepEqual(
-      loomy.value.models.filter(model => model.disabled).map(model => model.id).sort(),
-      ['DeepSeek-V4.1-Flash', 'mimo-v2.5'],
-      'TRAE 专属规则不得在其他渠道产生默认关闭',
-    )
+    // 「TRAE 专属规则不外溢」原以 Loomy 为对照渠道；Loomy 停用后其目录不再装配，
+    // 该对照失去载体，故此处移除。
   } finally {
     for (const stop of cleanup.reverse()) await stop()
     hooks.deregister(); globalThis.fetch = originalFetch

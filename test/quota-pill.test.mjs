@@ -237,25 +237,14 @@ test('WorkBuddy 窗口遵守模型范围，参考额度不主导摘要，数值�
   assert.equal(free.metrics[0].label, '免费窗口')
 })
 
-test('独立积分包到期与更新时间不混用；CodeArts 使用当前模型积分池', () => {
+test('CodeArts 使用当前模型积分池，重置与到期字段不混用', () => {
   const when = '2032-08-20T12:00:00Z'
   const accounts = [{ id: 'a', signedIn: true, balance: 180, windows: [
     { name: '活动赠送积分', balance: 1, limit: 100, expiresAt: when },
     { name: '会员积分', balance: 179, limit: 200, resetsAt: when },
   ] }]
-  const studio = modelData('astudio', 'm', { at: 1000, value: publicResult('managed.snapshot', { accounts }) })
-  assert.equal(studio.summary, '180 积分')
-  assert.equal(studio.at, null)
-  assert.deepEqual(studio.viewed.details.map(d => ({ label: d.label, value: d.value, fraction: d.fraction, meter: d.meter })), [
-    { label: '活动赠送积分', value: '1 积分', fraction: null, meter: false },
-    { label: '会员积分', value: '179 积分', fraction: null, meter: false },
-  ])
-  for (const detail of studio.viewed.details) {
-    assert.equal(detail.expires, when)
-    assert.equal(detail.reset, '')
-  }
-  const future = Date.parse(when)
-  assert.equal(modelData('astudio', 'm', { value: { accounts: [{ ...accounts[0], updatedAt: future }] } }).at, null)
+  // AStudio 段已移除：该渠道停用后 `modelData('astudio', …)` 不再有路由，
+  // 它特有的「积分包到期与更新时间不混用」渲染随之失去保证对象。
   const code = { value: { accounts: [{ ...accounts[0], windows: [
     { name: '总积分包', balance: 49, limit: 50, resetsAt: when },
     { name: '赠送积分包', balance: 0, limit: 10 },
@@ -305,7 +294,7 @@ test('API 额度按类型和模型匹配，不混用旧请求配额和其他模�
   assert.equal(unisound.viewed.details.at(-1).value, '42')
 })
 
-test('药丸渲染与设置页共用总积分与数字展示契约（去渠道前缀、当前账号首屏可见、AStudio 无进度条）', async () => {
+test('药丸渲染与设置页共用总积分与数字展示契约（去渠道前缀、当前账号首屏可见）', async () => {
   const treeOf = node => !node || typeof node !== 'object' ? []
     : Array.isArray(node) ? node.flatMap(treeOf) : [node, ...treeOf(node.children)]
   const textsOf = node => treeOf(node).flatMap(el => (Array.isArray(el.children) ? el.children : [el.children])
@@ -409,14 +398,7 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
     assert.match(loomyPopText, /永久额度\|1,200 积分/)
     assert.match(loomyPopText, /号一\|当前账号 · 1,200 积分|号一\|当前账号/)
 
-    current = { provider: 'astudio', model: 'm' }
-    hooks.length = 0
-    const astudioTree = await renderPill()
-    assert.equal(treeOf(astudioTree).filter(n => n.type === 'progress').length, 0, 'AStudio 药丸与浮层不渲染进度条')
-    const astudioTrigger = treeOf(astudioTree).find(n => n.props?.className === 'eac-quota-trigger')
-    assert.equal(textsOf(astudioTrigger).join(''), '1,600 积分')
-    const astudioPopText = textsOf(treeOf(astudioTree).find(n => n.props?.className === 'eac-quota-popover')).join('|')
-    assert.match(astudioPopText, /账号池总积分/)
+    // AStudio 段已移除：该渠道已停用（`card: false`），药丸不再渲染它。
 
     // 云知声 5 小时 + 周额度在药丸和进度条完整呈现（不漏周额度）
     entries['unisound/apikey.snapshot'] = {

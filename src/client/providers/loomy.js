@@ -3,6 +3,10 @@
 export const loomy = {
   id: 'loomy',
   title: 'Loomy',
+  // ⚠️ 已停用（2026-11-24）：全部账号被上游标记受限，请求一律落到 spark-x2.6-low
+  // （响应体仍谎报 DeepSeek-V4.1-Flash，只有积分账本能看出）。停用方式为
+  // **不注册模型适配器**（`LOOMY_CHANNEL_ENABLED = false`），因此渠道里没有可用模型。
+  // 渠道已停用：模型不可用（适配器不注册）。卡片保留以显示状态，并挂「已停用」标记。
   // channel-pack 通用渠道：账号池 + 模型目录 + 渠道开关。
   pack: true,
   caps: {

@@ -7,15 +7,17 @@
  * |---|---|---|---|
  * | 新人注册礼包 | 3000 | 注册时服务端自动发放 | 不涉及（用户注册即有） |
  * | 桌面端登录奖励 | 3000 | `POST …/login/points/grant` | ✅ `claimRaccoonLoginReward` |
- * | 每日积分发放 | 300 | **服务端按日自动发放，无端点** | ❌ 不实现 |
+ * | 每日积分发放 | 300 起（连续签到日更多） | `GET …/office/v3/setting_info` 触发 | ✅ `checkInRaccoon` |
  *
- * ⚠️ **每日 300 没有签到端点** —— 实测该账号 13:30 注册、13:31 就收到
- * `daily_grant` 账单（`biz_type: 'daily_grant'`）。故**不能**把它实现成
- * 签到按钮：不存在可调用的端点，按钮必然失败。
+ * ⚠️ **没有专门的「签到」端点，但不等于不能签**：服务端在收到**带桌面端头**的
+ * `GET /api/web/office/v3/setting_info` 时发放当日积分（`biz_type: 'daily_grant'`）。
+ * 该 GET 因此**有副作用**，这正是官方客户端「打开就加积分」的行为。
+ * 早期结论（「无端点 ⇒ 不可实现」）只对了前半句：端点不存在，但触发器存在。
+ * 依据见 `checkInRaccoon`。
  *
  * ⚠️ **登录奖励是幂等一次性的**（已领过返回 `granted:false`），
  * 语义与 Loomy 的新手任务同构，故登记为 `onboardingTasks` 而**不是**
- * `dailyCheckin` —— 后者会让用户以为每天都真的加了额度。
+ * `dailyCheckin` —— 两者是不同来源，见 `checkInRaccoon` 的账单判据。
  *
  * ## 只读优先
  *
@@ -27,6 +29,7 @@
 import {
   RACCOON_POINTS_PREFIX,
   RACCOON_DESKTOP_PREFIX,
+  RACCOON_OFFICE_PREFIX,
   RACCOON_REQUEST_TIMEOUT_MS,
   raccoonHeaders,
   type RaccoonCredential,
@@ -211,6 +214,129 @@ export async function claimRaccoonLoginReward(
   return { kind: 'claimed', credit: points, streakDays: 0, isStreakDay: false }
 }
 
+/** 北京时间（UTC+8）的「今天」日键；与账单 `created_at` 的日历口径一致。 */
+function beijingDayKey(now: number = Date.now()): string {
+  return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+/** 账单行的稳定键（服务端可能只给其中一部分字段）。 */
+function billKey(item: Record<string, unknown>): string {
+  const id = item.bill_id ?? item.biz_id
+  if (id !== undefined && id !== null) return String(id)
+  return `${String(item.created_at ?? '')}:${String(item.points ?? '')}:${String(item.event_name ?? '')}`
+}
+
+/**
+ * 是否是「签到类」发放账单：当天、正积分、且 `biz_type` 属于发放类。
+ *
+ * ⚠️ `biz_type` 为空也算 —— 实测有记录不带该字段，靠「当天 + 正积分」已足够
+ * 区分（充值/消费账单的 `points` 为负或另有 `biz_type`）。
+ */
+function isDailyGrantBill(item: Record<string, unknown>, today: string): boolean {
+  const points = readNumber(item.points)
+  if (points === undefined || points <= 0) return false
+  if (String(item.created_at ?? '').slice(0, 10) !== today) return false
+  const biz = String(item.biz_type ?? '')
+  return biz.length === 0 || biz === 'daily_grant' || biz === 'reward_grant'
+}
+
+/** 读账单明细；失败返回 `null`（调用方据此放弃金额判定，绝不编造）。 */
+async function readBills(
+  product: RaccoonProduct,
+  credential: RaccoonCredential,
+  fetcher: typeof fetch,
+): Promise<Array<Record<string, unknown>> | null> {
+  const envelope = await requestJson(
+    `${product.apiBase}${RACCOON_POINTS_PREFIX}/bills?paging.limit=20&paging.offset=0`,
+    credential,
+    product,
+    { method: 'GET' },
+    fetcher,
+  )
+  if (!envelope.ok || envelope.data === undefined) return null
+  const items = Array.isArray(envelope.data.items) ? envelope.data.items : []
+  return items.filter(
+    (raw): raw is Record<string, unknown> => typeof raw === 'object' && raw !== null && !Array.isArray(raw),
+  )
+}
+
+/**
+ * 每日签到：触发服务端当日积分发放，并回报**本次新增**了多少。
+ *
+ * ## 为什么是「请求一个只读端点」
+ *
+ * 上游**没有**签到端点。当日积分由服务端在收到**带桌面端头**的
+ * `GET /api/web/office/v3/setting_info` 时发放（`biz_type: 'daily_grant'`）——
+ * 这就是官方客户端「打开即加积分」的行为。故签到 = 发一次该 GET，再由
+ * `/points/v1/bills` 的前后差值确认新增金额。
+ *
+ * ## 幂等性
+ *
+ * 服务端**按日判定**：同一天再请求不会重复发放，账单也不新增，本函数据差值
+ * 返回 `already-claimed`（不是错误）。因此重复调用安全，无需本地防重。
+ *
+ * ## 读不到账单时
+ *
+ * 返回 `already-claimed` 而非编造金额：服务端已幂等，明天照常再跑不会漏领；
+ * 编一个数字反而会让用户以为拿到了没拿到的积分。
+ */
+export async function checkInRaccoon(
+  product: RaccoonProduct,
+  credential: RaccoonCredential,
+  fetcher: typeof fetch = fetch,
+): Promise<ClaimOutcome> {
+  const today = beijingDayKey()
+
+  // 前置快照：今天已发放的账单键。读不到就记为「无法比对」。
+  const before = await readBills(product, credential, fetcher)
+  const beforeKeys = before === null
+    ? null
+    : new Set(before.filter((item) => isDailyGrantBill(item, today)).map(billKey))
+
+  // 触发器：只读 GET，副作用是服务端发放当日积分。
+  const trigger = await requestJson(
+    `${product.apiBase}${RACCOON_OFFICE_PREFIX}/setting_info`,
+    credential,
+    product,
+    { method: 'GET' },
+    fetcher,
+  )
+  if (!trigger.ok) {
+    return {
+      kind: 'failed',
+      code: trigger.code,
+      message: trigger.message.length > 0 ? trigger.message : '签到请求失败',
+    }
+  }
+
+  const unsettled = { kind: 'already-claimed' as const, message: '已触发今日签到（账单未取到，金额未确认）' }
+  if (beforeKeys === null) return unsettled
+  const after = await readBills(product, credential, fetcher)
+  if (after === null) return unsettled
+
+  let credit = 0
+  const names: string[] = []
+  for (const item of after) {
+    if (!isDailyGrantBill(item, today)) continue
+    if (beforeKeys.has(billKey(item))) continue
+    credit += Math.floor(readNumber(item.points) ?? 0)
+    const event = String(item.event_name ?? '')
+    if (event.length > 0 && !names.includes(event)) names.push(event)
+  }
+
+  if (credit > 0) {
+    return {
+      kind: 'claimed',
+      credit,
+      // 上游不回报连续天数：报 0 而不是猜。
+      streakDays: 0,
+      isStreakDay: false,
+      ...(names.length > 0 ? { delayedMessage: names.join(' + ') } : {}),
+    }
+  }
+  return { kind: 'already-claimed', message: '今日已签到' }
+}
+
 /**
  * 查询「桌面端登录奖励」是否已领（供 `onboarding.status` 用）。
  *
@@ -263,6 +389,8 @@ export const raccoonCreditsForDefaultProduct = {
     fetchRaccoonCreditBalance(RACCOON, credential, fetcher),
   claimLoginReward: (credential: RaccoonCredential, fetcher?: typeof fetch) =>
     claimRaccoonLoginReward(RACCOON, credential, fetcher),
+  checkIn: (credential: RaccoonCredential, fetcher?: typeof fetch) =>
+    checkInRaccoon(RACCOON, credential, fetcher),
   fetchOnboardingStatus: (credential: RaccoonCredential, fetcher?: typeof fetch) =>
     fetchRaccoonOnboardingStatus(RACCOON, credential, fetcher),
 }
