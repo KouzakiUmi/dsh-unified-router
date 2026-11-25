@@ -130,3 +130,16 @@ test('机械可读化保留版本小数和原模型标识', () => {
   assert.equal(readableModelName('hy4flash', 'Hy4-flash (hy4flash)'), 'Hy4 Flash')
   assert.equal(readableModelName('sn-qwen4-max-p', 'sn-qwen4-max-p'), 'Qwen 4 Max')
 })
+
+test('Qoder CN 策展表为 GLM-5.4 提供 1M/128K、视觉与三档思考能力，不编造倍率', async () => {
+  const { QODER_CN } = await import('../vendor/channel-pack/src/qoder-product.ts')
+  const merged = mergeQoderCatalog(parseQoderCliModels('MODEL\nGLM-5.4'), QODER_CN.fallbackModels)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].id, 'GLM-5.4')
+  assert.equal(merged[0].contextWindow, 1_000_000)
+  assert.equal(merged[0].maxTokens, 131_072)
+  assert.equal(merged[0].supportsImage, true)
+  assert.deepEqual(merged[0].efforts, ['low', 'high', 'max'])
+  assert.equal(merged[0].defaultEffort, 'high')
+  assert.equal(merged[0].priceFactor, undefined, '未实测倍率不编造')
+})

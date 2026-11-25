@@ -711,3 +711,52 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
     assert.ok(verifyCalls.length > 0)
   } finally { tasks.dispose() }
 })
+
+test('签到：pending 主记录在后续 tick 中自动只读核实，确认入账后落 .confirmed 票据并通知刷新（不重放 claim）', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-checkin-pending-verify-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  let clock = Date.parse('2026-11-26T04:00:00Z')
+  let claimCalls = 0
+  let verifyCalls = 0
+  let upstreamSettled = false
+  const changes = []
+  const checkin = createDailyCheckin({
+    dir,
+    now: () => clock,
+    onChange: (provider, outcome) => { changes.push([provider, outcome.kind]) },
+    adapters: new Map([['codearts', {
+      resetHour: 0,
+      list: async () => [{ id: 'acc-1', name: '甲' }],
+      claim: async () => { claimCalls++; return { kind: 'pending' } },
+      verify: async () => { verifyCalls++; return { kind: upstreamSettled ? 'already-claimed' : 'pending' } },
+    }]]),
+  })
+  try {
+    // 1) 首轮 tick 提交 claim → 返回 pending 写主记录
+    await checkin.tick()
+    assert.equal(claimCalls, 1)
+    assert.equal(verifyCalls, 0)
+    assert.equal((await checkin.status()).providers.codearts.accounts[0].kind, 'pending')
+
+    // 2) 次轮 tick（防抖内先核实一次，上游尚未结算 → 仍 pending，绝不重放 claim）
+    clock += 6 * 60_000
+    await checkin.tick()
+    assert.equal(claimCalls, 1, 'pending 绝不重放 claim')
+    assert.equal(verifyCalls, 1)
+    assert.equal((await checkin.status()).providers.codearts.accounts[0].kind, 'pending')
+
+    // 3) 5 分钟内再 tick 不重复打 verify（防抖）
+    clock += 2 * 60_000
+    await checkin.tick()
+    assert.equal(verifyCalls, 1)
+
+    // 4) 上游已结算，超过防抖后 tick 自动只读核实 → 落 .confirmed 票据并通知刷新
+    upstreamSettled = true
+    clock += 4 * 60_000
+    await checkin.tick()
+    assert.equal(claimCalls, 1, '核实确认仍不重放 claim')
+    assert.equal(verifyCalls, 2)
+    assert.equal((await checkin.status()).providers.codearts.accounts[0].kind, 'already-claimed')
+    assert.deepEqual(changes.at(-1), ['codearts', 'already-claimed'])
+  } finally { checkin.dispose() }
+})

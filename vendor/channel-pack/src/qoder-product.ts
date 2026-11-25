@@ -392,7 +392,6 @@ const QODER_CN_FALLBACK_MODELS: readonly QoderFallbackModel[] = [
   { id: 'fast', name: 'Fast', contextWindow: 200_000, supportsImage: true, supportsThinking: false, priceFactor: 0.8 },
   // 2026-11-19 --list-models lists these titles without publishing their backend keys or capabilities.
   { id: 'Qwen4-Max', name: 'Qwen4-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.4, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true },
-  { id: 'Qwen4-Max-Preview', name: 'Qwen4-Max-Preview', contextWindow: 0 },
   {
     id: 'qmodel_38max', name: 'Qwen3.8-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true,
     isFree: true, priceFactor: 0.5, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true,
@@ -405,6 +404,8 @@ const QODER_CN_FALLBACK_MODELS: readonly QoderFallbackModel[] = [
   { id: 'dmodel', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.5, efforts: ['low', 'high', 'max'], defaultEffort: 'max', supportsDisable: true },
   // 滚动别名按渠道原名保留，不凭别名推断具体快照版本。
   { id: 'dfmodel', name: 'DeepSeek-Flash', contextWindow: 1_000_000, maxTokens: 393_216, supportsImage: true, priceFactor: 0.1, efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsDisable: true },
+  // 2026-11-26 实跑 --list-models 新增 GLM-5.4（CLI 不下发能力字段）；规格取智谱官方文档（1M/128K、原生视觉、三档思考），倍率未知不编造。
+  { id: 'GLM-5.4', name: 'GLM-5.4', contextWindow: 1_000_000, maxTokens: 131_072, supportsImage: true, supportsThinking: true, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
   { id: 'gmodel', name: 'GLM-5.3', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.8, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
   { id: 'gfmodel', name: 'GLM-5.3-Flash', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.1, efforts: ['high', 'max'], defaultEffort: 'max' },
   { id: 'kmodel_latest', name: 'Kimi-K3.1-Pro', contextWindow: 1_000_000, supportsImage: true, priceFactor: 1.0, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },

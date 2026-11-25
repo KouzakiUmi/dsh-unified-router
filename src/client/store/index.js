@@ -407,10 +407,14 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         if (result.status !== 'fulfilled' || !result.value || typeof result.value !== 'object') return
         sources[side] = CACHE_MODEL_SOURCES.has(result.value.source) ? result.value.source : 'fallback'
       })
-      const fresh = await Promise.all(sides.map(side => request('model.list', { provider: side }, controller.signal)))
+      // 写后重读必须走实时路径（live: true），否则会读回宿主旧快照里的 `cached` 覆盖刚刷新的 `remote`。
+      const fresh = await Promise.all(sides.map(side => request('model.list', { provider: side, live: true }, controller.signal)))
       if (disposed || controller.signal.aborted || state.provider !== channel) return false
       const refreshedAt = Date.now()
       for (const side of sides) newestModelRead.set(side, refreshedAt)
+      sides.forEach((side, index) => {
+        if (!sources[side] && CACHE_MODEL_SOURCES.has(fresh[index]?.source)) sources[side] = fresh[index].source
+      })
       const refreshed = new Map(sides.map((side, index) => [side, modelsFrom(fresh[index], side)]))
       publish({
         models: modelProvidersOf(channel).flatMap(side => refreshed.has(side)
