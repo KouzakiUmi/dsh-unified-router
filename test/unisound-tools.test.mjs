@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApiKeyManager } from '../lib/apikey-channel.js'
 import { readApiKeyQuota } from '../lib/apikey-quota.js'
+import { apikeyProvider } from '../lib/apikey-providers.js'
 import { unisoundToolSpecs, registerUnisoundTools } from '../lib/unisound-tools.js'
+
+// 规格对象就是额度执行器的入参：渠道差异全在规格里，执行器不含渠道名。
+const SPEC_UNISOUND = apikeyProvider('unisound')
+const SPEC_AGNES = apikeyProvider('agnes')
+
 
 const KEY = 'sk-unisound-tools-SECRET'
 const COOKIE = 'sessionid=console-SECRET; XSRF-TOKEN=xsrf%2Dvalue'
@@ -24,20 +30,14 @@ function context(credentials, extras = {}) {
 }
 
 // 云知声规格的最小测试替身：目录/余额与真实规格同形，tools/console 字段照抄。
+// 真规格打底，只把与上游交互的部分覆盖成测试专用。
+// 这样契约加字段时本用例自动跟随（控制台额度的配方搬进规格后就撞上过：内联假
+// spec 缺 consoleQuota，快照读不到额度，断言直接变成 undefined）。
 const spec = {
-  id: 'unisound', title: '云知声', endpoint: 'https://maas-api.unisound.com',
-  chatPath: '/v1/chat/completions', baseUrl: 'https://maas-api.unisound.com/v1',
-  credentialRef: 'UNIFIED_ROUTER_UNISOUND_API_KEY',
-  consoleCredentialRef: 'UNIFIED_ROUTER_UNISOUND_CONSOLE',
-  consoleLogin: {
-    url: 'https://maas.unisound.com/login',
-    cookieUrls: ['https://maas.unisound.com'],
-    verifyUrl: 'https://maas.unisound.com/manager/account/info',
-    cookieDomain: 'maas.unisound.com',
-  },
-  tools: { module: './unisound-tools.js', outputDirName: 'unisound-tools-output' },
+  ...apikeyProvider('unisound'),
   catalog: { request: () => ({ url: 'https://maas-api.unisound.com/anthropic/v1/models', headers: {} }), parse: () => [], next: () => undefined },
-  fallback: [], effortBody: () => undefined, balance: null,
+  fallback: [],
+  effortBody: () => undefined,
 }
 
 async function filesFixture() {
@@ -278,12 +278,12 @@ test('管理器：控制台会话粘贴验证后存凭据；浏览器登录收�
 test('额度：凭据会话优先于环境变量；无会话报 needs-console；XSRF 头随 Cookie', async () => {
   const seen = []
   const fetchJson = async ({ headers }) => { seen.push(headers); return { errorCode: '0', result: { weeklyPointsTotal: 100, weeklyPointsUsed: 0 } } }
-  const fromCred = await readApiKeyQuota('unisound', fetchJson, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'env=1' }, 'cred=1; XSRF-TOKEN=t%20k')
+  const fromCred = await readApiKeyQuota(SPEC_UNISOUND, fetchJson, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'env=1' }, 'cred=1; XSRF-TOKEN=t%20k')
   assert.equal(fromCred.status, 'ready')
   assert.equal(seen.at(-1).cookie, 'cred=1; XSRF-TOKEN=t%20k')
   assert.equal(seen.at(-1)['x-xsrf-token'], 't k')
-  const fromEnv = await readApiKeyQuota('unisound', fetchJson, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'env=1' })
+  const fromEnv = await readApiKeyQuota(SPEC_UNISOUND, fetchJson, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'env=1' })
   assert.equal(fromEnv.status, 'ready')
   assert.equal(seen.at(-1).cookie, 'env=1')
-  assert.deepEqual(await readApiKeyQuota('unisound', fetchJson, undefined, {}), { status: 'needs-console' })
+  assert.deepEqual(await readApiKeyQuota(SPEC_UNISOUND, fetchJson, undefined, {}), { status: 'needs-console' })
 })

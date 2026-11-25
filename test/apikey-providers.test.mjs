@@ -4,16 +4,21 @@ import { APIKEY_PROVIDERS, APIKEY_PROVIDER_IDS, apikeyProvider } from '../lib/ap
 import { detectApiKeyRateLimit, readApiKeyQuota } from '../lib/apikey-quota.js'
 import { projectApiKeyQuota } from '../lib/apikey-quota-projection.js'
 
+// 规格对象就是额度执行器的入参：渠道差异全在规格里，执行器不含渠道名。
+const SPEC_UNISOUND = apikeyProvider('unisound')
+const SPEC_AGNES = apikeyProvider('agnes')
+
+
 test('控制台额度使用独立凭据，按渠道投影且丢弃敏感字段', async () => {
-  assert.deepEqual(await readApiKeyQuota('unisound', () => assert.fail('未配置不发请求'), undefined, {}), { status: 'needs-console' })
-  const u = await readApiKeyQuota('unisound', async ({ url, headers }) => {
+  assert.deepEqual(await readApiKeyQuota(SPEC_UNISOUND, () => assert.fail('未配置不发请求'), undefined, {}), { status: 'needs-console' })
+  const u = await readApiKeyQuota(SPEC_UNISOUND, async ({ url, headers }) => {
     assert.equal(url, 'https://maas.unisound.com/manager/u-plan/subscription/current')
     assert.deepEqual(headers, { cookie: 'session=fake' })
     return { errorCode: '0', result: { weeklyPointsTotal: 2500, weeklyPointsUsed: 100, window5hLimit: 500, window5hRemain: 300, apiKey: 'NEVER_DISPLAY' } }
   }, undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'session=fake' })
   assert.deepEqual(u.windows.map(row => [row.id, row.remaining]), [['window-points', 300], ['weekly-points', 2400]])
   assert.doesNotMatch(JSON.stringify(projectApiKeyQuota(u)), /NEVER_DISPLAY|session/)
-  const a = await readApiKeyQuota('agnes', async ({ url, headers }) => {
+  const a = await readApiKeyQuota(SPEC_AGNES, async ({ url, headers }) => {
     assert.equal(new URL(url).origin, 'https://platform-backend.agnes-ai.cn')
     assert.equal(headers.authorization, 'Bearer console-fixture')
     if (url.endsWith('/credits')) return { code: 200, data: { plan_quota_credits: 200, plan_balance_credits: 150 } }
@@ -22,13 +27,13 @@ test('控制台额度使用独立凭据，按渠道投影且丢弃敏感字段',
   }, undefined, { UNIFIED_ROUTER_AGNES_CONSOLE_TOKEN: 'console-fixture' })
   assert.equal(a.balance, 12.34)
   assert.equal(a.windows[0].remaining, 150)
-  const denied = await readApiKeyQuota('unisound', async () => ({ errorCode: '1', errorMsg: '用户未登录或session超时' }), undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'session=fake' })
+  const denied = await readApiKeyQuota(SPEC_UNISOUND, async () => ({ errorCode: '1', errorMsg: '用户未登录或session超时' }), undefined, { UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE: 'session=fake' })
   assert.deepEqual(denied, { status: 'expired' })
 })
 
 test('云知声控制台额度：兼容字符串积分与赠送额度 giftQuotas 投影', async () => {
   // 真实接口返回 weeklyPointsTotal/Remain/Used 为十进制字符串，且未开启 5 小时窗口时省略 window5h*。
-  const u = await readApiKeyQuota('unisound', async () => ({
+  const u = await readApiKeyQuota(SPEC_UNISOUND, async () => ({
     errorCode: '0',
     result: {
       weeklyPointsTotal: '10000',
@@ -60,12 +65,12 @@ test('云知声控制台额度：兼容字符串积分与赠送额度 giftQuotas
     { modelId: 'u2-ocr', used: 0, limit: 29500000, remaining: 29500000, unit: 'Token' },
   ])
   assert.doesNotMatch(JSON.stringify(projected), /NEVER_DISPLAY/)
-  const freeIdle = await readApiKeyQuota('unisound', async () => ({
+  const freeIdle = await readApiKeyQuota(SPEC_UNISOUND, async () => ({
     errorCode: '0',
     result: { planCode: 'U-FREE', weeklyPointsTotal: '2500', weeklyPointsUsed: '100', weeklyPointsRemain: '2400' },
   }), undefined, {}, 'session=fake')
   assert.deepEqual(freeIdle.windows[0], { id: 'window-points', used: null, limit: 500, remaining: 500 })
-  const clamped = await readApiKeyQuota('unisound', async () => ({
+  const clamped = await readApiKeyQuota(SPEC_UNISOUND, async () => ({
     errorCode: '0',
     result: { window5hLimit: '500', window5hRemain: '-3.5', weeklyPointsTotal: 10000, weeklyPointsRemain: -1 },
   }), undefined, {}, 'session=fake')
@@ -76,7 +81,7 @@ test('云知声控制台额度：兼容字符串积分与赠送额度 giftQuotas
 })
 
 test('云知声保留窗口重置倒计时，不借用套餐结束时间', async () => {
-  const quota = await readApiKeyQuota('unisound', async () => ({ errorCode: '0', result: {
+  const quota = await readApiKeyQuota(SPEC_UNISOUND, async () => ({ errorCode: '0', result: {
     weeklyPointsTotal: 2500, weeklyPointsRemain: 2000, weeklyResetInDays: 2, weeklyResetInHours: 3,
     window5hLimit: 500, window5hRemain: 300, window5hResetInLessThanOneMinute: true,
     periodEnd: '2030-01-01',
@@ -89,13 +94,13 @@ test('云知声保留窗口重置倒计时，不借用套餐结束时间', async
 test('限速区分 RPM/TPM、账单耗尽、明确等待时间与估算', async () => {
   const now = 1_800_000_000_000
   const rpm = Response.json({ base_resp: { status_code: 100501 } })
-  assert.deepEqual(await detectApiKeyRateLimit('unisound', rpm, now), { reason: 'rpm', until: now + 60_000, estimated: true })
+  assert.deepEqual(await detectApiKeyRateLimit(SPEC_UNISOUND, rpm, now), { reason: 'rpm', until: now + 60_000, estimated: true })
   assert.equal((await rpm.json()).base_resp.status_code, 100501, '观察不消费原始响应')
   const tpm = Response.json({ base_resp: { status_code: 100502 } }, { status: 429, headers: { 'Retry-After': '12' } })
-  assert.deepEqual(await detectApiKeyRateLimit('unisound', tpm, now), { reason: 'tpm', until: now + 12_000, estimated: false })
+  assert.deepEqual(await detectApiKeyRateLimit(SPEC_UNISOUND, tpm, now), { reason: 'tpm', until: now + 12_000, estimated: false })
   const quota = Response.json({ error: { code: 'insufficient_quota' } }, { status: 429 })
-  assert.equal(await detectApiKeyRateLimit('agnes', quota, now), null)
-  assert.equal(await detectApiKeyRateLimit('unisound', new Response('data: test\n\n', { headers: { 'Content-Type': 'text/event-stream' } }), now), null)
+  assert.equal(await detectApiKeyRateLimit(SPEC_AGNES, quota, now), null)
+  assert.equal(await detectApiKeyRateLimit(SPEC_UNISOUND, new Response('data: test\n\n', { headers: { 'Content-Type': 'text/event-stream' } }), now), null)
 })
 
 // API Key 渠道规格（docs/APIKEY-CHANNELS.md §2）：端点、目录解析、兜底表、

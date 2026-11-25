@@ -114,8 +114,33 @@ spec = {
     requests(key) { return [{ url, headers }] },
     parse(jsons) { return { used, limit, unlimited, unit } | null },
   },
+  // 可选：没有这一段就不读控制台、也不显示「控制台额度」行。
+  consoleQuota: {
+    consoleUrl: 'https://…',                    // UI「打开控制台」链接，经快照透出给客户端
+    baseUrl: 'https://…',                       // 控制台 API 基址（与 endpoint 不同域）
+    credentialEnv: 'UNIFIED_ROUTER_…_CONSOLE',  // 宿主凭据里没有会话时的环境变量回退
+    headers(session) { return { … } },          // 鉴权头：Bearer Token 或 Cookie（+ XSRF）
+    paths: ['/usage'],                          // 并发 GET；失败的响应以 null 交给 read
+    pick(json) { return data | null },          // 成功判据 + 取数据体（各家成功码字段不同）
+    read(jsons) { return { windows, gifts, balance } }, // 归一化成额度窗口
+    expiredCodes: ['401', '403'],               // 命中即判「会话已过期」
+    expiredPattern: /未登录|session.{0,5}超时/i, // 可选：中文错误串判据
+  },
+  rateLimit: {                                  // 可选；缺省则只认 429 且不限流类型
+    scanOnOk: false,                            // true = 2xx 也读 body（上游用 200 回限流体）
+    codes: { '100501': 'rpm', '100502': 'tpm' }, // 业务码 → 限流类型
+  },
 }
 ```
+
+**共享层不得按渠道名分支。** 控制台额度的取数与解析全部写在规格里（与 `catalog.request/parse` 同构），
+`lib/apikey-quota.js` 只是执行器：取凭据 → 并发请求 → 归一化状态，**不含任何渠道名判断**。
+`rateLimit.codes` 同理。这条纪律由 `test/apikey-new-channel.test.mjs` 守住 —— 它用一个虚构渠道
+（`fixture-key`，地址都是 `example` 域）走通额度读取、限流识别与管理器全链路；哪天新渠道必须改
+`lib/` 里的共享文件才能接入，那条用例会先红。
+
+控制台页面地址也只存在规格一处：`consoleQuota.consoleUrl` 经渠道快照的 `consoleQuotaUrl` 字段透出给客户端，
+客户端不再维护「渠道 id → URL」的映射表（那张表是第二份真源，加渠道时必漏）。
 
 云知声目录有分页：`catalog.request(key, cursor?)` 接受可选的 `after_id` 游标，`catalog.next(json)` 返回下一页游标或 `undefined`。Agnes 的 `next` 恒返回 `undefined`。
 
@@ -186,12 +211,12 @@ createApiKeyManager(ctx, spec, deps = {}) -> { call(method, payload, signal), co
 
 | 文件 | 职责 |
 |---|---|
-| `lib/apikey-providers.js` | 渠道规格：端点、目录解析、兜底表、思考方言、余额解析、控制台登录与工具声明 |
+| `lib/apikey-providers.js` | 渠道规格：端点、目录解析、兜底表、思考方言、余额解析、**控制台额度配方**、限流码、控制台登录与工具声明 |
 | `lib/apikey-llm.js` | 推理适配器：把启用的目录行装配成 pi-ai 适配器，限制请求地址，合并思考字段 |
 | `lib/apikey-models.js` | 模型开关与参数的落盘存储（每渠道一个文件） |
 | `lib/apikey-channel.js` | 管理器：Key、目录、注册、快照、写操作、工具开关、控制台会话 |
 | `lib/unisound-tools.js` | 云知声多模态能力工具（六个官方 Skill 的 Host 移植）+ `unisound-tools-prompts/` 资产 |
-| `lib/apikey-quota.js` | 控制台额度读取（凭据会话优先于 env）与限速识别 |
+| `lib/apikey-quota.js` | 控制台额度与限流识别的**通用执行器**（按规格配方取数；凭据会话优先于 env；不含渠道名判断） |
 | `lib/browser-login.js` | 独立临时 Profile 浏览器登录 + CDP Cookie 收割（云知声控制台会话复用） |
 | `lib/rpc.js`、`lib/web-host.js`、`lib/settings-providers.js` | 方法白名单、管理器装配、公开投影、设置快照资源 |
 | `src/client/providers/apikey.js`、`agnes.js`、`unisound.js` | 设置页视图 |
