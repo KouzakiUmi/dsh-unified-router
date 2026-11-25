@@ -10,8 +10,17 @@ function apikeyMoney(value, unit) {
 
 const apiQuotaLabels = {
   'weekly-points': '周积分', 'window-points': '5 小时积分', 'monthly-credits': '月度 Credits',
-  'window-credits': '5 小时 Credits', 'pack-credits': '积分包 Credits',
+  'monthly-tokens': '月度 Token', 'window-credits': '5 小时 Credits', 'pack-credits': '积分包 Credits',
+  'window-percent': '5 小时额度', 'weekly-percent': '周额度', 'monthly-percent': '月度额度',
   'weekly-requests': '每周请求数', 'window-requests': '5 小时请求数',
+}
+
+function apiQuotaValueText(row, prefix = true) {
+  if (row.id?.endsWith('-percent')) {
+    if (row.remaining !== null) return `${prefix ? '剩余 ' : ''}${displayNumber(row.remaining)}%`
+    return `已用 ${displayNumber(row.used)}%`
+  }
+  return `${row.remaining === null ? `已用 ${displayNumber(row.used)}` : `${prefix ? '剩余 ' : ''}${displayNumber(row.remaining)}`}${row.limit === null ? '' : ` / ${displayNumber(row.limit)}`}`
 }
 
 function apiQuotaResetHint(row, at, now = Date.now()) {
@@ -19,9 +28,10 @@ function apiQuotaResetHint(row, at, now = Date.now()) {
   const minutes = Math.ceil((row.resetInMs - (now - at)) / 60000)
   if (minutes <= 0) return ''
   const days = Math.floor(minutes / 1440), hours = Math.floor(minutes / 60) % 24
-  if (row.id === 'weekly-points' && minutes <= 60) return '约 1 小时内重置'
+  const coarse = row.id === 'weekly-points' || row.id === 'weekly-percent' || row.id?.startsWith('monthly-')
+  if (coarse && minutes <= 60) return '约 1 小时内重置'
   if (minutes === 1) return '约 1 分钟内重置'
-  const duration = [days && `${days} 天`, hours && `${hours} 小时`, row.id !== 'weekly-points' && minutes % 60 && `${minutes % 60} 分钟`].filter(Boolean).join(' ')
+  const duration = [days && `${days} 天`, hours && `${hours} 小时`, !coarse && minutes % 60 && `${minutes % 60} 分钟`].filter(Boolean).join(' ')
   return duration ? `约 ${duration}后重置` : ''
 }
 
@@ -40,7 +50,7 @@ function apiQuotaRows(quota, consoleUrl, capabilities, balance) {
     meta: { 'needs-console': '未配置控制台会话', unavailable: '暂无额度数据', expired: '控制台会话已过期', error: '读取失败' }[quota.status] }]
   return [
     ...quota.windows.map(row => ({ id: row.id, name: apiQuotaLabels[row.id],
-      meta: [`${row.remaining === null ? `已用 ${displayNumber(row.used)}` : `剩余 ${displayNumber(row.remaining)}`}${row.limit === null ? '' : ` / ${displayNumber(row.limit)}`}`, apiQuotaResetHint(row, quota.updatedAt)].filter(Boolean).join(' · '),
+      meta: [apiQuotaValueText(row, true), apiQuotaResetHint(row, quota.updatedAt)].filter(Boolean).join(' · '),
       metric: percentMetric(remainingFraction(row.remaining, row.limit)) })),
     ...(Array.isArray(quota.gifts) ? quota.gifts.map(row => ({ id: `gift-${row.modelId}`, name: `${row.modelId} 赠送额度`,
       meta: `${row.remaining === null ? `已用 ${displayNumber(row.used)}` : `剩余 ${displayNumber(row.remaining)}`}${row.limit === null ? '' : ` / ${displayNumber(row.limit)}`}${row.unit ? ` ${row.unit}` : ''}`,
@@ -79,6 +89,7 @@ export function apiKeyChannel({
   id, title, host,
   toolsLabel = '多模态能力工具',
   toolsMeta = '语音转写 · 语音合成 · 声音克隆 · 文档解析 · 信息抽取',
+  consoleMeta = '用于读取控制台额度',
   freeTier = false,
   preferCreditsWindows = false,
 }) {
@@ -182,7 +193,7 @@ export function apiKeyChannel({
         // 控制台会话：额度读取的凭据。浏览器登录自动收割，或粘贴 Cookie。
         ...(current && 'hasConsoleSession' in current ? [{
           id: 'console', name: '控制台会话',
-          meta: signingIn ? '浏览器登录进行中，可取消；完成后自动保存' : '用于读取控制台额度（U Plan 积分 / 按量余额）',
+          meta: signingIn ? '浏览器登录进行中，可取消；完成后自动保存' : consoleMeta,
           tags: [[current.hasConsoleSession ? '已配置' : '待配置', current.hasConsoleSession ? 'success' : undefined]],
           actions: signingIn ? [
             { label: '取消登录', call: [id + 'CancelConsoleLogin'] },

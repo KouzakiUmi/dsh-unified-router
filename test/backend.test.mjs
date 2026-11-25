@@ -33,16 +33,33 @@ test('推荐按发版批次和同渠道性能倍率筛选，保留能力有差�
     model('dfmodel', 0.1),
     model('unrelated', 0.9, { name: 'DeepSeek V4 Pro 0813' }),
   ]
+  // dmodel 归一化为 deepseek-v4-pro，已列入全平台旧版（不再走性价比分支，无条件标旧版）。
   assert.deepEqual([...modelRecommendationExclusions(qoder(0.5), 'qodercn')], [
-    ['dmodel', { kind: 'value', alternative: 'dfmodel' }],
+    ['dmodel', { kind: 'older', alternative: undefined }],
   ])
-  assert.equal(modelRecommendationExclusions(qoder(0.12), 'qodercn').size, 0)
+  assert.deepEqual([...modelRecommendationExclusions(qoder(0.12), 'qodercn')], [
+    ['dmodel', { kind: 'older', alternative: undefined }],
+  ])
   assert.equal(modelRecommendationExclusions(qoder(0.5), 'raccoon').size, 0, 'Qoder 的别名不外溢')
+  // DeepSeek V4 Pro（含日期/别名）与 Qwen3.8 Flash 全渠道标为旧版，但目录只有它们时不清空渠道。
+  assert.deepEqual(
+    [...modelRecommendationExclusions([
+      model('deepseek-v4-pro', 0.5),
+      model('deepseek-v4-pro-0813', 0.5),
+      model('qwen3.8-flash', 0.1),
+      model('qwen4-max', 0.5),
+    ])],
+    [
+      ['deepseek-v4-pro', { kind: 'older', alternative: undefined }],
+      ['deepseek-v4-pro-0813', { kind: 'older', alternative: undefined }],
+      ['qwen3.8-flash', { kind: 'older', alternative: undefined }],
+    ],
+  )
 })
 
 test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型号标旧', () => {
   for (const [provider, old, next, other] of [
-    ['astudio', 'xopdsv4flash0731in', 'xdeepseek-flash-in', 'xopdeepseekv4pro0813'],
+    ['astudio', 'xopdsv4flash0731in', 'xdeepseek-flash-in', 'glm-5.3'],
     ['codearts', 'openpangu-2.0-pro', 'openpangu-2.1-pro', 'openpangu-2.0-flash'],
     ['agnes', 'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-3.0-pro'],
     ['trae', 'kimi-k2.6', 'kimi-k3.1-pro', 'kimi-k3.1-pro-highspeed'],
@@ -145,10 +162,10 @@ test('独立后端渠道的精选列表、启停恢复与持久化', async t => 
     const expected = {
       raccoon: { total: 7, off: ['sn-glm-5-3'], legacy: [] },
       'raccoon-pro': { total: 7, off: ['sn-glm-5-3-p'], legacy: [] },
-      // 同族旧版：kmodel（K2.8-Preview）在 Kimi-K3.1-Pro 之后。
-      qodercn: { total: 14, off: ['kmodel', 'qmodel_38max', 'Qwen4-Max-Preview', 'dmodel', 'gmodel', 'Step-5-Preview'], legacy: ['kmodel'] },
-      // 同族旧版：kimi-k3 / minimax-m3。
-      trae: { total: 20, off: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3', 'qwen3.8-max', 'DeepSeek-V4-Pro-Official', 'glm-5.3'], legacy: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3'] },
+      // 同族旧版：kmodel（K2.8-Preview）；全平台旧版（off 且 UI 标旧版）：dmodel（DS V4 Pro）、qfmodel（Qwen3.8 Flash）。
+      qodercn: { total: 14, off: ['kmodel', 'qmodel_38max', 'qfmodel', 'Qwen4-Max-Preview', 'dmodel', 'gmodel', 'Step-5-Preview'], legacy: ['kmodel'] },
+      // 同族旧版：kimi-k3 / minimax-m3；全平台旧版（off 且 UI 标旧版）：DeepSeek-V4-Pro-Official / qwen3.8-flash。
+      trae: { total: 20, off: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3', 'qwen3.8-max', 'qwen3.8-flash', 'DeepSeek-V4-Pro-Official', 'glm-5.3'], legacy: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3'] },
     }
     // ⚠️ 每个被断言 `visible()` 的 provider 都必须有账号：适配器的
     // `providerCatalogVisible` 门禁在「无已登录账号」时返回 []（隐藏分组），

@@ -119,9 +119,9 @@ function quotaShortWindowLabel(label) {
   const tail = String(label || '').split(' · ').at(-1).trim()
   if (/^(?:周积分|周额度|每周请求数|本周)$/.test(tail)) return '周'
   if (/^7\s*天积分$/.test(tail)) return '7 天'
-  if (/^5\s*小时(?:积分|\s*Credits|请求数)?$/i.test(tail)) return '5 小时'
-  if (/^(?:月度\s*Credits|月额度|本月)$/i.test(tail)) return '月度'
-  return tail.replace(/(?:积分|额度|请求数|\s*Credits)$/i, '').trim() || tail
+  if (/^5\s*小时(?:积分|\s*Credits|请求数|额度)?$/i.test(tail)) return '5 小时'
+  if (/^(?:月度\s*Credits|月度\s*Token|月度额度|月额度|本月)$/i.test(tail)) return '月度'
+  return tail.replace(/(?:积分|额度|请求数|\s*Credits|\s*Token)$/i, '').trim() || tail
 }
 
 function quotaAccountSummary(row) {
@@ -187,7 +187,7 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
           ...quota.windows.map(row => ({ label: apiQuotaLabels[row.id], fraction: remainingFraction(row.remaining, row.limit),
               note: apiQuotaResetHint(row, quota.updatedAt),
               primary: !caps?.preferCreditsWindows || !row.id.endsWith('-requests') || !quota.windows.some(item => item.id.endsWith('-credits') && item.limit > 0),
-              value: row.remaining === null ? `已用 ${displayNumber(row.used)}` : `${displayNumber(row.remaining)}${row.limit > 0 ? ` / ${displayNumber(row.limit)}` : ''}` })),
+              value: apiQuotaValueText(row, false) })),
           ...(quota.gifts ?? []).filter(row => row.modelId === model).map(row => ({ label: '模型赠送额度', primary: false,
             value: row.remaining === null ? `已用 ${quotaValue(row.used, row.unit)}` : quotaValue(row.remaining, row.unit) })),
         ] }]

@@ -131,8 +131,9 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     const utc8 = new Date(Date.now() + 8 * 3_600_000)
     const minutes = utc8.getUTCHours() * 60 + utc8.getUTCMinutes()
     const peakPromo = minutes >= 22 * 60 || minutes < 8 * 60
-    // `qmodel_38max`：priceFactor 0.5，promotion 原价 0.5 × 4 折 = 0.2。
-    assert.deepEqual(qoder.badgeOf('qfmodel'), reference('0.10'))
+    // `qfmodel`（Qwen3.8 Flash）已列为全平台旧版、默认关闭，不再出现在选择器列表（仍在 model.list 保留倍率）；
+    // 选择器列表验证启用的 `auto` / `Qwen4-Max`。
+    assert.equal(qoder.badgeOf('qfmodel'), undefined)
     assert.deepEqual(qoder.badgeOf('auto'), reference('0.50'))
     assert.deepEqual(qoder.badgeOf('Qwen4-Max'), reference('0.40'))
     // `model.list`（设置页读的 RPC）不吃徽标，name 里的倍率文本照旧 —— 契约未变。

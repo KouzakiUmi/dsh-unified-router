@@ -1,7 +1,7 @@
-# API Key 渠道（Agnes / 云知声）
+# API Key 渠道（Agnes / 云知声 / 千帆 Token Plan / 阿里云百炼）
 
 本文是 API Key 类渠道的接口契约：宿主侧管理器、模型设置、推理适配器、渠道规格与 RPC 投影。
-Agnes 与云知声共用同一套实现，差异只在 `lib/apikey-providers.js` 的规格对象里。
+四家 API Key 渠道共用同一套实现，差异只在 `lib/apikey-providers.js` 的规格对象里。
 
 ## 1. 渠道事实（实测与官方文档）
 
@@ -66,6 +66,28 @@ Agnes 与云知声共用同一套实现，差异只在 `lib/apikey-providers.js`
 - 额度读取（`readApiKeyQuota`）**凭据会话优先于环境变量** `UNIFIED_ROUTER_UNISOUND_CONSOLE_COOKIE`；只读 GET 也随 Cookie 带 `X-XSRF-TOKEN` 头（取自 `XSRF-TOKEN` Cookie，与浏览器行为一致）。实测 `/manager/u-plan/subscription/current` 返回的 `weeklyPointsTotal` / `weeklyPointsRemain` / `weeklyPointsUsed` 为十进制字符串（未激活 5 小时窗口时省略 `window5hLimit` / `window5hRemain`），且超出窗口时偶发负剩余字符串；读数层在未开启 5 小时窗口时按套餐档位（`U-FREE`: 500 / `U-STANDARD`: 2000 / `U-PLUS`: 12000 或 `weeklyPointsTotal / 5`）补齐完整 5 小时积分窗口，并将负剩余归零。返回另附带 `giftQuotas[]`（`modelId` / `remainAmount` / `totalAmount` / `usedAmount` / `unit`），`apiQuotaAmount` 兼容纯非负十进制字符串，`projectApiKeyQuota` 同步白名单投影 `gifts`。
 - 同一接口可返回 `window5hResetIn*` 和 `weeklyResetIn*` 倒计时；额度药丸和设置页以最近采集时间为基准展示约多久后重置。未给出倒计时的窗口只显示余量，不使用套餐结束时间代替重置时间。
 - 控制台会话只发往 `maas.unisound.com`，读取禁止重定向；Cookie 原文不进任何返回值、日志与错误文案。
+
+### 百度千帆 Token Plan 个人版（`qianfan`）
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 端点 | OpenAI 兼容 `https://qianfan.baidubce.com/v2/tokenplan/personal`（`POST /v2/tokenplan/personal/chat/completions`），专属 API Key Bearer 鉴权 | [快速开始](https://cloud.baidu.com/doc/qianfan/s/kmracfgi2)（2026-11-11） |
+| 目录 | `GET /v2/tokenplan/personal/models`（2026-11-26 真实 Key 实测 HTTP 200 返回 12 条，仅 `id`/`object`/`owned_by`），过滤 `*-ocr*` 非聊天模型（实测 `unlimited-ocr-2` 走 chat/completions 回 400），空表回落官方兜底清单 | 2026-11-26 真实 Key 实测 + [个人版文档](https://cloud.baidu.com/doc/qianfan/s/Dmrabu8b6) |
+| 模型 | `ernie-5.5-flash-preview`、`ernie-light-dt-1.0`、`deepseek-v4.1-flash-1017`、`deepseek-v4.1-flash`、`deepseek-v4-pro`、`deepseek-v4-pro-0813`、`deepseek-v4-flash-0731`、`glm-5.3`、`glm-5.3-flash`、`glm-5.2`、`glm-5.1` 及控制台路由别名 `qianfan-code-latest` | [Token Plan 个人版](https://cloud.baidu.com/doc/qianfan/s/Dmrabu8b6) · [模型列表](https://cloud.baidu.com/doc/qianfan-docs/s/7m95lyy43) |
+| 思考 | `thinking: { type: 'enabled' \| 'disabled' }`；DeepSeek V4 系列与 `ernie-light-dt-1.0` 另支持 `reasoning_effort`；`ernie-5.5-flash-preview` / `glm-5.3` / `glm-5.3-flash` 仅支持开启不支持关闭 | [深度思考文档](https://cloud.baidu.com/doc/qianfan-docs/s/Wm95lyynv)（2026-11-11） |
+| 控制台额度 | 专属 API Key 无公开余额端点；浏览器登录 `https://console.bce.baidu.com/qianfan/resource/token-plan`（或粘贴 Cookie，存 `UNIFIED_ROUTER_QIANFAN_CONSOLE`）调 `GET /api/qianfan/charge/tokenPlanPersonal/resource`，跳过 `Released`/过期条目，按 `billingMode` 投影为 `monthly-credits`（积分制）或 `monthly-tokens`（Token 制），忽略响应中的 `apiKey` 字段 | 控制台前端协议（参考 `yetone/magpie#5860` / `@8f3f7a4`） |
+| 限流/耗尽 | `429 token_plan_person_rate_limit_exceeded` 记 RPM 限速；`429 token_quota_exceeded` / `quota_exceeded` 为月度额度耗尽不记短时限速 | [个人版专属错误码](https://cloud.baidu.com/doc/qianfan/s/Dmrabu8b6) |
+
+### 阿里云百炼 Token Plan（`bailian`）
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 端点 | OpenAI 兼容 `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`（`POST /compatible-mode/v1/chat/completions`），`sk-sp-` 专属 API Key Bearer 鉴权 | [Cursor 接入指南](https://help.aliyun.com/zh/model-studio/cursor) · [Token Plan FAQ](https://help.aliyun.com/zh/model-studio/token-plan-faq)（2026-11-21） |
+| 目录 | `GET /compatible-mode/v1/models`（2026-11-26 真实 Key 实测 HTTP 200 返回 22 条，仅 `id`/`object`/`created`/`owned_by`），过滤 `qwen-image*`/`qwen-audio*`/`wan*`/`happyhorse*`/`decision-model*` 等非聊天模型（保留 14 个聊天模型），空表回落官方兜底清单 | 2026-11-26 真实 Key 实测 + [个人版订阅与权益](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview) |
+| 模型 | `qwen4-max`、`qwen3.8-max`、`qwen3.8-flash`、`qwen3.7-max`、`qwen3.7-plus`、`qwen3.6-flash`、`deepseek-v4.1-flash`、`deepseek-v4.1-flash-1017`、`deepseek-v4-pro`、`deepseek-v4-pro-0813`、`deepseek-v4-flash-0731`、`glm-5.3`、`glm-5.2`、`auto`（`qwen4-max-preview` 已随预览期结束下线，`decision-model-preview` 在 chat 端点报 400 已过滤） | 2026-11-26 真实 Key 实测 + [个人版订阅与权益](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview) |
+| 思考 | `enable_thinking: true \| false`；Qwen4/Qwen3.8/DeepSeek V4 系列同时支持 `reasoning_effort`（`low`/`high`/`xhigh`，实测 `off`/`high`/`xhigh` 均正常）；**`glm-5.3` 实测发 `enable_thinking: false` 回 HTTP 400（`restricted to True`），仅提供开启档**；`auto` 不下发思考参数 | 2026-11-26 真实 Key 逐模型实测 + [OpenAI 兼容 Chat 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) |
+| 控制台额度 | 专属 `sk-sp-` Key 只授权推理；浏览器登录 `https://bailian.console.aliyun.com/cn-beijing?tab=plan`（或粘贴 Cookie，存 `UNIFIED_ROUTER_BAILIAN_CONSOLE`），两步取数：① GET 控制台页提取 `SEC_TOKEN`；② POST `BroadScopeAspnGateway` 调 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage`（**严禁硬编码 `switchAgent`**），按 `per5HourPercentage` / `per1WeekPercentage` / `per1MonthPercentage` 投影为百分比窗口（`window-percent` / `weekly-percent` / `monthly-percent`） | 控制台网关实测协议（参考 `can1357/oh-my-pi#12260`） |
+| 限流/耗尽 | `429 Requests rate limit exceeded` / `Throttling*` 记限速；`429 insufficient_quota` 为套餐额度耗尽不记短时限速 | [Token Plan FAQ](https://help.aliyun.com/zh/model-studio/token-plan-faq) |
 
 ### 控制台额度与限速提醒
 

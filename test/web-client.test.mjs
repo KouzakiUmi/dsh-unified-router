@@ -198,7 +198,7 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   react.dispose()
 })
 
-test('渠道卡片八张（AStudio 已停用、Loomy 已移除）：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
+test('渠道卡片十张（含千帆与百炼，AStudio 已停用、Loomy 已移除）：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
   const { module, react } = loadClient(undefined, {
     localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'doubaowork' : null },
   }); const host = hostFixture(); let Settings
@@ -209,7 +209,7 @@ test('渠道卡片八张（AStudio 已停用、Loomy 已移除）：旧豆包工
   const tabs = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
   // `raccoon-pro` 是模型层的第二个 provider，不是一张卡片。
   assert.deepEqual(tabs.map(n => n.props['aria-label'].replace('切换到 ', '')),
-    ['Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'CodeArts'])
+    ['Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', '千帆 Token Plan', '阿里云百炼', 'CodeArts'])
   assert.equal(tabs[0].props['aria-selected'], true)
   assert.ok(tabs.every(tab => tab.props['aria-controls'] === 'eac-provider-workspace'))
   const workspace = treeNodes(render()).find(n => n.props.id === 'eac-provider-workspace')
@@ -882,8 +882,8 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   render(); await tick()
   // 卡片：一张家族卡，副行是「账号数（单池）· 模型数（两侧之和）」。
   const cards = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  // 8 张：AStudio 已停用（`card: false`）、Loomy 已移除，不再出现在渠道选择器里。
-  assert.equal(cards.length, 8)
+  // 10 张：含千帆 Token Plan 与阿里云百炼；AStudio 已停用（`card: false`）、Loomy 已移除，不再出现在渠道选择器里。
+  assert.equal(cards.length, 10)
   assert.ok(hasText(render(), '3 账号 · 6 模型'))
   let tree = render()
   assert.equal(treeNodes(tree).find(n => n.props.id === 'eac-tab-models').props['aria-selected'], true)

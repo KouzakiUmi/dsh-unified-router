@@ -63,6 +63,8 @@ const clientModules = [
   'providers/apikey.js',     // API Key 渠道的共用视图工厂
   'providers/agnes.js',
   'providers/unisound.js',
+  'providers/qianfan.js',    // 百度千帆 Token Plan 个人版
+  'providers/bailian.js',    // 阿里云百炼 Token Plan
   'providers/astudio.js',    // AStudio（科大讯飞 Astron Studio）
   'providers/codearts.js',   // CodeArts（华为云码道）
   'providers/index.js',      // 渠道注册表（顺序即卡片顺序）

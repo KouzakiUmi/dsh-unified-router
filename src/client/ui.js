@@ -254,7 +254,7 @@ export function ConsoleCookieForm({ disabled, onSave }) {
     const saved = await onSave(cookie)
     if (saved) setCookie('')
   } },
-    h('label', { className: 'eac-field' }, h('span', null, '控制台 Cookie'), h('input', { className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled, placeholder: '从浏览器开发者工具复制 maas.unisound.com 的 Cookie', value: cookie, onChange: e => setCookie(e.target.value) })),
+    h('label', { className: 'eac-field' }, h('span', null, '控制台 Cookie'), h('input', { className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled, placeholder: '从浏览器开发者工具复制控制台 Cookie 请求头', value: cookie, onChange: e => setCookie(e.target.value) })),
     h('div', { className: 'eac-form-actions' }, primary('保存会话', undefined, disabled, { type: 'submit' })))
 }
 export function CredentialImportForm({ disabled, hint, onSave, onCancel }) {

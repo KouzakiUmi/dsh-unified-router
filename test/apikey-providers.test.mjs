@@ -111,11 +111,13 @@ const unisound = apikeyProvider('unisound')
 const AGNES_EFFORTS = ['off', 'low', 'medium', 'high']
 const UNISOUND_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
 
-test('注册表：两个渠道、id 顺序与冻结', () => {
-  assert.deepEqual(APIKEY_PROVIDER_IDS, ['agnes', 'unisound'])
-  assert.deepEqual(Object.keys(APIKEY_PROVIDERS), ['agnes', 'unisound'])
+test('注册表：四个渠道、id 顺序与冻结', () => {
+  assert.deepEqual(APIKEY_PROVIDER_IDS, ['agnes', 'unisound', 'qianfan', 'bailian'])
+  assert.deepEqual(Object.keys(APIKEY_PROVIDERS), ['agnes', 'unisound', 'qianfan', 'bailian'])
   assert.equal(apikeyProvider('agnes'), APIKEY_PROVIDERS.agnes)
   assert.equal(apikeyProvider('unisound'), APIKEY_PROVIDERS.unisound)
+  assert.equal(apikeyProvider('qianfan'), APIKEY_PROVIDERS.qianfan)
+  assert.equal(apikeyProvider('bailian'), APIKEY_PROVIDERS.bailian)
   assert.equal(Object.isFrozen(APIKEY_PROVIDERS), true)
   assert.throws(() => { APIKEY_PROVIDERS.x = 1 }, TypeError)
 })
@@ -446,4 +448,177 @@ test('分渠道默认输出上限：只在上游缺输出规格时生效，上�
   // 设置清除后回到推导
   const cleared = await createApiKeyModelSettings(null, 'unisound', { defaultMaxOutput: () => undefined }).list(remote)
   assert.equal(cleared.find(r => r.id === 'u2-med').maxOutputLength, 32_768)
+})
+
+/* --------------------- 百度千帆 Token Plan 个人版 --------------------- */
+
+test('千帆 Token Plan：静态字段、目录解析、思考参数方言与限流/耗尽区分', async () => {
+  const qianfan = apikeyProvider('qianfan')
+  assert.equal(qianfan.endpoint, 'https://qianfan.baidubce.com')
+  assert.equal(qianfan.baseUrl, 'https://qianfan.baidubce.com/v2/tokenplan/personal')
+  assert.equal(qianfan.chatPath, '/v2/tokenplan/personal/chat/completions')
+  assert.equal(qianfan.credentialRef, 'UNIFIED_ROUTER_QIANFAN_API_KEY')
+  assert.equal(qianfan.consoleCredentialRef, 'UNIFIED_ROUTER_QIANFAN_CONSOLE')
+  assert.equal(qianfan.catalog.fallbackOnEmpty, true)
+  const req = qianfan.catalog.request('bce-v3/test')
+  assert.equal(req.url, 'https://qianfan.baidubce.com/v2/tokenplan/personal/models')
+  assert.equal(req.headers.authorization, 'Bearer bce-v3/test')
+  const parsed = qianfan.catalog.parse({ data: [{ id: 'ernie-5.5-flash-preview' }, { id: 'deepseek-v4.1-flash-1017' }, { id: 'glm-5.3' }, { id: 'unlimited-ocr-2' }, { id: 'ernie-5.5-flash-preview' }] })
+  assert.deepEqual(parsed.map(r => r.id), ['ernie-5.5-flash-preview', 'deepseek-v4.1-flash-1017', 'glm-5.3'])
+  assert.equal(parsed[0].context, 1_000_000)
+  assert.equal(parsed[1].attachment, true)
+  assert.equal(parsed[2].attachment, false)
+  // 思考方言：DeepSeek V4 带 reasoning_effort，GLM-5.2 两态 thinking，ERNIE-5.5 仅开启。
+  const ds = qianfan.fallback.find(r => r.id === 'deepseek-v4-pro')
+  assert.deepEqual(qianfan.effortBody('off', ds), { thinking: { type: 'disabled' } })
+  assert.deepEqual(qianfan.effortBody('max', ds), { thinking: { type: 'enabled' }, reasoning_effort: 'max' })
+  const glm52 = qianfan.fallback.find(r => r.id === 'glm-5.2')
+  assert.deepEqual(qianfan.effortBody('high', glm52), { thinking: { type: 'enabled' } })
+  assert.deepEqual(qianfan.effortBody('off', glm52), { thinking: { type: 'disabled' } })
+  const glm53 = qianfan.fallback.find(r => r.id === 'glm-5.3')
+  assert.equal(qianfan.effortBody('off', glm53), undefined)
+  assert.deepEqual(qianfan.effortBody('high', glm53), { thinking: { type: 'enabled' } })
+  // 429 区分限流与月额度耗尽
+  const { detectApiKeyRateLimit } = await import('../lib/apikey-quota.js')
+  const rateLimited = await detectApiKeyRateLimit(qianfan, new Response(
+    JSON.stringify({ error: { code: 'token_plan_person_rate_limit_exceeded', type: 'rate_limit_exceeded' } }),
+    { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '15' } },
+  ), 1_000_000)
+  assert.equal(rateLimited?.reason, 'rpm')
+  assert.equal(rateLimited?.until, 1_015_000)
+  const exhausted = await detectApiKeyRateLimit(qianfan, new Response(
+    JSON.stringify({ error: { code: 'token_quota_exceeded', type: 'quota_exceeded' } }),
+    { status: 429, headers: { 'content-type': 'application/json' } },
+  ), 1_000_000)
+  assert.equal(exhausted, null, '月度额度用尽不得识别为短时限流')
+})
+
+test('千帆控制台额度：跳过已释放套餐、支持积分制与 Token 制、不外泄响应里的 apiKey', async () => {
+  const { readApiKeyQuota } = await import('../lib/apikey-quota.js')
+  const { projectApiKeyQuota } = await import('../lib/apikey-quota-projection.js')
+  const qianfan = apikeyProvider('qianfan')
+  const futureIso = new Date(Date.now() + 10 * 86_400_000).toISOString()
+  const creditQuota = await readApiKeyQuota(qianfan, async req => {
+    assert.equal(req.url, 'https://console.bce.baidu.com/api/qianfan/charge/tokenPlanPersonal/resource')
+    assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest')
+    return {
+      success: true,
+      status: 200,
+      result: {
+        items: [
+          { resourceStatus: 'Released', billingMode: 'credit', usedCredits: '6600', totalCredits: '6600', expiresAt: '2026-01-01 00:00:00', apiKey: 'SECRET-OLD' },
+          { resourceStatus: 'Running', billingMode: 'credit', usedCredits: '1500', totalCredits: '11500', expiresAt: futureIso, apiKey: 'SECRET-KEY-NEVER-LEAK' },
+        ],
+      },
+    }
+  }, undefined, {}, 'BDUSS=fake-cookie')
+  assert.equal(creditQuota.status, 'ready')
+  const projected = projectApiKeyQuota(creditQuota)
+  assert.equal(projected.windows.length, 1)
+  assert.equal(projected.windows[0].id, 'monthly-credits')
+  assert.equal(projected.windows[0].used, 1500)
+  assert.equal(projected.windows[0].limit, 11500)
+  assert.equal(projected.windows[0].remaining, 10000)
+  assert.ok(projected.windows[0].resetInMs > 9 * 86_400_000)
+  assert.doesNotMatch(JSON.stringify(projected), /SECRET-KEY-NEVER-LEAK/)
+  // Token 制回落到 monthly-tokens
+  const tokenQuota = await readApiKeyQuota(qianfan, async () => ({
+    success: true,
+    result: { items: [{ resourceStatus: 'Running', billingMode: 'token', usedTokens: 2_000_000, totalTokens: 42_000_000, expiresAt: futureIso }] },
+  }), undefined, {}, 'BDUSS=fake-cookie')
+  assert.equal(projectApiKeyQuota(tokenQuota).windows[0].id, 'monthly-tokens')
+  assert.equal(projectApiKeyQuota(tokenQuota).windows[0].remaining, 40_000_000)
+  // 登录验证回调
+  assert.equal(await qianfan.consoleLogin.verify('BDUSS=ok', async () => ({ success: true, result: { items: [] } })), true)
+  assert.equal(await qianfan.consoleLogin.verify('BDUSS=bad', async () => ({ success: false })), false)
+})
+
+/* --------------------- 阿里云百炼 Token Plan --------------------- */
+
+test('阿里云百炼 Token Plan：静态字段、过滤非聊天模型与思考方言', async () => {
+  const bailian = apikeyProvider('bailian')
+  assert.equal(bailian.endpoint, 'https://token-plan.cn-beijing.maas.aliyuncs.com')
+  assert.equal(bailian.baseUrl, 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')
+  assert.equal(bailian.chatPath, '/compatible-mode/v1/chat/completions')
+  assert.equal(bailian.credentialRef, 'UNIFIED_ROUTER_BAILIAN_API_KEY')
+  assert.equal(bailian.consoleCredentialRef, 'UNIFIED_ROUTER_BAILIAN_CONSOLE')
+  const parsed = bailian.catalog.parse({
+    data: [
+      { id: 'qwen4-max' }, { id: 'qwen3.8-flash' }, { id: 'qwen-image-3.0-pro' },
+      { id: 'qwen-audio-3.0-tts-plus' }, { id: 'wan2.7-image-pro' }, { id: 'happyhorse-1.1-t2v' },
+      { id: 'glm-5.3' }, { id: 'decision-model-preview' },
+    ],
+  })
+  assert.deepEqual(parsed.map(r => r.id), ['qwen4-max', 'qwen3.8-flash', 'glm-5.3'])
+  assert.equal(parsed[0].attachment, true)
+  assert.equal(parsed[2].attachment, false)
+  // 思考方言：Qwen4/3.8/DS-V4 带 enable_thinking + reasoning_effort；GLM-5.3 仅开启；GLM-5.2/Qwen3.7 两态；auto 不发。
+  const qwen4 = bailian.fallback.find(r => r.id === 'qwen4-max')
+  assert.deepEqual(bailian.effortBody('off', qwen4), { enable_thinking: false })
+  assert.deepEqual(bailian.effortBody('high', qwen4), { enable_thinking: true, reasoning_effort: 'high' })
+  assert.deepEqual(bailian.effortBody('xhigh', qwen4), { enable_thinking: true, reasoning_effort: 'xhigh' })
+  const glm53 = bailian.fallback.find(r => r.id === 'glm-5.3')
+  assert.deepEqual(bailian.effortBody('high', glm53), { enable_thinking: true })
+  assert.equal(bailian.effortBody('off', glm53), undefined, '实测 glm-5.3 发 enable_thinking:false 回 HTTP 400')
+  const glm52 = bailian.fallback.find(r => r.id === 'glm-5.2')
+  assert.deepEqual(bailian.effortBody('off', glm52), { enable_thinking: false })
+  const auto = bailian.fallback.find(r => r.id === 'auto')
+  assert.equal(bailian.effortBody('high', auto), undefined)
+})
+
+test('阿里云百炼控制台额度：两步 SEC_TOKEN + 网关查询（不含 switchAgent）、百分比窗口投影与过期识别', async () => {
+  const { readApiKeyQuota } = await import('../lib/apikey-quota.js')
+  const { projectApiKeyQuota } = await import('../lib/apikey-quota-projection.js')
+  const bailian = apikeyProvider('bailian')
+  const resetWeek = Date.now() + 3 * 86_400_000
+  const resetMonth = Date.now() + 20 * 86_400_000
+  const seen = []
+  const quota = await readApiKeyQuota(bailian, async req => {
+    seen.push(req)
+    if (req.responseType === 'text') {
+      assert.equal(req.url, 'https://bailian.console.aliyun.com/cn-beijing?tab=plan')
+      return '<html><script>window.ALIYUN_CONSOLE_CONFIG = { SEC_TOKEN: "sec-tok-123" };</script></html>'
+    }
+    assert.equal(req.method, 'POST')
+    assert.match(req.url, /^https:\/\/bailian-cs\.console\.aliyun\.com\/data\/api\.json\?action=BroadScopeAspnGateway/)
+    const form = new URLSearchParams(req.body)
+    assert.equal(form.get('sec_token'), 'sec-tok-123')
+    assert.equal(form.get('region'), 'cn-beijing')
+    const params = JSON.parse(form.get('params'))
+    assert.equal(params.Api, 'zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage')
+    assert.equal('switchAgent' in params.Data.cornerstoneParam, false, '不得硬编码账号私有 switchAgent')
+    return {
+      code: '200',
+      successResponse: true,
+      data: {
+        DataV2: {
+          data: {
+            code: 'SUCCESS',
+            success: true,
+            data: {
+              per1WeekPercentage: 0.331,
+              per1WeekResetTime: resetWeek,
+              per1MonthPercentage: 0.125,
+              per1MonthResetTime: resetMonth,
+            },
+          },
+        },
+      },
+    }
+  }, undefined, {}, 'login_aliyunid_ticket=fake')
+  assert.equal(seen.length, 2)
+  assert.equal(quota.status, 'ready')
+  const projected = projectApiKeyQuota(quota)
+  assert.deepEqual(projected.windows.map(w => [w.id, w.used, w.limit, w.remaining]), [
+    ['weekly-percent', 33.1, 100, 66.9],
+    ['monthly-percent', 12.5, 100, 87.5],
+  ])
+  assert.ok(projected.windows[1].resetInMs > 19 * 86_400_000)
+  // 无 SEC_TOKEN 或网关报 NotLogined 时判 expired
+  const expiredNoToken = await readApiKeyQuota(bailian, async () => '<html>login page</html>', undefined, {}, 'cookie=expired')
+  assert.equal(expiredNoToken.status, 'expired')
+  const expiredGateway = await readApiKeyQuota(bailian, async req => req.responseType === 'text'
+    ? 'SEC_TOKEN: "t"'
+    : { code: '200', data: { errorCode: 'BailianGateway.Login.NotLogined' } }, undefined, {}, 'cookie=expired')
+  assert.equal(expiredGateway.status, 'expired')
 })

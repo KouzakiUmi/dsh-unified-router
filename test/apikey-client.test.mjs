@@ -457,3 +457,42 @@ test('云知声控制台登录可取消，在途时禁用粘贴且渠道页提�
     assert.equal(buttons(tree).some(n => (n.children || []).includes('取消登录')), false)
   } finally { react.dispose() }
 })
+
+test('千帆与阿里云百炼卡片：控制台会话行、月度额度与百分比窗口正常渲染', async () => {
+  const { module, react } = loadClient(); const host = hostFixture(); let Settings
+  const now = Date.now()
+  host.state.qianfan = snapshotOf('qianfan', {
+    hasConsoleSession: true,
+    consoleQuotaUrl: 'https://console.bce.baidu.com/qianfan/resource/token-plan',
+    quota: { status: 'ready', windows: [{ id: 'monthly-credits', used: 1500, limit: 11500, remaining: 10000, resetInMs: 10 * 86_400_000 }], balance: null, updatedAt: now },
+  })
+  host.state.bailian = snapshotOf('bailian', {
+    hasConsoleSession: true,
+    consoleQuotaUrl: 'https://bailian.console.aliyun.com/cn-beijing?tab=plan',
+    quota: { status: 'ready', windows: [
+      { id: 'weekly-percent', used: 33.1, limit: 100, remaining: 66.9, resetInMs: 3 * 86_400_000 },
+      { id: 'monthly-percent', used: 12.5, limit: 100, remaining: 87.5, resetInMs: 20 * 86_400_000 },
+    ], balance: null, updatedAt: now },
+  })
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } },
+    connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  try {
+    render(); await tick()
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 千帆 Token Plan').props.onClick(); await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
+    let text = JSON.stringify(render())
+    assert.match(text, /用于读取千帆 Token Plan 个人版月度额度/)
+    assert.match(text, /月度 Credits/)
+    assert.match(text, /剩余 10,000 \/ 11,500/)
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 阿里云百炼').props.onClick(); await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
+    text = JSON.stringify(render())
+    assert.match(text, /用于读取百炼 Token Plan 个人版周期额度/)
+    assert.match(text, /周额度/)
+    assert.match(text, /剩余 66\.9%/)
+    assert.match(text, /月度额度/)
+    assert.match(text, /剩余 87\.5%/)
+  } finally { react.dispose() }
+})
