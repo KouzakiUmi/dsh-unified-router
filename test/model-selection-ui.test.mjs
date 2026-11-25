@@ -105,7 +105,8 @@ test('启用优先在分页前执行，旧版与倍率提示在共用列表中�
     ...Array.from({ length: 16 }, (_, i) => ({ id: `old-${i}`, name: `模型 ${i}`, disabled: true })),
     { id: 'qwen-3-8-max', disabled: true },
     { id: 'qwen4-max', contextWindow: 1_000_000, supportsImage: true, rate: { label: 'x0.50', tone: 'neutral' } },
-    { id: 'glm-5.3', contextWindow: 1_000_000, supportsImage: true, rate: { label: '参考 x0.75', tone: 'neutral' } },
+    { id: 'glm-5-3-flash', contextWindow: 1_000_000, supportsImage: true, rate: { label: 'x0.25', tone: 'neutral' } },
+    { id: 'step-5-preview', contextWindow: 1_000_000, supportsImage: true, rate: { label: '参考 x0.75', tone: 'neutral' } },
   ] })
   try {
     let tree = await openModels(f)

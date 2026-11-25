@@ -687,3 +687,50 @@ test('Step Plan 控制台额度：Connect-JSON 剩余比例解析、跳过 0+0 �
   assert.equal(await stepfun.consoleLogin.verify('bare-token', async () => ({ plan_credit_rate_limit: {} })), true)
   assert.equal(await stepfun.consoleLogin.verify('bad-token', async () => ({ code: 'unauthenticated' })), false)
 })
+
+test('阿里云百炼 AccessKey（ACS3-HMAC-SHA256）免浏览器额度读取与过期自动重签', async () => {
+  const { parseAliyunAccessKey, signAliyunAcs3 } = await import('../lib/apikey-providers.js')
+  const { readApiKeyQuota } = await import('../lib/apikey-quota.js')
+  const { projectApiKeyQuota } = await import('../lib/apikey-quota-projection.js')
+  const { normalizeConsoleCookieInput } = await import('../lib/apikey-channel.js')
+  const bailian = apikeyProvider('bailian')
+  assert.deepEqual(parseAliyunAccessKey('LTAI5tDemoKeyId:DemoSecret123'), { id: 'LTAI5tDemoKeyId', secret: 'DemoSecret123' })
+  assert.deepEqual(parseAliyunAccessKey('{"accessKeyId":"LTAI5tJsonId","accessKeySecret":"JsonSec"}'), { id: 'LTAI5tJsonId', secret: 'JsonSec' })
+  assert.equal(parseAliyunAccessKey('login_aliyunid_ticket=abc; foo=bar'), null, 'Cookie 不得误判为 AccessKey')
+  const signed = signAliyunAcs3({
+    accessKeyId: 'LTAI5tDemoKeyId', accessKeySecret: 'DemoSecret123',
+    url: 'https://modelstudio.cn-beijing.aliyuncs.com/modelstudio/cli/generateAccessToken',
+    action: 'GenerateCLIAccessToken', version: '2026-02-10', body: '{}',
+    now: new Date('2026-11-26T00:00:00Z'), nonce: 'fixed-nonce',
+  })
+  assert.match(signed.authorization, /^ACS3-HMAC-SHA256 Credential=LTAI5tDemoKeyId,SignedHeaders=host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version,Signature=[0-9a-f]{64}$/)
+  // 模拟首次 cliAccessToken 被拒 NotLogined 后自动重签一次并成功返回月度窗口
+  let mintCount = 0, usageCount = 0
+  const resetMonth = Date.now() + 18 * 86_400_000
+  const quota = await readApiKeyQuota(bailian, async req => {
+    if (req.url.includes('generateAccessToken')) {
+      mintCount++
+      assert.match(req.headers.authorization, /^ACS3-HMAC-SHA256 Credential=LTAI5tRetryId/)
+      return { cliAccessToken: `cli-tok-${mintCount}` }
+    }
+    usageCount++
+    assert.equal(req.url.startsWith('https://bailian-cs.console.aliyun.com/cli/api.json?'), true)
+    assert.equal(req.headers.authorization, `Bearer cli-tok-${mintCount}`)
+    if (usageCount === 1) return { code: '200', data: { errorCode: 'BailianGateway.Login.NotLogined' } }
+    return {
+      code: '200', successResponse: true,
+      data: { DataV2: { data: { code: 'SUCCESS', success: true, data: { per1MonthPercentage: 0.2, per1MonthResetTime: resetMonth } } } },
+    }
+  }, undefined, {}, 'LTAI5tRetryId:RetrySecret999')
+  assert.equal(mintCount, 2)
+  assert.equal(usageCount, 2)
+  assert.equal(quota.status, 'ready')
+  assert.deepEqual(projectApiKeyQuota(quota).windows.map(w => [w.id, w.remaining]), [['monthly-percent', 80]])
+  // 智能粘贴归一化：cURL / Cookie 头 / 多行头 / JSON / AK:SK
+  assert.equal(normalizeConsoleCookieInput("curl 'https://console.bce.baidu.com/api/qianfan/charge/tokenPlanPersonal/resource' \\\n -H 'Cookie: BDUSS=bd1; a=2'"), 'BDUSS=bd1; a=2')
+  assert.equal(normalizeConsoleCookieInput("curl 'https://example.test' -b 'JSESSIONID=abc'"), 'JSESSIONID=abc')
+  assert.equal(normalizeConsoleCookieInput('Cookie: BDUSS=bd2; x=1'), 'BDUSS=bd2; x=1')
+  assert.equal(normalizeConsoleCookieInput('Host: platform.stepfun.com\nOasis-Token: tok-99\nAccept: */*'), 'tok-99')
+  assert.equal(normalizeConsoleCookieInput('{"cookie":"k=v"}'), 'k=v')
+  assert.equal(normalizeConsoleCookieInput('LTAI5tDemo:Sec'), 'LTAI5tDemo:Sec')
+})

@@ -1220,6 +1220,8 @@ test('渠道选择器是小卡片网格（不用横向滚动条）', () => {
   assert.match(source, /\.eac-providers\{[^}]*repeat\(3,minmax\(0,1fr\)\)/)
   assert.match(source, /@container eac \(max-width:470px\)\s*\{\s*\.eac-providers\{[^}]*repeat\(2,minmax\(0,1fr\)\)/)
   assert.doesNotMatch(source, /\.eac-providers\{[^}]*overflow-x:auto/)
+  // 窄屏下含分段按钮组（默认输出上限 / 路由优先级）的行必须折到第二行整宽排布，不能把左侧标题挤成竖条。
+  assert.match(source, /\.eac-row-item:has\(\.eac-row-controls \.eac-tier-row\)\{[^}]*grid-template-areas:"main switch" "more more"/)
 })
 
 test('家族卡缓存恢复两侧模型不串 provider', async () => {

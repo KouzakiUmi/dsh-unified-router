@@ -213,6 +213,7 @@ export const CLIENT_STYLES = `
 .eac-params-note{margin:0;color:var(--eac-faint);font-size:var(--eac-fs-xs);line-height:1.5}
 
 /* ---------- OpenDesign CoRouter 上下文分段：设置页与输入栏变体 ---------- */
+.eac-params .eac-context-tiers{flex-wrap:wrap;max-width:100%}
 .eac-context-control{display:flex;align-items:center;flex-wrap:wrap;gap:var(--eac-s2);min-width:0;color:var(--eac-text);font-size:var(--eac-fs-sm)}
 .eac-context-tiers{display:inline-flex;align-items:center;gap:0;min-width:0;padding:var(--eac-s1);border:1px solid var(--eac-border);border-radius:var(--eac-s2)}
 .eac-context-control .eac-context-segment{display:inline-flex;align-items:center;justify-content:center;min-height:var(--eac-s6);min-width:0;padding:var(--eac-s1) var(--eac-s2);margin:0;border:1px solid transparent;border-radius:var(--eac-s1);background:transparent;color:var(--eac-muted);font:inherit;font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer}
@@ -305,6 +306,11 @@ html[data-dsh-go-island][data-dsh-go-island-form="panel"] .eac-quota-popover{pos
 }
 :where(body[data-ds-dark-theme],.dark,[data-theme=dark],[data-color-scheme=dark]) :is(.eac-settings,.eac-context-pill,.eac-quota-pill,.eac-quota-popover),:is(.eac-settings,.eac-context-pill,.eac-quota-pill,.eac-quota-popover):where(.dark,[data-theme=dark],[data-color-scheme=dark]){color-scheme:dark;--eac-surface:var(--dsw-alias-bg-layer-1,#191b20);--eac-subtle:color-mix(in srgb,currentColor 4%,transparent);--eac-hover:color-mix(in srgb,currentColor 7%,transparent);--eac-text:var(--dsw-alias-label-primary,#f2f4f7);--eac-muted:color-mix(in srgb,currentColor 66%,transparent);--eac-faint:color-mix(in srgb,currentColor 50%,transparent);--eac-border:color-mix(in srgb,currentColor 20%,transparent);--eac-divider:color-mix(in srgb,currentColor 12%,transparent);--eac-accent:#3b82f6;--eac-on-accent:#fff;--eac-success:#22c55e;--eac-warn:#eab308;--eac-danger:#ef4444;--eac-shadow:0 1px 2px rgba(0,0,0,.18)}
 :where(.light,[data-theme=light],[data-color-scheme=light]) :is(.eac-settings,.eac-context-pill,.eac-quota-pill,.eac-quota-popover),:is(.eac-settings,.eac-context-pill,.eac-quota-pill,.eac-quota-popover):where(.light,[data-theme=light],[data-color-scheme=light]){color-scheme:light;--eac-surface:var(--dsw-alias-bg-layer-1,#fff);--eac-subtle:color-mix(in srgb,currentColor 4%,transparent);--eac-hover:color-mix(in srgb,currentColor 7%,transparent);--eac-text:var(--dsw-alias-label-primary,#182230);--eac-muted:color-mix(in srgb,currentColor 66%,transparent);--eac-faint:color-mix(in srgb,currentColor 50%,transparent);--eac-border:color-mix(in srgb,currentColor 20%,transparent);--eac-divider:color-mix(in srgb,currentColor 12%,transparent);--eac-accent:#3b82f6;--eac-on-accent:#fff;--eac-success:#22c55e;--eac-warn:#eab308;--eac-danger:#ef4444;--eac-shadow:0 1px 2px rgba(16,24,40,.04)}
+@container eac (max-width:720px){
+  .eac-row-item:has(.eac-row-controls .eac-tier-row){grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main switch" "more more"}
+  .eac-row-item:has(.eac-row-controls .eac-tier-row)>.eac-row-controls{justify-content:flex-start}
+  .eac-row-item:has(.eac-row-controls .eac-tier-row) .eac-tier-row{width:100%}
+}
 @container eac (max-width:640px){
   .eac-header{align-items:center}
   .eac-workspace{padding:var(--eac-s2) var(--eac-s3) var(--eac-s4)}
@@ -313,9 +319,9 @@ html[data-dsh-go-island][data-dsh-go-island-form="panel"] .eac-quota-popover{pos
   .eac-workspace[data-panel=models] .eac-section-head{flex-direction:row;align-items:center;flex-wrap:wrap;gap:var(--eac-s2)}
   .eac-workspace[data-panel=models] .eac-section-actions{max-width:100%}
   .eac-row-item{grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"main switch more" "metric metric metric";gap:var(--eac-s2);padding:var(--eac-s3)}
-  .eac-row-item:has(.eac-row-controls .eac-button){grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main switch" "more more"}
-  .eac-row-item:has(.eac-row-controls .eac-button)>.eac-row-controls{justify-content:flex-start}
-  .eac-row-item:has(.eac-row-controls .eac-button)>.eac-row-metric{grid-area:auto;grid-column:1/-1}
+  .eac-row-item:has(.eac-row-controls :is(.eac-button,.eac-tier-row)){grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"main switch" "more more"}
+  .eac-row-item:has(.eac-row-controls :is(.eac-button,.eac-tier-row))>.eac-row-controls{justify-content:flex-start}
+  .eac-row-item:has(.eac-row-controls :is(.eac-button,.eac-tier-row))>.eac-row-metric{grid-area:auto;grid-column:1/-1}
   .eac-workspace[data-panel=advanced] .eac-row-name{white-space:normal;overflow-wrap:anywhere}
   .eac-row-credit{justify-content:flex-start}
   .eac-row-item>.eac-row-more{grid-area:auto;grid-column:1/-1;margin-top:0}

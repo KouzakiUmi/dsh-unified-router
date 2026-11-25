@@ -90,6 +90,8 @@ export function apiKeyChannel({
   toolsLabel = '多模态能力工具',
   toolsMeta = '语音转写 · 语音合成 · 声音克隆 · 文档解析 · 信息抽取',
   consoleMeta = '用于读取控制台额度',
+  consoleFormHint = '',
+  consoleFormGuide = '',
   freeTier = false,
   preferCreditsWindows = false,
 }) {
@@ -190,7 +192,7 @@ export function apiKeyChannel({
           tags: [current && !current.hasApiKey && ['先配置 API Key', 'warn'],
             current?.toolsEnabled && !current.toolsRegistered && ['待注册', 'warn']],
         }] : []),
-        // 控制台会话：额度读取的凭据。浏览器登录自动收割，或粘贴 Cookie。
+        // 控制台会话：额度读取的凭据。桌面端支持浏览器自动收割；手机或无头环境可直接打开控制台并粘贴 Cookie / cURL / AK:SK。
         ...(current && 'hasConsoleSession' in current ? [{
           id: 'console', name: '控制台会话',
           meta: signingIn ? '浏览器登录进行中，可取消；完成后自动保存' : consoleMeta,
@@ -199,9 +201,10 @@ export function apiKeyChannel({
             { label: '取消登录', call: [id + 'CancelConsoleLogin'] },
           ] : [
             { label: current.hasConsoleSession ? '重新登录' : '浏览器登录', call: [id + 'ConsoleLogin'], primary: !current.hasConsoleSession },
+            ...(current.consoleQuotaUrl ? [{ label: '打开控制台', href: current.consoleQuotaUrl }] : []),
             ...(current.hasConsoleSession ? [{ label: '清除会话', call: [id + 'ClearConsole'], danger: true }] : []),
           ],
-          form: { kind: 'console', call: [id + 'SetConsole'], disabled: signingIn },
+          form: { kind: 'console', call: [id + 'SetConsole'], disabled: signingIn, hint: consoleFormHint, guide: consoleFormGuide },
         }] : []),
         ...(current?.rateLimit?.until > Date.now() ? [{ id: 'rate-limit', name: '限速提醒',
           meta: h(ApiKeyCooldown, { key: current.rateLimit.until, limit: current.rateLimit }) }] : []),

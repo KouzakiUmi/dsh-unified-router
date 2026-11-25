@@ -23,7 +23,10 @@ function renderForm(form, ui, key, scope) {
   if (!form) return null
   const save = (...args) => ui.invoke(...form.call, ...args)
   const formScope = scope || `channel:${ui.providerId}`
-  return h(SETTINGS_FORMS[form.kind], { key, account: form.account, disabled: form.disabled === true || ui.loading || ui.isPending(formScope), save, onSave: save })
+  return h(SETTINGS_FORMS[form.kind], {
+    key, account: form.account, hint: form.hint, guide: form.guide,
+    disabled: form.disabled === true || ui.loading || ui.isPending(formScope), save, onSave: save,
+  })
 }
 
 /** 单选分段控件（智能选号模式）：复用参数编辑器的 .eac-tier 外观与 aria-pressed。 */

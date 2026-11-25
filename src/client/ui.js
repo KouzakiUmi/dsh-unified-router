@@ -246,15 +246,23 @@ export function PlanKeyForm({ disabled, onSave }) {
     h('label', { className: 'eac-field' }, h('span', null, 'API Key'), h('input', { className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled, value: apiKey, onChange: e => setApiKey(e.target.value) })),
     h('div', { className: 'eac-form-actions' }, primary('保存 API Key', undefined, disabled, { type: 'submit' })))
 }
-// 控制台会话粘贴表单（云知声额度读取用）：与 Key 表单同构，标签与文案不同。
-export function ConsoleCookieForm({ disabled, onSave }) {
+// 控制台会话粘贴表单：展示渠道专属字段引导，接受 Cookie / 请求头 / cURL / JSON / 阿里云 AccessKey。
+export function ConsoleCookieForm({ disabled, hint, guide, onSave }) {
   const [cookie, setCookie] = React.useState('')
   return h('form', { className: 'eac-account-form', onSubmit: async event => {
     event.preventDefault()
     const saved = await onSave(cookie)
     if (saved) setCookie('')
   } },
-    h('label', { className: 'eac-field' }, h('span', null, '控制台 Cookie'), h('input', { className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled, placeholder: '从浏览器开发者工具复制控制台 Cookie 请求头', value: cookie, onChange: e => setCookie(e.target.value) })),
+    h('label', { className: 'eac-field' },
+      h('span', null, '控制台凭据 / Cookie'),
+      h('input', {
+        className: 'eac-input', type: 'password', autoComplete: 'off', required: true, disabled,
+        placeholder: hint || '粘贴控制台 Cookie、请求头或 cURL',
+        value: cookie, onChange: e => setCookie(e.target.value),
+      }),
+      guide ? h('p', { className: 'eac-params-note' }, guide) : null,
+      h('p', { className: 'eac-params-note' }, '浏览器登录仅在宿主桌面端弹出；手机或无桌面环境请先打开控制台，按上方说明粘贴保存。')),
     h('div', { className: 'eac-form-actions' }, primary('保存会话', undefined, disabled, { type: 'submit' })))
 }
 export function CredentialImportForm({ disabled, hint, onSave, onCancel }) {

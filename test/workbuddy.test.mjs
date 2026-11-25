@@ -141,7 +141,7 @@ test('WorkBuddy 模型开关和实际调用参数实时更新，重启继续生�
   const provider = 'workbuddy'
   const catalog = {
     'glm-5.2': { limit: { context: 100_000, output: 24_000 }, attachment: false },
-    'glm-5.3': { limit: { context: 128_000, output: 64_000 }, attachment: true, rate: 0.13, efforts: ['none', 'medium', 'high'], defaultEffort: 'high' },
+    'glm-5.3-flash': { limit: { context: 128_000, output: 64_000 }, attachment: true, rate: 0.13, efforts: ['none', 'medium', 'high'], defaultEffort: 'high' },
     'step-5-preview': { limit: { context: 128_000, output: 64_000 }, attachment: true, rate: 0.33 },
   }
   let router, lastBuild
@@ -161,16 +161,16 @@ test('WorkBuddy 模型开关和实际调用参数实时更新，重启继续生�
   const call = (method, payload) => manager.call(method, { provider, ...payload })
   try {
     const { models } = await call('workbuddy.models')
-    assert.equal(models.find(model => model.id === 'glm-5.3').defaultEffort, 'high')
-    assert.deepEqual(router.listModels().map(model => model.id), ['glm-5.3'])
+    assert.equal(models.find(model => model.id === 'glm-5.3-flash').defaultEffort, 'high')
+    assert.deepEqual(router.listModels().map(model => model.id), ['glm-5.3-flash'])
     const request = await lastBuild.getFetch()
     assert.equal(await request(), 'u-1')
     await call('workbuddy.setModelEnabled', { modelId: 'step-5-preview', enabled: true })
-    await call('workbuddy.setModelEnabled', { modelId: 'glm-5.3', enabled: false })
+    await call('workbuddy.setModelEnabled', { modelId: 'glm-5.3-flash', enabled: false })
     assert.deepEqual(router.listModels().map(model => model.id), ['step-5-preview'])
-    await call('workbuddy.setModelParams', { modelId: 'glm-5.3', params: { reasoningEffort: 'medium', maxTokens: 32_000, supportsImage: false } })
+    await call('workbuddy.setModelParams', { modelId: 'glm-5.3-flash', params: { reasoningEffort: 'medium', maxTokens: 32_000, supportsImage: false } })
     await call('workbuddy.resetModels')
-    assert.deepEqual(router.listModels().map(model => model.id), ['glm-5.3'])
+    assert.deepEqual(router.listModels().map(model => model.id), ['glm-5.3-flash'])
     assert.equal(router.listModels()[0].effectiveEffort, 'medium')
     assert.equal(router.listModels()[0].maxOutputLength, 32_000)
     assert.equal(router.listModels()[0].vision, false)
@@ -179,7 +179,7 @@ test('WorkBuddy 模型开关和实际调用参数实时更新，重启继续生�
     manager = createWorkBuddyManager(ctx, config, deps)
     assert.equal((await call('workbuddy.models')).source, 'cached')
     assert.equal(router.listModels().length, 1)
-    assert.equal(router.listModels()[0].id, 'glm-5.3')
+    assert.equal(router.listModels()[0].id, 'glm-5.3-flash')
     assert.equal(router.listModels()[0].effectiveEffort, 'medium')
   } finally {
     manager.dispose()

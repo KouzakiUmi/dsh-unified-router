@@ -21,8 +21,8 @@ test('推荐按发版批次和同渠道性能倍率筛选，保留能力有差�
   ])
   assert.deepEqual([...exclusions].map(([id, reason]) => [id, reason.kind, reason.alternative]), [
     ['deepseek-v4-1-flash-0901', 'older', 'deepseek-v4-1-flash-1017'],
+    ['glm-5-3', 'older', undefined],
     ['step-5-preview', 'value', 'glm-5-3-flash'],
-    ['glm-5-3', 'value', 'glm-5-3-flash'],
   ])
   const samePrice = modelRecommendationExclusions([
     model('glm-5-3-flash', 0.4), model('qwen-4-max', 0.4),
@@ -41,29 +41,31 @@ test('推荐按发版批次和同渠道性能倍率筛选，保留能力有差�
     ['dmodel', { kind: 'older', alternative: undefined }],
   ])
   assert.equal(modelRecommendationExclusions(qoder(0.5), 'raccoon').size, 0, 'Qoder 的别名不外溢')
-  // DeepSeek V4 Pro（含日期/别名）与 Qwen3.8 Flash 全渠道标为旧版，但目录只有它们时不清空渠道。
+  // DeepSeek V4 Pro（含日期/别名）、Qwen3.8 Flash 与 GLM-5.3 全渠道标为旧版，但目录只有它们时不清空渠道。
   assert.deepEqual(
     [...modelRecommendationExclusions([
       model('deepseek-v4-pro', 0.5),
       model('deepseek-v4-pro-0813', 0.5),
       model('qwen3.8-flash', 0.1),
+      model('glm-5.3', 0.5),
       model('qwen4-max', 0.5),
     ])],
     [
       ['deepseek-v4-pro', { kind: 'older', alternative: undefined }],
       ['deepseek-v4-pro-0813', { kind: 'older', alternative: undefined }],
       ['qwen3.8-flash', { kind: 'older', alternative: undefined }],
+      ['glm-5.3', { kind: 'older', alternative: undefined }],
     ],
   )
 })
 
 test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型号标旧', () => {
   for (const [provider, old, next, other] of [
-    ['astudio', 'xopdsv4flash0731in', 'xdeepseek-flash-in', 'glm-5.3'],
+    ['astudio', 'xopdsv4flash0731in', 'xdeepseek-flash-in', 'glm-5.3-flash'],
     ['codearts', 'openpangu-2.0-pro', 'openpangu-2.1-pro', 'openpangu-2.0-flash'],
     ['agnes', 'agnes-2.5-flash', 'agnes-3.0-flash', 'agnes-3.0-pro'],
     ['trae', 'kimi-k2.6', 'kimi-k3.1-pro', 'kimi-k3.1-pro-highspeed'],
-    ['trae', 'DeepSeek-V3.1', 'deepseek-v4.1-flash', 'glm-5.3'],
+    ['trae', 'DeepSeek-V3.1', 'deepseek-v4.1-flash', 'glm-5.3-flash'],
     ['trae', 'qwen-3.5', 'qwen4-max', 'Doubao-Seed-Evolving'],
     // `seed-code` 与 `seed-2.0-code` 均已过时，优先由同目录 Seed 2.1 系列接替。
     ['trae', 'Doubao-Seed-Code', 'Doubao-Seed-2.1-Turbo', 'Doubao-Seed-Evolving'],
