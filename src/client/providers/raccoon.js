@@ -3,7 +3,7 @@ export const raccoon = {
   title: 'Raccoon',
   pack: true,
   family: [
-    { id: 'raccoon', title: '免费模型' },
+    { id: 'raccoon', title: '体验模型' },
     { id: 'raccoon-pro', title: '订阅模型' },
   ],
   // 两个能力位是**不同维度**，不要合并：

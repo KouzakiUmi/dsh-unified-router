@@ -656,15 +656,12 @@ export function raccoonSupportsImage(modelId: string, tags: readonly string[]): 
   return tags.includes('vision') || tags.includes('image') || tags.includes('image-understanding')
 }
 
-/** Raccoon **免费版**（`raccoon`）产品配置。 */
+/** Raccoon **体验版**（`raccoon`）产品配置。 */
 export const RACCOON: RaccoonProduct = {
   id: 'raccoon',
-  // ⚠️ 展示名必须能一眼区分免费版 / 订阅版：两者是**同一上游账号体系**的两个
-  // 产品面（同 API 基址、同登录协议），只按套餐分流模型。名字若都叫
-  // 「Raccoon (商汤)」，模型选择器与设置页里会出现两张分不清的卡片。
-  // ⚠️ 也不要用『Raccoon Work (商汤)』—— 那个词组在 Channel Pack 的 provider
-  // Tab 里**触发换行**（用户报障）。
-  displayName: 'Raccoon 免费版',
+  // ⚠️ 展示名必须能一眼区分体验版 / 订阅版，且避免用「免费版」误导模型或用户以为零消耗。
+  // 合并统一模式下由宿主挂载层覆写为不带后缀的 `Raccoon`。
+  displayName: 'Raccoon 体验版',
   apiBase: RACCOON_API_BASE,
   authApiPrefix: '/api/web/auth/v1',
   llmApiPrefix: '/api/web/llm/v2',

@@ -281,7 +281,12 @@ export function mountRaccoon(
     if (credential === undefined) return []
     return await raccoonPro.fetchModelsWithCredential(credential)
   }
-  const raccoonAdapter = mountRaccoon(RACCOON, raccoon, 'free', proRemoteFetch)
+  /** 合并后不显示「体验版」后缀，直接显示 `Raccoon`；未合并时显示 `Raccoon 体验版`。 */
+  const raccoonProduct: RaccoonProduct = {
+    ...RACCOON,
+    get displayName() { return unified() ? 'Raccoon' : RACCOON.displayName },
+  }
+  const raccoonAdapter = mountRaccoon(raccoonProduct, raccoon, 'free', proRemoteFetch)
   const raccoonProAdapter = mountRaccoon(
     RACCOON_PRO,
     raccoonPro,

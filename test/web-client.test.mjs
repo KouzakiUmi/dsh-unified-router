@@ -894,25 +894,25 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   assert.equal(treeNodes(tree).find(n => n.props.id === 'eac-tab-models').props['aria-selected'], true)
   treeNodes(tree).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
   tree = render()
-  // 套餐徽标：免费 success / 订阅 info / 未知（含没打过标的）warn。
-  const badges = treeNodes(tree).filter(n => n.props.className === 'eac-tag' && ['免费', '订阅', '套餐未知'].includes(n.children[0]))
+  // 套餐徽标：体验版 success / 订阅 info / 未知（含没打过标的）warn。
+  const badges = treeNodes(tree).filter(n => n.props.className === 'eac-tag' && ['体验版', '订阅', '套餐未知'].includes(n.children[0]))
     .map(n => [n.children[0], n.props['data-tone']])
-  assert.deepEqual(badges, [['免费', 'success'], ['订阅', 'info'], ['套餐未知', 'warn']])
-  // 两个模型分区（免费 31 / 订阅 31，来自各自的 model.list）。
-  // 两侧目录各刷各的：免费面拉到远端目录、订阅面没拉到 → 来源标识必须分别显示。
+  assert.deepEqual(badges, [['体验版', 'success'], ['订阅', 'info'], ['套餐未知', 'warn']])
+  // 两个模型分区（体验 31 / 订阅 31，来自各自的 model.list）。
+  // 两侧目录各刷各的：体验面拉到远端目录、订阅面没拉到 → 来源标识必须分别显示。
   treeNodes(tree).find(n => n.props.id === 'eac-tab-models').props.onClick()
   tree = render()
   await tick(); await tick(); await tick()
   tree = render()
   const groups = treeNodes(tree).filter(n => n.props['data-model-provider'])
   assert.deepEqual(groups.map(n => n.props['data-model-provider']), ['raccoon', 'raccoon-pro'])
-  assert.ok(hasText(tree, '免费模型 · 31'))
+  assert.ok(hasText(tree, '体验模型 · 31'))
   assert.ok(hasText(tree, '订阅模型 · 31'))
   // 首屏读取完成后自动补拉两侧目录：每侧各一次 model.refresh，各自记来源。
   assert.deepEqual(host.calls.filter(c => c.method === 'model.refresh' && c.payload.provider.startsWith('raccoon')).map(c => c.payload.provider),
     ['raccoon', 'raccoon-pro'])
   const groupText = group => treeNodes(group).flatMap(n => n.children || []).filter(c => typeof c === 'string').join(' ')
-  assert.ok(groupText(groups[0]).includes('远端目录'), '免费面拉到上游目录')
+  assert.ok(groupText(groups[0]).includes('远端目录'), '体验面拉到上游目录')
   assert.ok(groupText(groups[1]).includes('内置目录'), '订阅面没拉到 → 如实标兜底')
   assert.equal(groupText(groups[0]).includes('内置目录'), false, '拉到远端时不标兜底')
   // 每侧各一个「刷新目录」按钮，按本侧 provider 下发。
@@ -924,7 +924,7 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   // 渠道分区：两个开关，各自对 free / pro 下发。
   treeNodes(tree).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
   tree = render()
-  assert.ok(hasText(tree, '免费模型提供方'))
+  assert.ok(hasText(tree, '体验模型提供方'))
   assert.ok(hasText(tree, '订阅模型提供方'))
   const byText = (label) => treeNodes(tree).filter(n => n.type === 'button' && n.props['aria-label'] === label)
   assert.equal(byText('关闭模型提供方').length, 1, '免费面运行中 → 关闭它')

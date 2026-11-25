@@ -157,7 +157,7 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
         const packages = bal?.packages ?? []
         const shownPackages = displayCreditPackages(packages)
         return { id: account.id, label: account.nickname, at: bal?.updatedAt, stale: bal?.stale,
-          plan: account.plan === 'free' ? '免费' : account.plan === 'pro' ? '订阅' : '',
+          plan: unified ? '' : (account.plan === 'free' ? '体验版' : account.plan === 'pro' ? '订阅' : ''),
           amount: bal?.total ?? null, unit: '积分', packages, details: shownPackages.map(pkg => ({
             label: pkg.name || '额度包', value: pkg.remaining === null ? '' : quotaValue(pkg.remaining, pkg.unit),
             expires: pkg.active === false ? null : pkg.expiresAt, note: pkg.active === false ? '已失效' : '',

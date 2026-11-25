@@ -114,7 +114,8 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
     const adapter = adapters.get('raccoon')
     const proAdapter = adapters.get('raccoon-pro')
 
-    // ---- 统一模式：合并目录 + 订阅面隐藏 ----
+    // ---- 统一模式：合并目录 + 订阅面隐藏 + 提供方名不带后缀 ----
+    assert.equal(adapter.providerInfo('raccoon').name, 'Raccoon', '合并后不显示「体验版」后缀')
     const refresh = await rpc('model.refresh', { provider: 'raccoon' })
     assert.equal(refresh.value.source, 'remote')
     assert.deepEqual(adapter.listAllModels().map(model => model.id), ['sn-a', 'sn-b', 'sn-c'])
@@ -155,6 +156,7 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
 
     // ---- 关闭开关：回到两侧独立 ----
     unifiedFlag = false
+    assert.equal(adapter.providerInfo('raccoon').name, 'Raccoon 体验版', '关闭合并后恢复「Raccoon 体验版」')
     const proRefresh = await rpc('model.refresh', { provider: 'raccoon-pro' })
     assert.equal(proRefresh.value.source, 'remote')
     assert.deepEqual((await services.llm.listModels('raccoon-pro')).map(model => model.id).sort(), ['sn-a-p', 'sn-c-p'])
