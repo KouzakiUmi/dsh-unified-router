@@ -456,14 +456,26 @@ export function taskEntry(state, providerId, mode, accountId) {
   const ok = row.kind === 'claimed' || row.kind === 'completed' || row.kind === 'done'
   return { tag: [label, ok ? 'success' : row.kind === 'empty' ? undefined : 'warn'], row, locked: ok || row.kind === 'pending' || row.kind === 'failed' && !row.retryable }
 }
+/**
+ * 读渠道视图的能力声明（`providers/*.js` 里每个渠道自己声明的 `caps`）。
+ *
+ * 共享层一律通过它读渠道差异，**不写 `id === '某个渠道'`**：加渠道时只改声明，
+ * 不改渲染代码。`registeredById` 覆盖全部已注册渠道（含不作为卡片渲染的家族成员）。
+ */
+export function providerCaps(id) {
+  return registeredById(id)?.caps ?? null
+}
+
 export function claimMessage(value, provider) {
   const results = Array.isArray(value?.results) ? value.results : []
   if (!results.length) return '没有可领取的账号。'
   const count = kind => results.filter(r => r.outcome?.kind === kind).length
   let result = `领取结果：${count('claimed')} 个成功，${count('already-claimed')} 个已领，${count('inactive')} 个暂不可领，${count('failed')} 个失败。`
   if (count('pending')) result += `${count('pending')} 个待确认。`
-  if (results.some(r => r.outcome?.actionRequired)) result += provider === 'qodercn'
-    ? '每日额度开通入口：Qoder 中国版官方客户端。' : '每日额度开通入口：官方客户端。'
+  // 需要用户去官方客户端开通时给的具体入口：渠道自行声明，缺省是通用说法。
+  if (results.some(r => r.outcome?.actionRequired)) {
+    result += providerCaps(provider)?.claimActionHint ?? '每日额度开通入口：官方客户端。'
+  }
   return result
 }
 const CHECKIN_LABELS = {
@@ -477,8 +489,11 @@ export function checkinEntry(state, provider, accountId) {
   if (current.date !== date) return null
   const account = current.accounts?.find(account => account.accountId === accountId)
   const kind = account?.kind
-  const label = provider === 'codearts' && kind === 'inactive' ? '未查到今日签到记录'
-    : Object.hasOwn(CHECKIN_LABELS, kind) ? CHECKIN_LABELS[kind] : null
+  // 渠道可以覆盖通用签到文案（如 CodeArts 的签到入口在活动页，「未参会」与
+  // 「查不到记录」是两件事）。覆盖优先，缺省回落到通用表。
+  const overrides = providerCaps(provider)?.checkinLabels ?? {}
+  const label = (Object.hasOwn(overrides, kind) ? overrides[kind] : null)
+    ?? (Object.hasOwn(CHECKIN_LABELS, kind) ? CHECKIN_LABELS[kind] : null)
   if (!label) return null
   return { tag: [label, kind === 'claimed' || kind === 'already-claimed' ? 'success' : 'warn'], locked: account.retryable !== true }
 }
@@ -634,8 +649,9 @@ export function isPermanentCreditPackage(pkg, providerId) {
   const name = String(pkg.name || pkg.label || '').trim()
   if (/每日|赠送|活动|签到|会员|套餐|月度|周|日额度|体验|福利|新手|邀请|资源包|daily|gift|trial|member|monthly|weekly/i.test(name)) return false
   if (/永久|充值|购买|预付|星火|基础积分|按需积分|加购|permanent|prepaid|top[\s-]?up|buy/i.test(name)) return true
-  const raccoon = typeof isRaccoonFamily === 'function' ? isRaccoonFamily(providerId) : (providerId === 'raccoon' || providerId === 'raccoon-pro')
-  if (raccoon && name === '奖励积分') return true
+  // 哪些包名在本渠道算「永久积分」：由渠道声明（如 Raccoon 家族的「奖励积分」）。
+  const permanentNames = providerCaps(providerId)?.permanentPackageNames
+  if (Array.isArray(permanentNames) && permanentNames.includes(name)) return true
   return false
 }
 

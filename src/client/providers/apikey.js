@@ -88,9 +88,13 @@ export function apiKeyChannel({
   const withEntry = (state, next) => ({ apikeys: { ...state.apikeys, [id]: next } })
   const provider = {
     id, title,
-    // 能力声明同时挂到 provider 上：额度药丸（store/quota.js）经 providerById
-    // 读它，不必知道具体渠道名。
-    freeTier, preferCreditsWindows,
+    // 能力声明统一走 `caps`：共享层（core.js 的 providerCaps / 额度药丸）只读
+    // 声明，不必知道具体渠道名。与账号池与自管渠道的形状保持一致。
+    caps: {
+      freeTier, preferCreditsWindows,
+      // 有独立的模型设置文件（`<id>-models.json`）→ 消费「默认输出上限」设置。
+      defaultMaxOutput: true,
+    },
     panelIds: ['models', 'advanced'],
     rpcMethods: APIKEY_METHODS,
     createActions: context => createApiKeyActions(provider, context),

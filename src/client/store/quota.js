@@ -2,8 +2,12 @@ const quotaRoute = id => {
   const pool = isRaccoonFamily(id) ? 'raccoon' : id
   const provider = providerById(pool)
   if (!provider) return null
-  const type = id === PLAN_PROVIDER_ID ? 'plan' : packAllowed(id) ? 'pack' : provider.rpcMethods === APIKEY_METHODS ? 'api' : id === 'workbuddy' ? 'buddy' : 'managed'
-  return { provider: pool, type, title: id === 'raccoon-pro' ? raccoonPro.title : provider.title }
+  // 额度形态直接用规格表的 `kind`，不再按渠道名推断。`type` 沿用界面既有词汇：
+  // `apikey` → `api`、`workbuddy` → `buddy`，其余同名（资源表沿用这些键）。
+  const kind = channelSpec(id)?.kind ?? channelSpec(pool)?.kind ?? 'managed'
+  const type = kind === 'apikey' ? 'api' : kind === 'workbuddy' ? 'buddy' : kind
+  // 家族成员（`raccoon-pro`）不在 `PROVIDERS` 里（没有卡片），标题要从全部注册渠道取。
+  return { provider: pool, type, title: registeredById(id)?.title ?? provider.title }
 }
 
 const quotaResources = {
@@ -29,9 +33,11 @@ function createQuotaSnapshotStore(call, visible = globalThis.document, focus = g
       // 小浣熊家族额外读自动化配置（统一模型开关决定药丸显示全部账号还是按套餐分侧）。
       // automation.status 是全局资源（键为 `automation/automation.status`），
       // 请求的 provider 必须是 'automation'，不能跟渠道走。
-      const requested = (route.provider === 'codearts' ? [...quotaResources.managed, 'managed.models']
-        : route.provider === 'raccoon' ? [...quotaResources[route.type], 'automation.status']
-        : quotaResources[route.type]).map(resource =>
+      // 额外资源由渠道声明（如 CodeArts 要读模型目录挑免费/付费窗口、Raccoon 要读
+      // 统一模型开关）。缺省就只读本形态的基础资源。
+      const extra = providerCaps(route.provider)?.quotaExtraResources
+      const requested = (Array.isArray(extra) && extra.length
+        ? [...quotaResources[route.type], ...extra] : quotaResources[route.type]).map(resource =>
         [resource, resource === 'automation.status' ? 'automation' : route.provider])
       void Promise.all(requested.map(async resource => {
         const [resourceId, provider] = resource
@@ -83,21 +89,28 @@ function createQuotaSnapshotStore(call, visible = globalThis.document, focus = g
 
 const quotaPercent = fraction => `${fraction > 0 && fraction < 0.01 ? '<1' : Math.floor(fraction * 100 + 1e-9)}%`
 const quotaValue = (value, unit) => `${displayNumber(value)}${unit ? ` ${unit}` : ''}`
-function quotaWindow(window, provider) {
+/**
+ * 把一个额度窗口渲染成详情行。渠道差异全部来自 `caps.quotaWindow`：
+ * - `creditUnit`：单位要归一（上游给的是 credits / 点数这类原始文本）
+ * - `noFraction`：算不出可信百分比 → 不画进度条、不占主位、值只显示剩余量
+ * - `resetKind`：这一刻算「重置」还是「周期结束」，或干脆不显示（`none`）
+ */
+function quotaWindow(window, caps) {
+  const style = caps?.quotaWindow ?? {}
   const { limit, used, unit } = window
-  const unitText = provider === 'workbuddy' ? displayCreditUnit(unit) : unit
+  const unitText = style.creditUnit ? displayCreditUnit(unit) : unit
   const remaining = windowRemainingAmount(window)
-  const isAStudio = provider === 'astudio'
-  const fraction = isAStudio ? null : (remainingFraction(remaining, limit) ?? (used === null ? null : Math.min(1, Math.max(0, 1 - used / 100))))
-  const expiry = window.expiresAt || (isAStudio ? window.resetsAt : '') || window.runsOutAt
+  const fraction = style.noFraction ? null : (remainingFraction(remaining, limit) ?? (used === null ? null : Math.min(1, Math.max(0, 1 - used / 100))))
+  const expiry = window.expiresAt || (style.noFraction ? window.resetsAt : '') || window.runsOutAt
+  const resetKind = style.resetKind ?? 'reset'
   return {
-    label: window.name, fraction, primary: !isAStudio && !window.aside, meter: !isAStudio && Number.isFinite(fraction),
-    value: isAStudio
+    label: window.name, fraction, primary: !style.noFraction && !window.aside, meter: !style.noFraction && Number.isFinite(fraction),
+    value: style.noFraction
       ? (remaining !== null ? quotaValue(remaining, unitText || '积分') : window.display || '')
       : (remaining !== null ? `${displayNumber(remaining)}${limit > 0 ? ` / ${quotaValue(limit, unitText)}` : unitText ? ` ${unitText}` : ''}`
         : fraction !== null ? quotaPercent(fraction) : window.display ? `已用 ${window.display}` : ''),
-    reset: !isAStudio && provider !== 'codearts' ? window.resetsAt : '',
-    cycleEnd: provider === 'codearts' ? window.resetsAt : '', expires: expiry,
+    reset: resetKind === 'reset' ? window.resetsAt : '',
+    cycleEnd: resetKind === 'cycleEnd' ? window.resetsAt : '', expires: expiry,
     expiringAmount: expiry === window.runsOutAt && window.runsOut > 0 ? quotaValue(window.runsOut, unitText) : '',
   }
 }
@@ -128,13 +141,17 @@ function quotaAccountSummary(row) {
 function quotaPillData(id, type, snapshot, selection, viewedId, model) {
   const [first, second] = snapshot.entries
   let rows = [], empty = ''
+  // 渠道能力声明读一次，后面所有渠道差异都从这里取。
+  const caps = providerCaps(id)
+  // 家族成员代表哪一侧（`free` / `pro`）：账号按 plan 分流用。
+  const familySide = caps?.familySide ?? null
   // 统一模型模式下小浣熊药丸展示全部账号（服务账号可能是任意套餐）；
   // 订阅面（raccoon-pro）只服务旧会话，保持按套餐过滤。
-  const unified = id === 'raccoon' && snapshot.entries[2]?.value?.config?.raccoonUnifiedModels === true
+  const unified = caps?.unifiedModels === true && snapshot.entries[2]?.value?.config?.raccoonUnifiedModels === true
   if (type === 'pack') {
     const balances = new Map(balancesFrom(second?.value).map(row => [row.accountId, row]))
     rows = accountsFrom(first?.value, isRaccoonFamily(id) ? 'raccoon' : id)
-      .filter(account => account.enabled && (!isRaccoonFamily(id) || unified || (account.plan === 'pro') === (id === 'raccoon-pro')))
+      .filter(account => account.enabled && (!isRaccoonFamily(id) || unified || (account.plan === 'pro') === (familySide === 'pro')))
       .map(account => {
         const bal = balances.get(account.id)
         const packages = bal?.packages ?? []
@@ -158,8 +175,6 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
   } else if (type === 'api') {
     const quota = projectApiKeyQuota(first?.value?.quota)
     const balance = apikeyBalanceFrom(first?.value?.balance)
-    // 能力声明来自渠道视图（`apiKeyChannel`），共享层不写渠道名。
-    const caps = providerById(id)
     if (caps?.freeTier && isFreeTierIdle(quota, balance)) {
       rows = [{
         id, label: '账户状态', plan: '免费用户', amount: null,
@@ -192,23 +207,31 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
     const project = type === 'buddy' ? workbuddyAccountFrom : managedAccountFrom
     const raw = Array.isArray(first?.value?.accounts) ? first.value.accounts : []
     const catalog = snapshot.entries[1]?.value?.models
-    const codeartsModel = id === 'codearts' && Array.isArray(catalog) ? catalog.find(row => row?.id === model) : null
-    const codeartsUnknown = id === 'codearts' && model && typeof codeartsModel?.free !== 'boolean'
+    // `gateWindowsByModelFree`：该渠道的额度窗口按「免费 / 付费」分流，得先按当前
+    // 模型在目录里查它的免费属性；模型属性未知时宁可先不显示窗口，避免把付费窗口
+    // 当成免费额度报给用户（真实缺陷：用户以为有免费额度却调不动）。
+    const accountStyle = caps?.quotaAccount ?? {}
+    const gateByModel = accountStyle.gateWindowsByModelFree === true
+    const gatedModel = gateByModel && Array.isArray(catalog) ? catalog.find(row => row?.id === model) : null
+    const modelUnknown = gateByModel && model && typeof gatedModel?.free !== 'boolean'
     rows = raw.slice(0, 8).map(project).filter(account => account?.signedIn && account.enabled !== false).map(account => {
-      const windows = (codeartsUnknown ? [] : account.windows).filter(window => !model || (!window.models.length || window.models.includes(model)) && !window.notModels.includes(model))
-        .filter(window => !codeartsModel || (window.name === '免费日额度') === (codeartsModel.free === true))
-      const details = windows.map(window => quotaWindow(window, id))
+      const windows = (modelUnknown ? [] : account.windows).filter(window => !model || (!window.models.length || window.models.includes(model)) && !window.notModels.includes(model))
+        .filter(window => !gatedModel || (window.name === '免费日额度') === (gatedModel.free === true))
+      const details = windows.map(window => quotaWindow(window, caps))
       const wbCredits = type === 'buddy' ? workbuddyAccountCredits(windows) : null
-      if (id === 'astudio' || wbCredits) for (const detail of details) detail.primary = false
-      if (id === 'codearts' && codeartsModel && !codeartsModel.free) {
+      // `windowsAsCredits`：窗口本身就是积分包（没有独立的 packages 数组），
+      // 因此不占详情主位、金额按窗口求和、packages 直接用窗口列表。
+      const windowsAsCredits = accountStyle.windowsAsCredits === true
+      if (windowsAsCredits || wbCredits) for (const detail of details) detail.primary = false
+      if (gatedModel && !gatedModel.free) {
         for (const detail of details) detail.primary = detail.label === '总积分包'
       }
       const pkgBalances = windows.map(windowRemainingAmount).filter(value => Number.isFinite(value))
-      const derivedAmount = wbCredits?.amount ?? account.balance ?? (id === 'astudio' && pkgBalances.length ? pkgBalances.reduce((a, b) => a + b, 0) : null)
+      const derivedAmount = wbCredits?.amount ?? account.balance ?? (windowsAsCredits && pkgBalances.length ? pkgBalances.reduce((a, b) => a + b, 0) : null)
       return { id: account.id, label: account.name, plan: account.plan,
-        amount: codeartsUnknown || codeartsModel?.free ? null : derivedAmount,
+        amount: modelUnknown || gatedModel?.free ? null : derivedAmount,
         toneFraction: wbCredits?.fraction ?? null,
-        packages: id === 'astudio' ? windows : (wbCredits?.packages ?? []),
+        packages: windowsAsCredits ? windows : (wbCredits?.packages ?? []),
         unit: wbCredits?.unit || account.unit || '积分', at: account.updatedAt, stale: Boolean(account.error), details }
     })
   }
@@ -216,7 +239,8 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
   const primary = serving ?? (rows.length === 1 ? rows[0] : null)
   const viewed = rows.find(row => row.id === viewedId) ?? serving ?? rows[0] ?? null
   const accountMetrics = new Map(rows.map(row => [row, quotaAccountSummary(row)]))
-  const isCreditPool = type === 'pack' || id === 'astudio' || (type === 'buddy' && rows.some(row => Number.isFinite(row.amount)))
+  const isCreditPool = type === 'pack' || caps?.quotaAccount?.windowsAsCredits === true
+    || (type === 'buddy' && rows.some(row => Number.isFinite(row.amount)))
   const pool = isCreditPool ? summarizePoolCredits(rows, id) : null
   const showPoolTrigger = !serving && pool?.known && (rows.length > 1 || (type === 'pack' && pool.hasPackages))
   const showPoolPopover = !serving && pool?.known && (rows.length > 1 || (isCreditPool && pool.hasPackages))

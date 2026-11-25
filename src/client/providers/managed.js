@@ -27,7 +27,13 @@ function managedConnectionStatus(current) {
  * 卡片、模型分组与轮询都不再出现。⚠️ 这个字段必须在这里**显式解构**，否则会被
  * 静默丢弃（早期 `astudio` 传了 `card: false` 却没生效，就是这个原因）。
  */
-export function managedChannel({ id, title, card = true, authMethods = ['browser'], credentialHint = '', checkin = false, claimRewards = false, completeTasks = false, accountLinks = [] }) {
+export function managedChannel({
+  id, title, card = true, authMethods = ['browser'], credentialHint = '',
+  checkin = false, claimRewards = false, completeTasks = false, accountLinks = [],
+  // 渠道专属的界面能力声明（额度窗口/账号行的渲染差异）。合并进生成好的 caps，
+  // 共享渲染层只读声明，不写 `=== 'codearts'` 这类分支。
+  extraCaps = {},
+}) {
   const entry = state => state.managed?.[id]
   const withEntry = (state, next) => ({ managed: { ...state.managed, [id]: next } })
 
@@ -41,7 +47,12 @@ export function managedChannel({ id, title, card = true, authMethods = ['browser
       claimRewards,
       completeTasks,
       authMethods,
+      // 有独立的模型设置文件（`managed-models.json`）→ 消费「默认输出上限」设置。
+      defaultMaxOutput: true,
+      ...extraCaps,
     },
+    /** 该渠道的账号列表在 state 的哪个位置，由渠道自己说（共享层不猜结构）。 */
+    accountsOf: state => state.managed?.[id]?.accounts ?? [],
     createActions: context => createManagedActions(provider, context),
     managedAccount: (state, accountId) => (entry(state)?.accounts ?? []).find(account => account.id === accountId),
     removeAction: `${id}Logout`,

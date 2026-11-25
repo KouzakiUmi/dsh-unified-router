@@ -218,19 +218,50 @@ Cookie）、鉴权头（XSRF 只给云知声）、成功码（`code:'200'` vs `e
 
 `isAgnesFreeQuota` 相应改名为 `isFreeTierIdle`（纯数据判据，与渠道名无关）。
 
-### 存量债务（显式登记，只能减不能增）
+### 客户端能力位总表（`providers/*.js` 的 `caps`）
 
-`test/client-channel-agnostic.test.mjs` 扫 `src/client/` 下**除 `providers/` 之外**的所有
-文件，禁止 `=== '某个渠道'` 形式的分派，并把剩余债务按「文件 → 渠道 id」登记在 `KNOWN_DEBT`：
+共享层一律通过 `core.js` 的 `providerCaps(id)` 读声明，**不写 `id === '某个渠道'`**。
 
-| 文件 | 渠道 | 待收敛的语义 |
+| 能力位 | 语义 | 现持有者 |
 |---|---|---|
-| `core.js` | qodercn / codearts / raccoon / raccoon-pro | 签到文案与结果提示的渠道差异 |
-| `store/index.js` | qodercn | 目录问题提示、刷新结果聚合 |
-| `store/quota.js` | raccoon / raccoon-pro / codearts / workbuddy / astudio | 额度药丸的窗口语义与积分单位差异 |
+| `freeTier` | 有「免费额度面」：额度恒为 0 是正常态，有 API Key 余额时余额优先 | Agnes |
+| `preferCreditsWindows` | credits / requests 两类窗口并存时以 credits 为主口径 | Agnes |
+| `claimActionHint` | 领取结果需要用户去官方客户端开通时给的入口文案 | Qoder CN |
+| `checkinLabels` | 覆盖通用签到文案（如「未查到今日签到记录」） | CodeArts |
+| `catalogIssue` | 目录真拉可能带回 `issue`，快照透出给界面提示 | Qoder CN |
+| `permanentPackageNames` | 哪些包名在本渠道算「永久积分」 | Raccoon 家族 |
+| `familySide` | 家族成员代表哪一侧（账号按 plan 分流用） | `raccoon` = free / `raccoon-pro` = pro |
+| `quotaExtraResources` | 额度药丸要额外读的快照资源 | CodeArts（`managed.models`）/ Raccoon（`automation.status`） |
+| `quotaWindow` | 额度窗口渲染：`creditUnit` / `noFraction` / `resetKind`（`reset`·`cycleEnd`·`none`） | WorkBuddy / AStudio / CodeArts |
+| `quotaAccount` | 账号额度行渲染：`gateWindowsByModelFree` / `windowsAsCredits` | CodeArts / AStudio |
+| `defaultMaxOutput` | 有独立模型设置文件 → 消费「默认输出上限」设置 | 自管 / API Key / WorkBuddy |
 
-用例两侧都卡：新代码往共享层加渠道名分派 → 红；收敛了一处却没删登记 → 也红（清单必须忠实
-反映现状）。宿主侧（`lib/web-host.js` 的签到分派等）尚未纳入，下一步同一思路处理。
+账号列表的位置也不用共享层猜结构：渠道各自提供 `accountsOf(state)`（`managed.js` 读
+`state.managed[id]`，`workbuddy.js` 读 `state.workbuddy`）。
+
+### 守护用例（`test/client-channel-agnostic.test.mjs`）
+
+扫 `src/client/` 下**除 `providers/` 之外**的所有文件，禁止渠道名分派，`KNOWN_DEBT` 现已**清空**。
+
+三类写法都要抓 —— 第一版只抓字面量，结果漏掉了比字面量还多的一类：
+
+| 写法 | 例子 | 说明 |
+|---|---|---|
+| 字面量 | `id === 'agnes'`、`case 'unisound':` | 写死了名字，加渠道不会跟着适配 |
+| 反向 | `'agnes' === id` | 同上，只是书写顺序不同 |
+| **常量别名** | `id === WORKBUDDY_ID` | 常量本身是 `const X = '<渠道 id>'`，用例自动发现（扫 `src/client/` 与 `lib/`） |
+
+**按 kind 分派是允许的**：某 kind 只注册了一个渠道时，用它的常量分派等价于按 `spec.kind`
+分派。判据由用例自动推导，不需要手维护白名单。两个细节：
+
+- **字面量不豁免**，哪怕 kind 唯一：`'codearts'` 把名字写死了，以后同 kind 加第二个渠道时
+  这些分支不会跟着适配。只有**常量**才可能算「按 kind 分派」。
+- **未注册的渠道不代表 kind**（`astudio` 是 `card:false` 且未注册），否则它能豁免自己。
+
+另有一条反向校验用例（防止正则失配导致守护永远通过），以及一条「债务清单只能收缩」用例
+（登记项在代码里已不存在就应删掉，否则清单会变成谎言）。
+
+宿主侧（`lib/web-host.js` 的签到分派等）尚未纳入，下一步同一思路处理。
 
 ### 验收
 
@@ -238,7 +269,7 @@ Cookie）、鉴权头（XSRF 只给云知声）、成功码（`code:'200'` vs `e
 |---|---|
 | 接入新 API Key 渠道 | ✅ 只写规格数据；`test/apikey-new-channel.test.mjs` 用虚构渠道 `fixture-key` 走通全链路，共享层零改动 |
 | 数据面渠道名判断 | 12 → **0** |
-| 渲染面渠道名判断（apikey） | 6 → **0** |
+| 渲染面渠道名判断 | 字面量 22 处 + 常量别名若干 → **0**；`KNOWN_DEBT` 已清空 |
 | 测试总数 | 414 → **423** |
 
 ## 6. 明确不做

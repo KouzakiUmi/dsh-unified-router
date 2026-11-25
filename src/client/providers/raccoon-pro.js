@@ -15,5 +15,8 @@ export const raccoonPro = {
   caps: {
     onboarding: true,
     permanentLock: false,
+    // 家族里本侧代表订阅面：账号按 plan 取 `pro`。与 `raccoon` 的 `free` 对称。
+    familySide: 'pro',
+    permanentPackageNames: ['奖励积分'],
   },
 }

@@ -309,7 +309,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         models: sides.flatMap((side, index) => modelsFrom(modelValues[index], side)),
         modelSource: { ...state.modelSource, ...Object.fromEntries(sides.flatMap((side, index) =>
           CACHE_MODEL_SOURCES.has(modelValues[index]?.source) ? [[side, modelValues[index].source]] : [])) },
-        ...(target === 'qodercn' ? { qoderCatalogIssue: modelValues[0]?.issue ?? '' } : {}),
+        // 只有声明 `catalogIssue` 的渠道（目录真拉可能带回 issue）才透出这条提示。
+        ...(providerCaps(target)?.catalogIssue ? { qoderCatalogIssue: modelValues[0]?.issue ?? '' } : {}),
         statuses: statusFrom(statuses),
         params: Object.assign({}, ...sides.map((side, index) => paramsFrom(paramValues[index], side))),
         selected: rows.some(a => a.id === selection) ? selection : '', loading: false, loadFailed: false,
@@ -417,8 +418,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         ...(Object.keys(sources).length ? { modelSource: { ...state.modelSource, ...sources } } : {}),
         ...(silent ? {} : { notice: providerById(channel)?.caps?.cliCatalog && results[0]?.status === 'fulfilled' && sources[channel]
           ? '' : catalogNotice(sides, sources) }),
-        ...(channel === 'qodercn' && results[0]?.status === 'fulfilled'
-          && !(silent && sources.qodercn === 'cached')
+        ...(providerCaps(channel)?.catalogIssue && results[0]?.status === 'fulfilled'
+          && !(silent && sources[channel] === 'cached')
           ? { qoderCatalogIssue: results[0].value?.issue ?? '' } : {}),
       })
       cache.rememberChannel(channel, state)

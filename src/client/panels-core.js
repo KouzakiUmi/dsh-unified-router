@@ -249,12 +249,13 @@ function automationRowsFor(provider, state) {
   const supportsCheckin = provider.caps?.autoCheckin === true
     || (provider.caps?.autoCheckin !== false && (provider.pack
       ? provider.caps?.dailyReward !== false
-      : (id === WORKBUDDY_ID || provider.caps?.dailyReward === true)))
+      : provider.caps?.dailyReward === true))
   const capabilities = state.automation?.tasks?.[id]?.capabilities
   const supportsRewards = capabilities?.claimRewards ?? (provider.caps?.onboarding === true && provider.caps?.completeTasks !== true || provider.caps?.claimRewards === true)
   const supportsTasks = capabilities?.completeTasks ?? (provider.caps?.completeTasks === true)
   const overrides = state.automation?.config?.providers?.[id] ?? {}
-  const accounts = (provider.pack ? state.accounts : id === WORKBUDDY_ID ? state.workbuddy?.accounts : state.managed?.[id]?.accounts) ?? []
+  // 账号列表的位置由渠道自己说（`managed.js` / `workbuddy.js` 各提供 `accountsOf`）。
+  const accounts = provider.pack ? state.accounts : (provider.accountsOf?.(state) ?? [])
   const eligible = accounts.some(account => account.enabled !== false && (provider.pack || account.signedIn))
   const query = mode => ({ label: '查询状态', call: ['queryAutomationTask', id, mode], disabled: !eligible, scope: taskScope(id, mode) })
   const inherited = field => !state.automation ? '待读取' : typeof overrides[field] === 'boolean' ? '本渠道单独设置' : '跟随全局设置'
@@ -281,8 +282,8 @@ function automationRowsFor(provider, state) {
   // 只有自带模型设置文件的三类渠道会消费这个值（API Key、自管、WorkBuddy）；
   // 账号池与商汤套餐渠道走各自兜底表、不读它，故不给它们渲染这一行 ——
   // 否则会出现「能保存但不生效」。
-  const supportsDefaultMaxOutput = id === WORKBUDDY_ID
-    || Boolean(state.managed?.[id]) || Boolean(state.apikeys?.[id])
+  // 只有带独立模型设置文件的渠道才消费这个值（声明在各自 `caps`）。
+  const supportsDefaultMaxOutput = provider.caps?.defaultMaxOutput === true
   const configuredOutput = state.automation?.config?.providers?.[id]?.defaultMaxOutput
   const outputChosen = Number.isSafeInteger(configuredOutput) && configuredOutput > 0
   if (supportsDefaultMaxOutput) rows.push({ id: 'default-max-output', name: '默认输出上限', scope,

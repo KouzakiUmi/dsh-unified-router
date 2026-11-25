@@ -14,6 +14,17 @@ function workbuddyPoolSummary(accounts) {
 export const workbuddy = {
   id: 'workbuddy',
   title: 'WorkBuddy',
+  caps: {
+    // 有每日签到与「一键领取」的只有账号池渠道；WorkBuddy 是自管单账号形态，
+    // 签到走 `workbuddy.checkin`。共享层读这个声明，不再比对渠道 id。
+    autoCheckin: true,
+    // 它的积分单位需要归一（上游给 credits / 点数等原始文本）。
+    quotaWindow: { creditUnit: true },
+    // 有独立的模型设置文件（`workbuddy-models.json`）→ 消费「默认输出上限」设置。
+    defaultMaxOutput: true,
+  },
+  /** 账号列表挂在 state.workbuddy（单数）上，不是 `state.managed[id]` 映射。 */
+  accountsOf: state => state.workbuddy?.accounts ?? [],
   rpcMethods: WORKBUDDY_METHODS,
   createActions: createWorkBuddyActions,
   managedAccount: (state, id) => state.workbuddy.accounts.find(account => account.id === id),
