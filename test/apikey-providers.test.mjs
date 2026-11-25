@@ -567,6 +567,82 @@ test('阿里云百炼 Token Plan：静态字段、过滤非聊天模型与思考
   assert.equal(bailian.effortBody('high', auto), undefined)
 })
 
+test('阿里云百炼 429：按 message 区分每分钟 Token 限流与真正的额度用尽', async () => {
+  const { detectApiKeyRateLimit } = await import('../lib/apikey-quota.js')
+  const bailian = apikeyProvider('bailian')
+  const now = 1_800_000_000_000
+  // 实测原文（顶层信封，非 error 包裹）：锚点 #token-limit 与措辞都指向 TPM 限流，
+  // 但错误码却叫 insufficient_quota —— 不得据此报「额度已用尽」。
+  const throttled = new Response(JSON.stringify({
+    message: 'Allocated quota exceeded, please increase your quota limit. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit',
+    id: 'dacc8047-6976-9b04-b0d3-f1302b5010d5',
+    type: 'insufficient_quota',
+    code: 'insufficient_quota',
+  }), { status: 429, headers: { 'content-type': 'application/json' } })
+  assert.deepEqual(await detectApiKeyRateLimit(bailian, throttled, now),
+    { reason: 'tpm', until: now + 60_000, estimated: true })
+  // 带 Retry-After 时用上游给的等待时间。
+  const withRetry = new Response(JSON.stringify({
+    message: 'Allocated quota exceeded, please increase your quota limit. #token-limit', code: 'insufficient_quota',
+  }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '9' } })
+  assert.deepEqual(await detectApiKeyRateLimit(bailian, withRetry, now),
+    { reason: 'tpm', until: now + 9_000, estimated: false })
+  // OpenAI 兼容信封同样能取到码与消息。
+  const nested = new Response(JSON.stringify({
+    error: { code: 'insufficient_quota', type: 'insufficient_quota', message: 'Allocated quota exceeded, please increase your quota limit. #token-limit' },
+  }), { status: 429, headers: { 'content-type': 'application/json' } })
+  assert.deepEqual(await detectApiKeyRateLimit(bailian, nested, now),
+    { reason: 'tpm', until: now + 60_000, estimated: true })
+  // 真正的额度用尽：免费额度消耗完，message 不指向限流 → 不当作可重试限流。
+  const exhausted = new Response(JSON.stringify({
+    code: 'AllocationQuota.FreeTierOnly',
+    message: 'The free tier of the model has been exhausted. Please disable the "use free tier only" mode.',
+  }), { status: 429, headers: { 'content-type': 'application/json' } })
+  assert.equal(await detectApiKeyRateLimit(bailian, exhausted, now), null)
+  // 自定义的 RPM 显式码走 rpm。
+  const rpm = new Response(JSON.stringify({ code: 'Throttling.RateQuota', message: 'Requests rate limit exceeded' }),
+    { status: 429, headers: { 'content-type': 'application/json' } })
+  assert.equal((await detectApiKeyRateLimit(bailian, rpm, now))?.reason, 'rpm')
+})
+
+test('通用正文判据：没有渠道专属词表时也能把「每分钟限流」与「真额度用尽」分开', async () => {
+  const { detectApiKeyRateLimit } = await import('../lib/apikey-quota.js')
+  const now = 1_800_000_000_000
+  const stepfun = apikeyProvider('stepfun') // 未声明 throttlePattern，走默认词表
+  const make = (payload, status = 429) => new Response(JSON.stringify(payload),
+    { status, headers: { 'content-type': 'application/json' } })
+  // 与限流同码但正文说「每分钟 / rate limit」：判限流，不报额度用尽。
+  for (const message of [
+    'Rate limit exceeded, please try again later.',
+    'You exceeded your current quota, per-minute token limit reached, retry in 20s.',
+    'Too many requests, slow down.',
+    '请求速率超限：每分钟 Token 数已达上限，请稍后重试。',
+    '频率限制：请求过于频繁。',
+  ]) {
+    const hit = await detectApiKeyRateLimit(stepfun, make({ error: { code: 'insufficient_quota', message } }), now)
+    assert.equal(hit?.reason, 'tpm', `应判限流：${message}`)
+  }
+  // 真额度/余额用尽：即使同一个码，也不能当成可重试限流。
+  for (const message of [
+    'Insufficient balance, please top up your account.',
+    'credit_balance_exhausted',
+    'Budget has been exceeded! Current cost: 1.2, Max budget: 1.0',
+    '余额不足，请充值后重试。',
+    'The free tier of the model has been exhausted.',
+  ]) {
+    assert.equal(await detectApiKeyRateLimit(stepfun, make({ error: { code: 'insufficient_quota', message } }), now), null,
+      `应判耗尽：${message}`)
+  }
+  // 无正文时保持原语义：不猜，交给额度面板。
+  assert.equal(await detectApiKeyRateLimit(stepfun, make({ error: { code: 'insufficient_quota' } }), now), null)
+  // 千帆的额度类码同样按正文分流。
+  const qianfan = apikeyProvider('qianfan')
+  assert.equal((await detectApiKeyRateLimit(qianfan,
+    make({ error: { code: 'token_quota_exceeded', message: 'token rate limit per minute exceeded' } }), now))?.reason, 'tpm')
+  assert.equal(await detectApiKeyRateLimit(qianfan,
+    make({ error: { code: 'token_quota_exceeded', message: 'monthly quota exhausted, please upgrade' } }), now), null)
+})
+
 test('阿里云百炼控制台额度：两步 SEC_TOKEN + 网关查询（不含 switchAgent）、百分比窗口投影与过期识别', async () => {
   const { readApiKeyQuota } = await import('../lib/apikey-quota.js')
   const { projectApiKeyQuota } = await import('../lib/apikey-quota-projection.js')

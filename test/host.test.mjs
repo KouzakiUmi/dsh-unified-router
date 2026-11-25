@@ -325,7 +325,7 @@ test('宿主手动查询只触发渠道核实，已确认的签到不再提交',
     assert.equal((await host.call('managed.checkin', target)).result.value.outcome, 'done')
     assert.ok(calls.length >= 1)
     assert.ok(calls.every(([id, method]) => id === 'codearts' && method === 'managed.checkinStatus'))
-  } finally { host.dispose(); await rm(dir, { recursive: true, force: true }) }
+  } finally { host.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }) }
 })
 
 test('WorkBuddy 投影逐账号白名单：错误码、窗口与登录地址过滤，凭据与上游原文不外放', () => {
