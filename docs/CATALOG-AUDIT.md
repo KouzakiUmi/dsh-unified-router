@@ -1,5 +1,7 @@
 # 硬编码模型目录 vs 上游真实目录 —— 审计报告
 
+> **Loomy 已于 2026-11-25 随渠道一并移除**：本文里 Loomy 的章节、样本与结论保留为历史记录，不再是当前渠道清单的一部分。
+
 > 审计时间：2026-11-17 上午（Asia/Hong_Kong）。性质：**只读**（未改源码/配置/凭据，未触发登录/续期）。
 > 方法：用各渠道已登录账号的**现存 token** 真拉上游目录端点，逐条比对生效兜底表。凭据全程脱敏，报告不含任何 token/key 原文。
 > 上游端点：raccoon `GET /api/web/llm/v2/model_catalog`、loomy `GET /api/v1/models`、sensenova `GET /v1/models`、workbuddy `GET /v3/config`、trae `POST /api/ide/v1/batch_get_detail_param`（该渠道目录端点本身是 POST 只读查询）。qoder 因 WASM 签名未实现无法真拉。

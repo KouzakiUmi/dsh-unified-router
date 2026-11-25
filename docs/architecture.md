@@ -32,12 +32,12 @@ flowchart TD
 
 | 目录 | 职责 |
 |---|---|
-| `src/client/` | 设置页源码。`core.js` 共享常量与归一化，`store.js` 是 `createRouterStore`（RPC、状态、请求生命周期与写操作），`styles.js` 提供 `--eac-*` 设计令牌与样式，`ui.js` 是 UI 原语，`kit/index.js` 是唯一允许拼 JSX 的组件层，`panels-core.js` 渲染账号/模型/渠道分区，`settings.js` 是根组件与 `settings.section` 注册，`providers/*.js` 提供各渠道的视图数据、能力与动作 |
-| `src/backend/providers/` | 独立推理后端的渠道挂载模块：`context.ts` 定义 `ProviderContext`，`loomy.ts`、`raccoon.ts`、`qodercn.ts`、`trae.ts` 各自返回适配器与账号维护函数 |
+| `src/client/` | 设置页源码。`core.js` 共享常量与方法集（由 `clientMethodSets()` 派生）与 wire 收编，`store/{pending,cache,sync,index}.js` 组成 `createRouterStore`（RPC、状态、请求生命周期、快照同步与写操作），`styles.js` 提供 `--eac-*` 设计令牌与样式，`ui.js` 是 UI 原语，`kit/index.js` 是唯一允许拼 JSX 的组件层，`panels-core.js` 渲染账号/模型/渠道分区，`settings.js` 是根组件与 `settings.section` 注册，`providers/*.js` 提供各渠道的视图数据、能力与动作 |
+| `src/backend/providers/` | 独立推理后端的渠道挂载模块：`context.ts` 定义 `ProviderContext`，`raccoon.ts`、`qodercn.ts`、`trae.ts` 各自返回适配器与账号维护函数（Loomy 已移除） |
 | `src/backend.ts` | 独立后端入口 `mountBackend`：装配账号池、注入模型参数、包装图片偏好与模型选择器、注册渠道 RPC、启动后台维护定时器 |
-| `lib/` | 手维护宿主模块与构建产物。`web-host.js`（RPC 接口与公开投影）、`rpc.js`（方法白名单与路由守卫）、`settings-snapshots.js`、`settings-providers.js`、`sensenova.js`、`workbuddy.js`、`apikey-channel.js`、`apikey-llm.js`、`apikey-models.js`、`apikey-providers.js`、`catalog-cache.js`、`model-catalog.js`、`daily-checkin.js`、`sensenova-params.js`；`client.js`、`backend.js`、`qoder-auth-wasm.wasm` 由构建生成 |
-| `vendor/` | 内置的第三方 MIT 实现。`channel-pack/src/`（账号池、各渠道适配器与 RPC、目录与签到、Qoder CLI），`sensenova-token-plan/`（商汤认证、用量与适配器核心），`workbuddy/`（登录与用量原语） |
-| `scripts/` | `build.mjs` 构建后端、复制 WASM、拼接客户端并做语法自检；`migrate-from-magpie.mjs` 是一次性凭据迁移脚本（默认 dry-run） |
+| `lib/` | 手维护宿主模块与构建产物。`web-host.js`（RPC 接口与公开投影）、`rpc.js`（从规格派生方法白名单与路由守卫）、`channel-specs.js`（渠道清单与方法集，唯一事实源）、`channel-contract.js`（账号行/模型行的 wire 形状）、`retired-channels.js`（退役渠道清扫）、`settings-snapshots.js`、`settings-providers.js`、`sensenova.js`、`workbuddy.js`、`apikey-channel.js`、`apikey-llm.js`、`apikey-models.js`、`apikey-providers.js`、`catalog-cache.js`、`model-catalog.js`、`daily-checkin.js`、`sensenova-params.js`；`client.js`、`backend.js`、`qoder-auth-wasm.wasm` 由构建生成 |
+| `vendor/` | 内置的第三方 MIT 实现。`channel-pack/src/`（账号池、qoder/qodercn/trae/raccoon 四个渠道的适配器与 RPC、目录与签到、Qoder CLI；**已按本插件实际接入范围裁剪到 59 个 `.ts`**，国际渠道实现全部移除），`sensenova-token-plan/`（商汤认证、用量与适配器核心），`workbuddy/`（登录与用量原语） |
+| `scripts/` | `build.mjs` 构建后端、复制 WASM、拼接客户端并做语法自检；`render-preview.mjs` 离线渲染设置页预览；`migrate-from-magpie.mjs` 一次性凭据迁移脚本（默认 dry-run）；`cleanup-loomy.mjs` 清理已移除渠道的磁盘残留（幂等、先备份、支持 `--dry-run`） |
 | `test/` | 离线回归用例 `*.test.mjs` 与宿主契约桩 `kernel.mjs` |
 | `docs/` | 设计规范、渠道契约、目录审计、交接记录与本文档集 |
 
@@ -46,7 +46,7 @@ flowchart TD
 浏览器端的 ModuleLoader 只接受一个工厂文件，因此客户端源码按依赖顺序拼接为 `lib/client.js`。
 
 - 源码位于 `src/client/`，模块之间**不写 `import`**：拼接后共享同一个工厂作用域，跨模块标识符直接按名引用。
-- 顺序表是 `scripts/build.mjs` 的 `clientModules`，顺序即依赖顺序（`core.js` 最先，`settings.js` 最后），新模块必须登记进该表。
+- 顺序表是 `scripts/build.mjs` 的 `clientModules`，顺序即依赖顺序：先是宿主与客户端**共用**的纯函数模块（`lib/sensenova-params.js`、`lib/model-catalog.js`、`lib/channel-contract.js`、`lib/channel-specs.js`、`lib/apikey-quota-projection.js`），再是 `core.js` 起的 `src/client/*`，`settings.js` 在最后。新模块必须登记进该表（依赖在前）。
 - 构建时逐模块剥掉行首 `export ` 前缀后拼接，产物用 `window.__ModuleLoader__.load` 注册，工厂返回 `{ name: 'dsh-unified-router', inject: ['slots', 'connection'], apply, createRouterStore, safeLoginUrl, filterModels, claimMessage }`。
 - **构建期语法自检**有两道：行首 `export ` 前缀的数量必须等于行首 `export const/function/class` 的数量（模板字符串或注释里出现行首 `export` 会在构建期报错）；拼接结果再经 `new vm.Script(...)` 做一次语法校验，顺序或剥离错误不会拖到测试或加载时才暴露。
 - 工作区分区是**普通函数直接调用**，不是 `h(Panel, props)` 元素；分区自身不持有 Hook，状态与动作由 `Settings` 注入。
@@ -55,20 +55,29 @@ flowchart TD
 
 `lib/web-host.js` 在 `host.connection.fetch` 上注册 `POST /api/unified-router`。请求信封是 `{ type: 'client-request', rpcId, method: 'unified-router', payload: { method, payload } }`，响应为 `{ type: 'server-response', rpcId, result }`。接口拒绝非 POST（405）、非 `application/json`（415）、超大请求体（413，`content-length` 与实际字节数双重检查）与非法 JSON（400）。
 
-**方法白名单**（`lib/rpc.js`）分四组：
+**方法白名单**（`lib/rpc.js`）**不再手写**，全部从 `lib/channel-specs.js` 派生：
 
-| 组 | 方法 |
+| 来源 | 内容 |
 |---|---|
-| 账号池渠道 | `provider.status`、`provider.setEnabled`、`account.list`、`account.create`、`account.update`、`account.delete`、`account.reorder`、`account.refresh`、`account.retest`、`account.reset`、`login.poll`、`model.list`、`model.refresh`、`model.setDisabled`、`model.clearDead`、`model.setAllDisabled`、`model.resetDefaults`、`model.params`、`model.setParams`、`credits.balances`、`credits.claimAll`、`credits.permanentLock`、`onboarding.status`、`onboarding.claim` |
-| 商汤 Token Plan | `plan.snapshot`、`plan.setKey`、`plan.setEnabled`、`plan.setModelEnabled`、`plan.setModelParams`、`plan.resetModels` |
-| WorkBuddy | `workbuddy.snapshot`、`workbuddy.login`、`workbuddy.logout`、`workbuddy.checkin`、`workbuddy.models` 及模型写方法 |
-| API Key 渠道 | `apikey.snapshot`、`apikey.setKey`、`apikey.setEnabled`、`apikey.setModelEnabled`、`apikey.setModelParams`、`apikey.resetModels` |
+| `KIND_METHODS[kind]` | 每类渠道共用的 `read` / `write` 方法集（`pack` / `managed` / `apikey` / `plan` / `workbuddy`） |
+| 规格的 `methods.extra` | 该渠道专属端点（如 `raccoon.checkin`），归属由声明它的渠道决定 |
+| `GLOBAL_METHODS` | `settings.*` 与 `automation.*` |
 
-`guardedRpc` 在转发前做归属校验：`provider.status` 要求 `payload.providers` 全部在白名单；`plan.*` 只认 `sensenova-token-plan`；`workbuddy.*` 只认 `workbuddy`；`apikey.*` 只认 `APIKEY_PROVIDER_IDS`；其余要求 `payload.provider` 在 `PROVIDERS`。带 `accountId` 的账号方法先经 `account.list` 核对归属（`login.poll` 与 `workbuddy.*` 豁免，因为 WorkBuddy 的账号不在账号池里）。
+各类别的方法清单以 `lib/channel-specs.js` 为准（本文不复制，避免再次出现「文档与代码各写一份」）。
+`credits.permanentLock` 已随永久积分锁定机制一并删除；新增端点应加进 `KIND_METHODS` 而不是散落在门禁里。
 
-**公开字段投影**由 `publicResult(method, value)` 完成：每个方法只放行白名单字段，凭据引用、上游错误原文、内部字段名一律过滤。`account.list` 的 `plan` 只接受 `free` / `pro` / `unknown` 枚举；模型行的倍率只经 `rate`/`rateBadge` 投影，`name` 不带倍率。
+`guardedRpc` 在转发前做归属校验，规则按**方法的类别**判而非按渠道名写 if：
+- `provider.status` 要求 `payload.providers` 全部是账号池渠道；
+- `automation.*` 的 `payload.provider` 可选，给了就必须在 `ALL_PROVIDER_IDS` 里；
+- 声明在 `methods.extra` 的方法只接受**声明它的渠道**及其家族成员（Raccoon 免费/订阅共用一个账号池）;
+- `plan.*` / `workbuddy.*` / `apikey.*` / `managed.*` 只认各自注册的渠道 id；
+- 其余要求 `payload.provider` 是账号池渠道。
 
-**写操作门禁**：写方法集合是 `plan.*` 写方法、`workbuddy.*` 写方法（`workbuddy.snapshot` 因续期会落盘新凭据，一并按写操作处理）、`apikey.*` 写方法、`settings.refresh`、`credits.claimAll`。这些方法要求请求同源（`Origin` 与 `Host` 一致，`Origin: null` 拒绝），且通过 `host.connection.requestRejection` 的主机授权检查。
+带 `accountId` 的账号方法先经 `account.list` 核对归属（`login.poll` 与 `workbuddy.*` 豁免，因为 WorkBuddy 的账号不在账号池里）。
+
+**公开字段投影**由 `publicResult(method, value)` 完成：内层逐 method 只放行白名单字段，凭据引用、上游错误原文、内部字段名一律过滤；**出口统一过 `wireJson()` 深度净化**（嵌套的 `undefined` / `NaN` / `±Infinity` / `-0` 任一处都会让 typert 整条作废）。账号行与模型行的字段定义在 `lib/channel-contract.js`，客户端收编共用同一实现。`account.list` 的 `plan` 只接受 `free` / `pro` / `unknown` 枚举；模型行的倍率只经 `rate`/`rateBadge` 投影，`name` 不带倍率。
+
+**写操作门禁**：写方法集合是 `plan.*` 写方法、`workbuddy.*` 写方法（`workbuddy.snapshot` 因续期会落盘新凭据，一并按写操作处理）、`apikey.*` 写方法、`MANAGED_WRITE_METHODS`（`managed.snapshot` / `managed.models` 同样会续期与落盘缓存）、`automation.setConfig|run|query`、`settings.refresh`、`credits.claimAll`、`onboarding.claim`、`raccoon.checkin`、`model.setParams`。这些方法要求请求同源（`Origin` 与 `Host` 一致，`Origin: null` 拒绝），且通过 `host.connection.requestRejection` 的主机授权检查。
 
 **后端就绪等待**：独立后端是 `import('./backend.js')` + `mountBackend()` 的异步挂载，设置页通常先挂载完成。`dispatch` 在渠道后端为空时 `await Promise.race([ready, 15s])` 再转发，超时后才抛「渠道后端未就绪」；后端启动失败也调用 `markReady()`，避免请求空等到超时。
 
@@ -87,7 +96,7 @@ flowchart TD
 
 | 形态 | 渠道 | 数据通路 |
 |---|---|---|
-| 账号池渠道 | Loomy、Raccoon（含 `raccoon-pro`）、Qoder 中国版、TRAE | 设置页 → 账号池渠道 RPC → `lib/rpc.js` → 独立后端 channel-pack RPC（共用模式走 `sharedTransport`，独立模式走 `mountBackend`）；账号池 `AccountPool` 负责选号、限流、凭据续期与账本归属 |
+| 账号池渠道 | Raccoon（含 `raccoon-pro`）、Qoder 中国版、TRAE | 设置页 → 账号池渠道 RPC → `lib/rpc.js` → 独立后端 channel-pack RPC（共用模式走 `sharedTransport`，独立模式走 `mountBackend`）；账号池 `AccountPool` 负责选号、限流、凭据续期与账本归属 |
 | 自管账号渠道 | WorkBuddy | 设置页 → `workbuddy.*` RPC → `lib/workbuddy.js` 多账号管理器 → `vendor/workbuddy` 的登录与用量原语；账号索引凭据引用存账号列表，每账号一个 `WorkBuddyAuthPlugin` 实例，续期只回写本账号引用 |
 | API Key 渠道 | 商汤 Token Plan、Agnes、云知声 | 设置页 → `plan.*` / `apikey.*` RPC → `lib/sensenova.js` / `lib/apikey-channel.js` 管理器 → 上游目录与账单；满足启用条件时注册推理适配器 |
 

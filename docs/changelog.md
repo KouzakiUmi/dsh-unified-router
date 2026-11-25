@@ -2,6 +2,57 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.7.0（2026-11-25）
+
+- **移除 Loomy 渠道**。上游把全部账号标记为受限，请求一律被静默降级到 `spark-x2.6-low`（响应体仍谎报模型名，只有积分账本能看出），1:1 复制官方客户端请求同样被降级。本次删除：vendor 的 12 个 `loomy-*` 实现文件、后端挂载模块、`lib/loomy-route.js`（上游路由检测整条能力，含 4 个 RPC）、客户端卡片模块与 Loomy 专属 UI（路由概览 callout、永久积分锁定开关、完成新手任务按钮）、`automation.json` 的 `loomyPlainBody` 字段、短信登录 RPC（`login.sendSms`/`login.submitSms`）。用户磁盘上的 Loomy 账号、路由状态与目录缓存已一并清理（清理前备份在 `<dsh home>/backups/loomy-removal-*`）。清理可用 `node scripts/cleanup-loomy.mjs` 重复执行（幂等、先备份）；**须在插件重新加载之后运行** —— 旧版插件进程仍在内存里持有这些数据，清理后它会写回。
+- **写后失效改成规则表**：`lib/channel-specs.js` 新增 `INVALIDATE_RULES`（渠道开关 / 模型参数 / 目录 / 账号变更 / 登录成功 / 领取签到五类），`updateSettingsSnapshots()` 不再按 `method.startsWith` 写分支，只保留乐观补丁。配套回归断言「每个写方法都有失效归属」，挡住「写了但界面不刷新」这类静默缺口。
+- **账号池渠道按注册表装配**：新增 `src/backend/providers/pack-registry.ts`，从规格表派生挂载表；`packSlot` 字段与 `lib/pack-slots.js` 让 vendor 形参名可校验。四种不一致（缺实现 / 缺形参位 / 形参位重复 / 多登记实现）改为**加载期抛错**，`mountBackend` 不再手写渠道名与 slots 字面量。
+- **静态核验脚本 `npm run check:residue`**：把 git HEAD 与当前源码的模块级声明做差，找出「已删除、当前无定义、仍被引用」的标识符。它抓出并修掉了三处真实残留：`usageBadge` 装配块被我误删（`usage.badge` 端点会 ReferenceError）、`account-probe.ts` 的 `ProbeCredential` 联合仍列着 4 个已删凭据类型（类型无效但能构建）、`queue-rotation.ts` 里调用已删 `pickSlot` 的身份槽死分支（同样是运行时 ReferenceError）。顺带清掉两处不会报错的死引用：`BADGE_PLAN_SELECTORS` 的 `zcode` 条目、`queue-rotation` 的 `zcode_jwt` 令牌字段分支。
+- **vendor 整体裁剪**（用户决策「全部重写，不管上游」，推翻上一版的「不裁剪」）：删除 `lobsterai` / `cline` / `zcode` / `minimax` / `gemini` / `opencode` 六个国际渠道的实现与全部接线（含 `account-probe` 探测分支、`cline.quota` / `cline.requestLog` 两个端点、captcha 载体与供给槽、opencode 身份槽）。vendor 源文件 137 → 59，`lib/backend.js` **2.08 MB → 0.65 MB（−69%）**，vendor 位置形参 9 → 4，凭据前缀表 12 → 5。裁剪口径是 esbuild `metafile` 的可达性判定，不是手推 import 图。
+- （已作废）不裁剪 vendor 的 6 个未注册国际渠道：用 esbuild `metafile` 量出它们在 2.17 MB 的 `lib/backend.js` 里共占 ≈310 KB（14.3%）。它们在两种部署里都是死代码，但移除要改 vendored 签名与数百行分支、与上游彻底分叉。14% 包体换真实回归风险不划算，故保留，理由与重估条件见 [渠道接入架构 §5](docs/CHANNEL-ARCHITECTURE.md)。
+- **客户端方法集不再手写**：`src/client/core.js` 的六张方法表改为由 `lib/channel-specs.js` 的 `clientMethodSets()` 派生（`channel-specs` 因此也拼进客户端产物）。客户端白名单按 `HOST_INTERNAL_METHODS` 收窄一档：`credits.status` / `onboarding.status` 是签到与奖励的只读核实端点，`raccoon.checkin` 是宿主每日签到调度专用 —— 三者都没有界面入口。新增 `test/channel-method-parity.test.mjs` 锁死「客户端声明的每个方法宿主都接受」「宿主只比客户端多这张内部表」「各分类集合与规格表逐项一致」「专属方法唯一归属」「退役渠道不得同时在规格表里」。
+- **契约层硬化**：修掉 `modelWire` 的一个 wire 违规 —— 倍率形状像但文案不合法时，旧写法 `...(source.rate ? { rate: wireRate(source.rate) } : {})` 会产出 `{ rate: undefined }`（字段在、值为 undefined，正是 typert 会让整条作废的情形）。改为先算成值再决定是否展开。另外把此前只写不用的 `wireJson()` 真正接到 `publicResult()` 出口做深度净化兜底，并清掉 `CARD_SPECS` / `ACCOUNT_POOL_SPECS` 两个死导出。回归 `test/channel-contract.test.mjs`。
+- **客户端首屏只读宿主持久化快照**： /  /  /  /  与快照型渠道的方法一律带  读宿主落盘的那份，**不再为打开设置页打上游**。宿主尚未采集（AT ÃüÁîÒÑÆúÓá£Çë¸ÄÓÃ schtasks.exe¡£
+
+ÎÞЧµÄÃüÁ
+
+AT ÃüÁÅÅÔÚÌض¨ÈÕÆںÍʱ¼äÔËÐÐÃüÁîºͳÌÐ
+ҪʹÓÃ AT ÃüÁ¼ƻ®·þÎñ±ØÐëÒÑÔÚÔËÐÐÖС£
+                                                           
+AT [\computername] [ [id] [/DELETE] | /DELETE [/YES]]                    
+AT [\computername] time [/INTERACTIVE]
+    [ /EVERY:date[,...] | /NEXT:date[,...]] "command"
+
+\computername       ָ¶¨Զ³̼ÆËã»ú¡£Èç¹ûʡÂÔÕâ¸ö²ÎÊý£¬
+                     »á¼ƻ®Ôڱ¾µؼÆËã»úÉÏÔËÐÐÃüÁ
+id                   ָ¶¨¸øÒѼƻ®ÃüÁîµÄʶ±ðºš£
+/delete              ɾ³ýĳ¸öÒѼƻ®µÄÃüÁÈç¹ûʡÂÔ id£¬
+                     ¼ÆËã»úÉÏËùÓÐÒѼƻ®µÄÃüÁ»ᱻɾ³ý¡£
+/yes                 ²»ÐèҪ½øһ²½ȷÈÏʱ£¬¸úɾ³ýËùÓÐ×÷ҵ
+                     µÄÃüÁîһÆðʹÓá£
+time                 ָ¶¨ÔËÐÐÃüÁîµÄʱ¼䡣
+/interactive         ÔÊÐí×÷ҵÔÚÔËÐÐʱ£¬Ó뵱ʱµÇ¼µÄÓû§
+                     ×ÀÃæ½øÐн»»¥¡£
+/every:date[,...]    ָ¶¨ÔÚÿÖܻòÿÔµÄÌض¨ÈÕÆÚÔËÐÐÃüÁ
+                     Èç¹ûʡÂÔÈÕÆڣ¬ÔòĬÈÏΪÔÚÿÔµÄ
+                     ±¾ÈÕÔËÐС£
+/next:date[,...]     ָ¶¨ÔÚÏÂһ¸öָ¶¨ÈÕÆÚ(È磬ÏÂÖÜËÄ)ÔË
+                     ÐÐÃüÁÈç¹ûʡÂÔÈÕÆڣ¬ÔòĬÈÏΪÔÚÿ
+                     Ôµı¾ÈÕÔËÐС£
+"command"            ׼±¸ÔËÐеÄ Windows NT ÃüÁî»òÅú´¦Àí
+                     ³ÌÐ，全新安装 / 刚加渠道）时才回落实时读取，并按渠道去重地请宿主补采一次（同渠道的账号 / 目录 / 参数各问一遍只补采一次； 不单独补采）。读取水位改记**数据新鲜度**（快照的 ）而非读取时刻 —— 记成 now 会把宿主下一轮采集判成陈旧而丢掉，界面白白停滞一轮。回归  的两条快照用例。
+- **客户端首屏只读宿主持久化快照**：`provider.status` / `account.list` / `model.list` / `model.params` / `credits.balances` 与快照型渠道的方法一律带 `snapshot: true` 读宿主落盘的那份，**不再为打开设置页打上游**。宿主尚未采集（`at === null`，全新安装 / 刚加渠道）时才回落实时读取，并按渠道去重地请宿主补采一次（同渠道的账号 / 目录 / 参数各问一遍只补采一次；`provider.status` 不单独补采）。读取水位改记**数据新鲜度**（快照的 `at`）而非读取时刻 —— 记成 now 会把宿主下一轮采集判成陈旧而丢掉，界面白白停滞一轮。回归 `test/web-client.test.mjs` 的两条快照用例。
+- **账号行/模型行的 wire 形状收敛为单一实现**（`lib/channel-contract.js`）：`accountWire/accountView/modelWire/modelView` 被宿主 `publicResult` 与客户端 `core.js` 共用，删除客户端重复的 `modelRateFrom`。wire 层缺席不写属性、view 层补 UI 缺省值；倍率徽标认 `rate`/`rateBadge` 两种来源。
+- **退役渠道的磁盘清扫**（ +  的 ）：独立模式启动时走  的公开 API 清掉退役渠道的账号与模型黑名单，并删除它自己的目录缓存与账本目录；幂等、绝不抛错、绝不阻塞启动。**共用模式不做**（那时  状态归原插件，删它的账号等于破坏别人的数据）。此前「删渠道」只删了代码，孤儿账号会永久躺在  里。回归 。
+- **手动清扫脚本** （幂等、先备份、支持 ）：清账号 / 快照资源 / 路由状态 / 目录缓存 / 账本目录，并提示凭据文件里残留的  引用（**不擅自改凭据**）。仅在  未被覆盖时才动  的历史文件，避免演练误删真实数据。回归 。
+- **退役渠道的磁盘清扫**（`lib/retired-channels.js` + `channel-specs.js` 的 `RETIRED_CHANNEL_IDS`）：独立模式启动时走 `AccountPool` 的公开 API 清掉退役渠道的账号与模型黑名单，并删除它自己的目录缓存与账本目录；幂等、绝不抛错、绝不阻塞启动。**共用模式不做**（那时 `channel-pack` 状态归原插件，删它的账号等于破坏别人的数据）。此前「删渠道」只删了代码，孤儿账号会永久躺在 `state.json` 里。回归 `test/retired-channels.test.mjs`。
+- **手动清扫脚本** `scripts/cleanup-loomy.mjs`（幂等、先备份、支持 `--dry-run`）：清账号 / 快照资源 / 路由状态 / 目录缓存 / 账本目录，并提示凭据文件里残留的 `LOOMY_ACCOUNT_*` 引用（**不擅自改凭据**）。仅在 `DSH_HOME` 未被覆盖时才动 `~/.config/magpie` 的历史文件，避免演练误删真实数据。回归 `test/cleanup-loomy.test.mjs`。
+- **渠道清单收敛为单一事实源**（`lib/channel-specs.js`，纯数据，宿主与客户端共用）：`lib/rpc.js` 的 `PROVIDERS`、各方法集、`ALL_PROVIDER_IDS` 全部由它派生；RPC 门禁改为按「方法类别 + 规格声明的专属方法」判定，删除按渠道写死的 if 链。新增/移除渠道不再需要改中心分派文件。架构与分期见 [渠道接入架构](docs/CHANNEL-ARCHITECTURE.md)。
+- **vendor 位置形参收敛**：新增 `src/backend/pack-bridge.ts`，`registerChannelPackRpc` 的 12 个位置形参只在这一处出现（具名 `slots` 对象 → 按 `VENDOR_SLOT_ORDER` 展开）。Loomy 移除时 vendor 签名同步删掉它的形参位，桥接表随之从 10 位降为 9 位；实测一次「桥接表多传一位」会让 `nativeOnly` 丢失并错误装配 HTTP RPC，回归因此加在 `test/backend.test.mjs` 的装配用例里。
+- **删除永久积分锁定机制**（唯一支持者 Loomy 已移除）：vendor 的 `permanent-lock-store.ts`、`AccountPool.permanentLocked/setPermanentLocked`、`state.json` 的 `loomyPermanentLocked` 镜像字段、备份载荷的 `permanentLocks` 字段与 `credits.permanentLock` RPC 一并删除。
+- **删除 vendor 未使用的上游装配入口** `vendor/channel-pack/src/index.ts`（它装配本插件不接的国际渠道，从未进入构建）。
+- **测试改写为渠道无关样本**：Loomy 的 3 个专测文件随实现删除；其余 12 个测试文件里「拿 Loomy 当样本渠道」的用例全部换成 Raccoon / Qoder 中国版 / TRAE，被跳过的「独立后端渠道的精选列表、启停恢复与持久化」装配用例恢复运行（改为在 qodercn/raccoon/trae 上验证选号、目录、黑名单与参数持久化）。全量 `npm test` 通过。
+
 ## 0.6.5（2026-11-24）
 
 - 小浣熊「统一免费与订阅模型」开关打开后，界面不再区分免费/订阅：账号行去掉套餐标签，开关说明改为「合并为一个模型面 · 额度用尽自动切换账号」。合并的意义就是一个模型面，再挂套餐标签会让人以为还要按套餐挑账号。

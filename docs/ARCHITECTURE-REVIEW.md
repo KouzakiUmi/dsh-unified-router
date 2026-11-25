@@ -50,7 +50,7 @@ src/client/
     models.js              pack 与家族卡共用，靠 view-model 描述两侧
     channel.js             运行状态 + 渠道开关（含家族双开关）
   providers/               ← 只允许声明数据与动作（禁止 JSX）
-    loomy.js / raccoon.js / qodercn.js / trae.js
+    raccoon.js / qodercn.js / trae.js
     sensenova.js / workbuddy.js   ← 提供 view-model：账号行数据、额度块、连接表单描述
   store/
     index.js               对外 API（getSnapshot/subscribe/动作）

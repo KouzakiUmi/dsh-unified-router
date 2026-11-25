@@ -6,7 +6,6 @@
 
 | 渠道 | 目录来源 | 兜底 |
 |---|---|---|
-| Loomy | `GET https://loomyad.xunfei.cn/api/v1/models`（Bearer + token） | 7 条实测快照（chat 类） |
 | Raccoon 免费 / 订阅 | `GET https://xiaohuanxiong.com/api/web/llm/v2/model_catalog`，**各用本侧账号凭据** | 各 7 条实测快照（订阅 id 带 `-p`） |
 | Qoder 中国版 | 官方 CLI `qoderclicn --list-models`（目录端点要专有 WASM 签名） | 14 条实测快照 |
 | TRAE | `batch_get_detail_param`（`solo_agent` 通道） | 20 条实测快照 |
