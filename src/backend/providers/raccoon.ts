@@ -38,7 +38,7 @@ export function mountRaccoon(
   // ===== Raccoon（商汤小浣熊）：免费版 `raccoon` + 订阅版 `raccoon-pro` =====
   // 第九个产品线，模型层是**两个 provider**（同一上游账号体系的两个模型面），
   // 账号层只有**一个池**（`raccoon`）。
-  // 登录与 Loomy 同型（**本地页承载**的微信扫码 + 短信双路径），但**有** refresh
+  // 登录走**本地页承载**的微信扫码 + 短信双路径，且**有** refresh
   // 端点（凭据可静默续期），且客户端可能未安装。
   //
   // ⚠️ **不依赖客户端**：官方桌面端靠 `office-raccoon://auth/callback` 自定义协议

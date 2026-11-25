@@ -234,19 +234,18 @@ test('并发写入串行化，最终状态一致', async () => {
 test('推荐排除按 providerId 计算，不同渠道互不串', async () => {
   const f = await fixture()
   try {
-    // deepseek-v4-flash-1017 在 loomy 有别名表映射到 deepseek-v4-1-flash-1017
-    // （同代同名不判旧），在 agnes 下按独立旧代处理 → 默认排除。
+    // deepseek-v4-flash-1017 在 agnes / workbuddy 都按独立旧代处理 → 默认排除；
+    // 同代的 deepseek-v4-1-flash-1017 在两个渠道都默认启用。
+    // 排除规则按 providerId 各自计算，两个渠道的结果互不影响。
     const rows = [
       row('deepseek-v4-flash-1017', { efforts: [] }),
       row('deepseek-v4-1-flash-1017', { efforts: [] }),
     ]
     const agnes = await f.create(join(f.dir, 'agnes.json'), 'agnes').list(rows)
-    const loomy = await f.create(join(f.dir, 'loomy.json'), 'loomy').list(rows)
     const workbuddy = await f.create(join(f.dir, 'workbuddy.json'), 'workbuddy').list(rows)
     assert.equal(agnes.find(model => model.id === 'deepseek-v4-flash-1017').enabled, false)
-    assert.equal(loomy.find(model => model.id === 'deepseek-v4-flash-1017').enabled, true)
     assert.equal(workbuddy.find(model => model.id === 'deepseek-v4-flash-1017').enabled, false)
-    assert.ok([agnes, loomy, workbuddy].every(models => models.find(model => model.id === 'deepseek-v4-1-flash-1017').enabled === true))
+    assert.ok([agnes, workbuddy].every(models => models.find(model => model.id === 'deepseek-v4-1-flash-1017').enabled === true))
   } finally { await f.cleanup() }
 })
 

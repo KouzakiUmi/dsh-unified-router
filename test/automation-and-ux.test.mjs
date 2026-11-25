@@ -52,17 +52,17 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
   t.after(() => rm(dir, { recursive: true, force: true }))
   const file = join(dir, 'automation.json')
 
-  const first = createAutomationSettings({ file, allowedProviders: ['loomy', 'astudio', 'codearts'] })
-  assert.equal(first.isAutoCheckinEnabled('loomy'), true)
+  const first = createAutomationSettings({ file, allowedProviders: ['raccoon', 'astudio', 'codearts'] })
+  assert.equal(first.isAutoCheckinEnabled('raccoon'), true)
   assert.equal(first.isAutoClaimRewardsEnabled('astudio'), true)
   assert.equal(first.isAutoCompleteTasksEnabled('codearts'), false, '主动执行完成任务默认必须关闭')
   assert.equal(first.isQuotaPriorityEnabled(), false)
   assert.equal(first.isRaccoonUnifiedModels(), false, '统一免费与订阅模型默认关闭')
   assert.equal(first.routingMode(), 'manual', '选号模式默认手动顺序')
   await first.update({ preferExpiringQuota: true })
-  await assert.rejects(first.update({ provider: 'loomy', preferExpiringQuota: false }), /全局设置/)
-  await assert.rejects(first.update({ provider: 'loomy', raccoonUnifiedModels: true }), /自动化设置无效/)
-  await assert.rejects(first.update({ provider: 'loomy', routingMode: 'sticky' }), /全局设置/)
+  await assert.rejects(first.update({ provider: 'raccoon', preferExpiringQuota: false }), /全局设置/)
+  await assert.rejects(first.update({ provider: 'raccoon', raccoonUnifiedModels: true }), /自动化设置无效/)
+  await assert.rejects(first.update({ provider: 'raccoon', routingMode: 'sticky' }), /全局设置/)
   await assert.rejects(first.update({ routingMode: 'fast' }), /选号模式无效/)
   await first.update({ raccoonUnifiedModels: true })
   assert.equal(first.isRaccoonUnifiedModels(), true)
@@ -73,15 +73,15 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
   assert.equal(first.routingMode(), 'sticky')
   assert.equal(first.isQuotaPriorityEnabled(), false, '粘滞模式下旧开关读作关闭')
 
-  await first.update({ provider: 'loomy', autoCheckin: false })
+  await first.update({ provider: 'raccoon', autoCheckin: false })
   await first.update({ provider: 'codearts', autoCompleteTasks: true })
-  assert.equal(first.isAutoCheckinEnabled('loomy'), false)
+  assert.equal(first.isAutoCheckinEnabled('raccoon'), false)
   assert.equal(first.isAutoCheckinEnabled('astudio'), true)
   assert.equal(first.isAutoCompleteTasksEnabled('codearts'), true)
 
   // 重启恢复
-  const reopened = createAutomationSettings({ file, allowedProviders: ['loomy', 'astudio', 'codearts'] })
-  assert.equal(reopened.isAutoCheckinEnabled('loomy'), false)
+  const reopened = createAutomationSettings({ file, allowedProviders: ['raccoon', 'astudio', 'codearts'] })
+  assert.equal(reopened.isAutoCheckinEnabled('raccoon'), false)
   assert.equal(reopened.isAutoCompleteTasksEnabled('codearts'), true)
   assert.equal(reopened.routingMode(), 'sticky', '粘滞模式随 automation.json 重启恢复')
   assert.equal(reopened.snapshot().routingMode, 'sticky')
@@ -102,13 +102,13 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
   // 旧版文件只有布尔 preferExpiringQuota：读入迁移为临期优先
   const legacyFile = join(dir, 'legacy-automation.json')
   await writeFile(legacyFile, JSON.stringify({ version: 1, autoCheckin: true, preferExpiringQuota: true }))
-  const legacy = createAutomationSettings({ file: legacyFile, allowedProviders: ['loomy'] })
+  const legacy = createAutomationSettings({ file: legacyFile, allowedProviders: ['raccoon'] })
   assert.equal(legacy.routingMode(), 'expiring')
   assert.equal(legacy.snapshot().preferExpiringQuota, true)
 
   // 恢复跟随全局（设为 null）
-  await reopened.update({ provider: 'loomy', autoCheckin: null })
-  assert.equal(reopened.isAutoCheckinEnabled('loomy'), true)
+  await reopened.update({ provider: 'raccoon', autoCheckin: null })
+  assert.equal(reopened.isAutoCheckinEnabled('raccoon'), true)
 })
 
 test('daily-checkin 动态开关：按渠道运行时关闭后 tick 不触发，重新打开后自动执行', async t => {
@@ -604,14 +604,14 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
   let now = Date.parse('2026-11-20T02:00:00Z')
 
   // 旧版按日账本：acc-2 留有昨天的 pending（中断残留）、acc-old 有前天的完成记录
-  const legacyDir = join(dir, 'loomy', 'completeTasks', '2026-11-19')
+  const legacyDir = join(dir, 'codearts', 'completeTasks', '2026-11-19')
   await mkdir(legacyDir, { recursive: true })
   await writeFile(join(legacyDir, sha('acc-2')), JSON.stringify({ id: 'acc-2', outcome: { kind: 'pending' } }))
-  const olderDir = join(dir, 'loomy', 'completeTasks', '2026-11-18')
+  const olderDir = join(dir, 'codearts', 'completeTasks', '2026-11-18')
   await mkdir(olderDir, { recursive: true })
   await writeFile(join(olderDir, sha('acc-old')), JSON.stringify({ id: 'acc-old', outcome: { kind: 'done', completed: 3, points: 60 } }))
-  // Loomy 老 claimRewards 按日账本：acc-cross 前天的 claimed 记录 → completeTasks 采纳为 completed
-  const crossDir = join(dir, 'loomy', 'claimRewards', '2026-11-18')
+  // 老 claimRewards 按日账本：acc-cross 前天的 claimed 记录 → completeTasks 采纳为 completed
+  const crossDir = join(dir, 'codearts', 'claimRewards', '2026-11-18')
   await mkdir(crossDir, { recursive: true })
   await writeFile(join(crossDir, sha('acc-cross')), JSON.stringify({ id: 'acc-cross', outcome: { kind: 'claimed', claimed: 5, points: 100 } }))
 
@@ -620,7 +620,7 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
   let acc3Unsubmitted = true
   const tasks = createAutoTasks({
     dir,
-    adapters: new Map([['loomy', {
+    adapters: new Map([['codearts', {
       doneScope: 'account',
       adoptFrom: ['claimRewards'],
       list: async () => [
@@ -644,7 +644,7 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
   try {
     // 1) 自动执行：acc-1 提交并记 completed；acc-2 采纳昨天的 pending → 永不重放；
     //    acc-3 首次应答"未提交" → 持有预留的 run 自行转退避；acc-cross 采纳跨模式 claimed → completed，不提交
-    const results = await tasks.run('loomy', 'completeTasks', undefined, undefined, true)
+    const results = await tasks.run('codearts', 'completeTasks', undefined, undefined, true)
     const byId = Object.fromEntries(results.map(row => [row.accountId, row]))
     assert.deepEqual(calls, ['acc-1', 'acc-3'], '只有账本为空的账号允许提交；跨模式采纳不触发提交')
     assert.equal(byId['acc-1'].outcome.kind, 'completed')
@@ -655,24 +655,24 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
     assert.equal(byId['acc-cross'].outcome.completed, 5, 'claimed 计数换算为 completed')
     assert.equal(byId['acc-cross'].repeated, true)
     // 采纳落账到 account 目录
-    assert.equal(await exists(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-2'))), true)
-    assert.equal(await exists(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-cross'))), true)
-    const crossRecord = JSON.parse(await readFile(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-cross')), 'utf8'))
+    assert.equal(await exists(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-2'))), true)
+    assert.equal(await exists(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-cross'))), true)
+    const crossRecord = JSON.parse(await readFile(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-cross')), 'utf8'))
     assert.equal(crossRecord.outcome.kind, 'completed')
-    assert.equal(await exists(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-3') + '.retry')), true, '退避票据由持有人释放产生')
+    assert.equal(await exists(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-3') + '.retry')), true, '退避票据由持有人释放产生')
 
     // 2) status：account 作用域并入旧版按日记录（acc-old）与跨模式记录（acc-cross），date 保持日界键
     const status = await tasks.status()
-    const completeRows = status.providers.loomy.completeTasks
-    assert.equal(status.providers.loomy.doneScope, 'account')
-    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(status.providers.loomy.date), 'date 保持日界格式供投影')
+    const completeRows = status.providers.codearts.completeTasks
+    assert.equal(status.providers.codearts.doneScope, 'account')
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(status.providers.codearts.date), 'date 保持日界格式供投影')
     assert.equal(completeRows.find(row => row.accountId === 'acc-old')?.kind, 'done', '旧版记录并入状态，不丢已确认结果')
     assert.equal(completeRows.find(row => row.accountId === 'acc-2')?.kind, 'pending')
     assert.equal(completeRows.find(row => row.accountId === 'acc-cross')?.kind, 'completed')
     assert.equal(completeRows.find(row => row.accountId === 'acc-3')?.retryable, true)
 
     // 3) query：done 核实只写 .confirmed 票据（不覆盖 pending 主记录）；open/证明不落账
-    const q = await tasks.query('loomy', 'completeTasks')
+    const q = await tasks.query('codearts', 'completeTasks')
     const qById = Object.fromEntries(q.map(row => [row.accountId, row]))
     assert.equal(qById['acc-1'].verified, true)
     assert.equal(qById['acc-1'].outcome.kind, 'completed', '本地已确认终态保留细节，不被核实结论覆盖')
@@ -682,31 +682,31 @@ test('自动任务：account 账本跨日+跨模式(claimRewards)采纳，核实
     assert.equal(qById['acc-3'].outcome.kind, 'pending')
     assert.equal(qById['acc-cross'].outcome.kind, 'completed')
     // acc-2：pending 主记录原样保留 + .confirmed 票据
-    const acc2Main = JSON.parse(await readFile(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-2')), 'utf8'))
+    const acc2Main = JSON.parse(await readFile(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-2')), 'utf8'))
     assert.equal(acc2Main.outcome.kind, 'pending', '核实绝不覆盖/删除既有预留')
-    const acc2Confirmed = JSON.parse(await readFile(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-2') + '.confirmed'), 'utf8'))
+    const acc2Confirmed = JSON.parse(await readFile(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-2') + '.confirmed'), 'utf8'))
     assert.equal(acc2Confirmed.outcome.kind, 'done')
     // 显式"未提交"证明也不在 query 侧撤票/补票
-    assert.equal(await exists(join(dir, 'loomy', 'completeTasks', 'account', sha('acc-3'))), false)
-    assert.equal(await readdir(join(dir, 'loomy', 'completeTasks', 'account'))
+    assert.equal(await exists(join(dir, 'codearts', 'completeTasks', 'account', sha('acc-3'))), false)
+    assert.equal(await readdir(join(dir, 'codearts', 'completeTasks', 'account'))
       .then(files => files.filter(name => name === sha('acc-3') + '.confirmed').length), 0, 'open 结论不写核实票据')
 
     // 4) acc-2 有核实票据 → run 在 reserve 前应答不提交；acc-3 退避到期由持有人路径放行一次
     now += 31 * 60_000
     acc3Unsubmitted = false
-    const rerun = await tasks.run('loomy', 'completeTasks', undefined, undefined, true)
+    const rerun = await tasks.run('codearts', 'completeTasks', undefined, undefined, true)
     const rerun2 = Object.fromEntries(rerun.map(row => [row.accountId, row]))
     assert.deepEqual(calls, ['acc-1', 'acc-3', 'acc-3'], '核实票据拦截 acc-2；退避到期自动路径仅放行 acc-3')
     assert.equal(rerun2['acc-2'].outcome.kind, 'done')
     assert.equal(rerun2['acc-2'].repeated, true)
     assert.equal(rerun2['acc-3'].outcome.kind, 'completed')
     // 指定 accountId 查询账外账号：行仍返回（只读），昵称回退 id
-    const ghost = await tasks.query('loomy', 'completeTasks', 'ghost')
+    const ghost = await tasks.query('codearts', 'completeTasks', 'ghost')
     assert.equal(ghost[0].accountId, 'ghost')
     assert.equal(ghost[0].nickname, 'ghost')
     assert.equal(ghost[0].verified, true)
     assert.equal(ghost[0].outcome.kind, 'pending')
-    assert.equal(await exists(join(dir, 'loomy', 'completeTasks', 'account', sha('ghost'))), false, '账外账号 open 核实不落账')
+    assert.equal(await exists(join(dir, 'codearts', 'completeTasks', 'account', sha('ghost'))), false, '账外账号 open 核实不落账')
     assert.deepEqual(calls, ['acc-1', 'acc-3', 'acc-3'], 'query 绝不触发提交')
     assert.ok(verifyCalls.length > 0)
   } finally { tasks.dispose() }

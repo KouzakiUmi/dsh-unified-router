@@ -3,12 +3,12 @@
  *
  * ## 症状
  *
- * 设置页的 Loomy 模型列表里出现 `qwen-3.8-max` —— 上游目录早就没有这个 id 了。
+ * 设置页的模型列表里出现 `qwen-3.8-max` —— 上游目录早就没有这个 id 了。
  *
  * ## 根因（两个叠加）
  *
  * 1. `disabledModels` 是**历史累积**的用户状态：模型下架后它的开关记录仍留在
- *    `state.json` 里（`loomy: { 'qwen-3.8-max': true }`）。
+ *    `state.json` 里（`raccoon: { 'qwen-3.8-max': true }`）。
  * 2. `model.list` 旧实现有一条「保底」逻辑：把黑名单里存在、目录里不存在的 id
  *    用裸 id 补成一行（`catalog.push({ id, name: id })`），本意是防止「关掉的
  *    模型找不到、无法重新打开」。于是**过期状态被复活成幽灵模型行**。

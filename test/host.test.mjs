@@ -12,7 +12,7 @@ import { settingsCheckinAdapters } from '../lib/settings-providers.js'
 
 function fixture({ autoCollect = false, snapshotFile, balance, testDeps, requestRejection } = {}) {
   const routes = new Map(); const calls = []; const cleanup = []; let disposed = false
-  const account = { id: 'a', provider: 'loomy', nickname: '测试', enabled: true, credentialRef: 'PRIVATE_REF', token: 'NEVER_DISPLAY', refreshToken: 'PRIVATE_REFRESH' }
+  const account = { id: 'a', provider: 'raccoon', nickname: '测试', enabled: true, credentialRef: 'PRIVATE_REF', token: 'NEVER_DISPLAY', refreshToken: 'PRIVATE_REFRESH' }
   const raw = async (method, payload) => {
     calls.push({ method, payload })
     if (method === 'account.list') return { ok: true, value: { accounts: [account] } }
@@ -75,7 +75,7 @@ test('安装清单仅提供 Web 设置客户端，没有原生胶囊或面板贡
   assert.equal(pkg.exports['./client'], './lib/client.js'); assert.equal(pkg.dsh.client.platform, 'web')
   // Raccoon 家族在**模型层**是两个 provider（免费面 / 订阅面），宿主仍按两个 id
   // 做 provider.status 与模型 RPC；账号只有一个池（`raccoon`），卡片也只有一张。
-  assert.deepEqual(PROVIDERS.map(p => p.id), ['loomy','raccoon','raccoon-pro','qodercn','trae'])
+  assert.deepEqual(PROVIDERS.map(p => p.id), ['raccoon','raccoon-pro','qodercn','trae'])
 })
 test('宿主忽略退役渠道快照，拒绝转发旧模型、账号和自动化调用', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'router-retired-provider-'))
@@ -120,7 +120,7 @@ test('共享主机注册独立接口，保持 RPC 信封并投影公开账号字
   const f = fixture()
   try {
     assert.equal(f.routes.size, 1)
-    const body = await f.call('account.list', { provider: 'loomy' })
+    const body = await f.call('account.list', { provider: 'raccoon' })
     assert.equal(body.type, 'server-response'); assert.equal(body.rpcId, 'test-rpc'); assert.equal(body.result.ok, true)
     assert.equal(body.result.value.accounts[0].nickname, '测试')
     assert.doesNotMatch(JSON.stringify(body), /PRIVATE_REF|NEVER_DISPLAY|PRIVATE_REFRESH|credentialRef|refreshToken/)
@@ -130,7 +130,7 @@ test('共享主机注册独立接口，保持 RPC 信封并投影公开账号字
 test('共用模式不向外部旧后端转发上下文单字段写入', async () => {
   const f = fixture()
   try {
-    const body = await f.call('model.setParams', { provider: 'loomy', modelId: 'm1', contextOnly: true, params: { contextWindow: 200_000 } })
+    const body = await f.call('model.setParams', { provider: 'raccoon', modelId: 'm1', contextOnly: true, params: { contextWindow: 200_000 } })
     assert.equal(body.result.ok, false)
     assert.ok(!f.calls.some(call => call.method === 'model.setParams'))
   } finally { f.dispose() }
@@ -140,17 +140,17 @@ test('接口拒绝其它渠道和跨渠道账号', async () => {
   const f = fixture()
   try {
     assert.equal((await f.call('model.list', { provider: 'qoder' })).result.ok, false)
-    assert.equal((await f.call('account.delete', { provider: 'raccoon', accountId: 'a' })).result.ok, false)
+    assert.equal((await f.call('account.delete', { provider: 'trae', accountId: 'a' })).result.ok, false)
     assert.deepEqual(f.calls.map(c => c.method), ['account.list'])
   } finally { f.dispose() }
 })
 test('账号设置只允许昵称和启停，禁止修改凭据引用与归属', async () => {
   const f = fixture()
   try {
-    assert.equal((await f.call('account.update', { provider: 'loomy', accountId: 'a', patch: { credentialRef: 'OTHER' } })).result.ok, false)
-    assert.equal((await f.call('account.update', { provider: 'loomy', accountId: 'a', patch: { provider: 'trae' } })).result.ok, false)
+    assert.equal((await f.call('account.update', { provider: 'raccoon', accountId: 'a', patch: { credentialRef: 'OTHER' } })).result.ok, false)
+    assert.equal((await f.call('account.update', { provider: 'raccoon', accountId: 'a', patch: { provider: 'trae' } })).result.ok, false)
     assert.equal(f.calls.length, 0)
-    const body = await f.call('account.update', { provider: 'loomy', accountId: 'a', patch: { nickname: '新名称', enabled: false } })
+    const body = await f.call('account.update', { provider: 'raccoon', accountId: 'a', patch: { nickname: '新名称', enabled: false } })
     assert.equal(body.result.ok, true); assert.equal(body.result.value, null)
     assert.deepEqual(f.calls.at(-1).payload.patch, { nickname: '新名称', enabled: false })
   } finally { f.dispose() }
@@ -158,9 +158,9 @@ test('账号设置只允许昵称和启停，禁止修改凭据引用与归属',
 test('上游错误和余额失败不会向 Web 回显密钥或响应正文', async () => {
   const f = fixture()
   try {
-    const failure = await f.call('credits.claimAll', { provider: 'loomy' })
+    const failure = await f.call('credits.claimAll', { provider: 'raccoon' })
     assert.equal(failure.result.ok, false); assert.doesNotMatch(JSON.stringify(failure), /NEVER_DISPLAY/)
-    const balance = await f.call('credits.balances', { provider: 'loomy' })
+    const balance = await f.call('credits.balances', { provider: 'raccoon' })
     assert.equal(balance.result.value.accounts[0].balance, null); assert.doesNotMatch(JSON.stringify(balance), /NEVER_DISPLAY/)
   } finally { f.dispose() }
 })
@@ -202,8 +202,8 @@ test('Qoder 未开通每日额度与零余额保留真实语义', () => {
 test('已取消的调用不触发上游；服务拒绝未支持方法', async () => {
   let calls = 0; const call = guardedRpc(async () => { calls++; return { ok: true } })
   const abort = new AbortController(); abort.abort()
-  await assert.rejects(call('credits.claimAll', { provider: 'loomy' }, abort.signal))
-  await assert.rejects(call('gateway.setEnabled', { provider: 'loomy' }))
+  await assert.rejects(call('credits.claimAll', { provider: 'raccoon' }, abort.signal))
+  await assert.rejects(call('gateway.setEnabled', { provider: 'raccoon' }))
   assert.equal(calls, 0)
 })
 
@@ -218,12 +218,12 @@ test('模型参数方法穿过全部白名单层：rpc 守卫、投影与后端'
     return { ok: true, value: { provider: payload.provider, params: { m0: { maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high' } } } }
   }
   const rpc = guardedRpc(raw)
-  const read = await rpc('model.params', { provider: 'loomy' })
+  const read = await rpc('model.params', { provider: 'raccoon' })
   assert.equal(read.params.m0.maxTokens, 4096)
-  const written = await rpc('model.setParams', { provider: 'loomy', modelId: 'm0', params: { maxTokens: 1024 } })
-  assert.equal(written.provider, 'loomy')
+  const written = await rpc('model.setParams', { provider: 'raccoon', modelId: 'm0', params: { maxTokens: 1024 } })
+  assert.equal(written.provider, 'raccoon')
   // 2) 投影层保留界面真正会用的字段，丢弃其余（含未支持的 temperature）
-  const projected = publicResult('model.params', { provider: 'loomy', params: { m0: { maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high', temperature: 0.7, extra: 'DROP' } } })
+  const projected = publicResult('model.params', { provider: 'raccoon', params: { m0: { maxTokens: 4096, contextWindow: 200000, reasoningEffort: 'high', temperature: 0.7, extra: 'DROP' } } })
   assert.equal(projected.params.m0.maxTokens, 4096)
   assert.equal(projected.params.m0.contextWindow, 200000)
   assert.equal(projected.params.m0.reasoningEffort, 'high')
@@ -240,7 +240,7 @@ test('模型目录刷新穿过全部白名单层：rpc 守卫、家族 provider 
   const seen = []
   const rpc = guardedRpc(async (method, payload) => { seen.push(method); return { ok: true, value: { count: 5, source: 'remote' } } })
   // 1) 守卫层放行：普通渠道与 Raccoon 订阅面（`raccoon-pro`）都在 PROVIDERS 内。
-  assert.deepEqual(await rpc('model.refresh', { provider: 'loomy' }), { count: 5, source: 'remote' })
+  assert.deepEqual(await rpc('model.refresh', { provider: 'raccoon' }), { count: 5, source: 'remote' })
   assert.deepEqual(await rpc('model.refresh', { provider: 'raccoon-pro' }), { count: 5, source: 'remote' })
   assert.deepEqual(seen, ['model.refresh', 'model.refresh'])
   // 未接入的渠道仍被守卫拒绝（不发请求）。
@@ -493,14 +493,14 @@ test('设置读取只读宿主快照，失败保留独立账号的上次额度�
   const live = fixture({
     autoCollect: true, snapshotFile,
     async balance({ provider }) {
-      if (provider !== 'loomy') return { ok: true, value: { accounts: [] } }
+      if (provider !== 'raccoon') return { ok: true, value: { accounts: [] } }
       if (mode === 'offline') return { ok: false }
       return { ok: true, value: { accounts: mode === 'partial'
         ? [{ accountId: 'a', balance: null, error: 'upstream secret=NEVER_DISPLAY' }]
         : [{ accountId: 'a', balance: { total: 420, packages: [] } }] } }
     },
   })
-  const read = host => host.call('credits.balances', { provider: 'loomy', snapshot: true })
+  const read = host => host.call('credits.balances', { provider: 'raccoon', snapshot: true })
   const until = async callback => {
     for (let i = 0; i < 100; i++) {
       const value = await callback()
@@ -512,24 +512,24 @@ test('设置读取只读宿主快照，失败保留独立账号的上次额度�
   try {
     await until(async () => (await read(live)).result.value.snapshot.stale)
     mode = 'online'
-    assert.equal((await live.call('settings.refresh', { provider: 'loomy' })).result.ok, true)
+    assert.equal((await live.call('settings.refresh', { provider: 'raccoon' })).result.ok, true)
     await until(async () => (await read(live)).result.value.accounts?.[0]?.balance?.total === 420)
-    const upstreamCalls = live.calls.filter(call => call.method === 'credits.balances' && call.payload.provider === 'loomy').length
+    const upstreamCalls = live.calls.filter(call => call.method === 'credits.balances' && call.payload.provider === 'raccoon').length
     const stored = await live.call('settings.snapshot', {})
-    const accounts = stored.result.value.entries['loomy/account.list'].value.accounts
+    const accounts = stored.result.value.entries['raccoon/account.list'].value.accounts
     assert.equal(accounts[0].id, 'a')
     assert.doesNotMatch(JSON.stringify(stored), /NEVER_DISPLAY|PRIVATE_REF|PRIVATE_REFRESH|loginUrl/)
     await read(live)
-    assert.equal(live.calls.filter(call => call.method === 'credits.balances' && call.payload.provider === 'loomy').length, upstreamCalls)
+    assert.equal(live.calls.filter(call => call.method === 'credits.balances' && call.payload.provider === 'raccoon').length, upstreamCalls)
     mode = 'partial'
-    assert.equal((await live.call('settings.refresh', { provider: 'loomy' })).result.ok, true)
+    assert.equal((await live.call('settings.refresh', { provider: 'raccoon' })).result.ok, true)
     const cached = await until(async () => {
       try {
         const saved = JSON.parse(await readFile(snapshotFile, 'utf8'))
-        return saved.entries['loomy/credits.balances'].value.accounts[0].error ? saved : null
+        return saved.entries['raccoon/credits.balances'].value.accounts[0].error ? saved : null
       } catch { return null }
     })
-    assert.equal(cached.entries['loomy/credits.balances'].value.accounts[0].balance.total, 420)
+    assert.equal(cached.entries['raccoon/credits.balances'].value.accounts[0].balance.total, 420)
     assert.doesNotMatch(JSON.stringify(cached), /NEVER_DISPLAY|PRIVATE_REF|PRIVATE_REFRESH|loginUrl/)
   } finally { live.dispose() }
   const reopened = fixture({ snapshotFile })
@@ -547,7 +547,7 @@ test('自动签到共用逐账号持久记录，手动并发和重启都不会�
   const startedClaim = new Promise(resolve => { started = resolve })
   const claimResponse = new Promise(resolve => { resume = resolve })
   const calls = []
-  const adapters = new Map([['loomy', {
+  const adapters = new Map([['raccoon', {
     list: async () => [{ id: 'first' }, { id: 'second' }],
     async claim(id) {
       calls.push(id)
@@ -561,18 +561,18 @@ test('自动签到共用逐账号持久记录，手动并发和重启都不会�
   try {
     const automatic = first.tick()
     await startedClaim
-    const manual = first.claim('loomy', 'first')
+    const manual = first.claim('raccoon', 'first')
     // Simulates a plugin reload while the previous host's request is in flight.
-    const [pending] = await nextHost.claim('loomy', 'first')
+    const [pending] = await nextHost.claim('raccoon', 'first')
     assert.equal(pending.outcome.kind, 'pending')
     assert.equal(pending.repeated, true)
     resume({ kind: 'claimed', credit: 20 })
     await automatic
     assert.equal((await manual)[0].outcome.kind, 'claimed')
-    assert.equal((await nextHost.claim('loomy', 'first'))[0].repeated, true)
+    assert.equal((await nextHost.claim('raccoon', 'first'))[0].repeated, true)
     await nextHost.tick()
     assert.deepEqual(calls, ['first', 'second'])
-    const status = (await nextHost.status()).providers.loomy
+    const status = (await nextHost.status()).providers.raccoon
     assert.deepEqual(Object.fromEntries(status.accounts.map(row => [row.accountId, row.kind])), { first: 'claimed', second: 'failed' })
     assert.doesNotMatch(JSON.stringify(status), /private response/)
   } finally { resume({ kind: 'failed' }); first.dispose(); nextHost.dispose() }
@@ -584,7 +584,7 @@ test('每日定时任务跨日继续运行，Qoder 在 10:00 港时开始当轮�
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
   let clock = Date.parse('2026-11-18T01:59:00Z')
   const calls = []
-  const adapters = new Map([['loomy', 0], ['qodercn', 10]].map(([provider, resetHour]) => [provider, {
+  const adapters = new Map([['trae', 0], ['qodercn', 10]].map(([provider, resetHour]) => [provider, {
     resetHour,
     list: async () => [{ id: provider }],
     claim: async () => { calls.push(provider); return { kind: 'already-claimed' } },
@@ -594,27 +594,27 @@ test('每日定时任务跨日继续运行，Qoder 在 10:00 港时开始当轮�
     checkin.start(0)
     t.mock.timers.tick(0)
     await checkin.tick()
-    assert.deepEqual(calls, ['loomy'])
+    assert.deepEqual(calls, ['trae'])
     const [yesterday] = await checkin.claim('qodercn', 'qodercn')
     assert.equal(yesterday.outcome.kind, 'already-claimed')
     assert.equal((await checkin.status()).providers.qodercn.date, '2026-11-17')
     clock += 60_000
     t.mock.timers.tick(60_000)
     await checkin.tick()
-    assert.deepEqual(calls, ['loomy', 'qodercn', 'qodercn'])
+    assert.deepEqual(calls, ['trae', 'qodercn', 'qodercn'])
     assert.equal((await checkin.status()).providers.qodercn.date, '2026-11-18')
     clock = Date.parse('2026-11-18T16:01:00Z')
     t.mock.timers.tick(60_000)
     await checkin.tick()
-    assert.deepEqual(calls, ['loomy', 'qodercn', 'qodercn', 'loomy'])
+    assert.deepEqual(calls, ['trae', 'qodercn', 'qodercn', 'trae'])
   } finally { checkin.dispose() }
 })
 
-test('独立模式使用五个签到渠道（含 Raccoon），共用模式由原后端负责共用账号池', () => {
+test('独立模式使用四个签到渠道（含 Raccoon），共用模式由原后端负责共用账号池', () => {
   const standalone = settingsCheckinAdapters({ standalone: true })
   // Raccoon 走专用 `raccoon.checkin`（无专门签到端点，由 setting_info 触发），
   // 不走 `credits.claimAll`，故单独注册而不是从 PROVIDERS 的 claim 派生。
-  assert.deepEqual([...standalone.keys()], ['loomy', 'qodercn', 'trae', 'workbuddy', 'raccoon'])
+  assert.deepEqual([...standalone.keys()], ['qodercn', 'trae', 'workbuddy', 'raccoon'])
   assert.deepEqual([...settingsCheckinAdapters({ standalone: false }).keys()], ['workbuddy'])
 })
 

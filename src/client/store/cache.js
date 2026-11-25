@@ -36,7 +36,7 @@ export function createClientCache(persisted) {
     if (!packAllowed(provider) || provider === PLAN_PROVIDER_ID || provider === WORKBUDDY_ID) return
     channelCache.set(provider, {
       accounts: state.accounts, models: state.models, balances: state.balances,
-      params: state.params, locked: state.locked, modelSource: state.modelSource, selected: state.selected,
+      params: state.params, modelSource: state.modelSource, selected: state.selected,
       at: Date.now(),
     })
     persistCards(state)

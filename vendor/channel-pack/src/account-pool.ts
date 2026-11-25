@@ -1,10 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { StoredTokenCredential } from './credential-expiry.js'
-import { createChannelPackStore, mergeLegacyLoomyLock, sanitizeAccounts, sanitizeDisabledModels, sanitizePermanentLocks } from './channel-pack-store.js'
-import type { ChannelPackStore, ChannelPackState, ModelDisableMap, ModelParamMap, ModelParamOverride, PermanentLockMap } from './channel-pack-store.js'
-import { createPermanentLockStore } from './permanent-lock-store.js'
-import type { PermanentLockStore } from './permanent-lock-store.js'
+import { createChannelPackStore, sanitizeAccounts, sanitizeDisabledModels } from './channel-pack-store.js'
+import type { ChannelPackStore, ChannelPackState, ModelDisableMap, ModelParamMap, ModelParamOverride } from './channel-pack-store.js'
 import type {
   ProviderAccountEntry,
   ProviderAccountStatus,
@@ -115,23 +113,12 @@ export class AccountPool {
    */
   private paramCache: ModelParamMap = {}
   /**
-   * 「锁定永久积分」开关表的**权威进程内副本**（与 {@link cache} 同理）。
-   *
-   * ⚠️ 它的落盘位置与账号池**不是同一份文档**：住在
-   * `$DSH_HOME/channel-pack/permanent-locks.json`，因为 state.json 是同机多 profile
-   * 共享的文档，而另一条工作区里的旧版本代码全量重写它时**不会携带自己不认识
-   * 的键** —— 放那儿会被静默抹掉，解锁的后果是真把永久积分烧掉。
-   * 详见 `src/permanent-lock-store.ts` 的文件头。
-   */
-  private permanentLockCache: PermanentLockMap = {}
-  /**
    * 「本机 OpenAI 网关」开关的进程内副本。
    *
    * 缺键语义是**启用**（与 `channel-pack-store.ts` 的 `sanitizeGatewayEnabled`
    * 同一方向）：老用户升级后网关行为与升级前完全一致，不会被静默关掉。
    *
-   * ⚠️ 与 {@link permanentLockCache} 不同，它**不需要**独立文档：丢失本键
-   * 的唯一后果是回到默认启用，用户再关一次即可。
+   * 丢失本键的唯一后果是回到默认启用，用户再关一次即可。
    */
   private gatewayEnabledCache = true
   /**
@@ -151,13 +138,9 @@ export class AccountPool {
    * `store.save()` 本身是异步的，两个写者的 `save` 可以乱序完成。
    */
   private storeChain: Promise<void> = Promise.resolve()
-  /** 锁定表的独立后端（权威落盘点）。 */
-  private readonly lockStore: PermanentLockStore
-
   constructor(private readonly ctx: Context, private readonly quotaAccountOrder?: (provider: string, ids: string[]) => readonly string[],
     private readonly noteQuotaAccount?: (provider: string, accountId: string, model?: string) => void) {
     this.store = createChannelPackStore(ctx)
-    this.lockStore = createPermanentLockStore(ctx)
     if (this.store.kind === 'memory') {
       this.ctx.logger?.warn?.('[channel-pack] 无可用持久化后端，账号列表与模型黑名单仅存在于内存中')
     }
@@ -179,32 +162,6 @@ export class AccountPool {
       this.gatewayEnabledCache = state.gatewayEnabled !== false
       // 供应商顺序同理：老文档没有该键 → 空数组（未自定义）。
       this.providerOrderCache = state.providerOrder ?? []
-    }
-    this.loadLocks(state)
-  }
-
-  /**
-   * 载入锁定表：独立文档是权威；它**不存在**时才从 state.json 的镜像字段迁移。
-   *
-   * ⚠️ 迁移判据必须是「文档不存在」而不是「表里没有某键」：表里的缺键语义是
-   * 「用户明确解锁了」，此时若还回看镜像字段那个陈旧的 `true`，就会出现
-   * **解不掉的开关** —— 比丢状态更难排查。
-   *
-   * ⚠️ 迁移出的内容立即固化到独立文档：否则每次冷启动都要重新读镜像，
-   * 而镜像随时可能被另一条工作区的旧代码改回旧值。
-   */
-  private loadLocks(state: ChannelPackState | undefined): void {
-    const read = this.lockStore.load()
-    if (read.exists) {
-      this.permanentLockCache = read.locks
-      return
-    }
-    this.permanentLockCache = mergeLegacyLoomyLock({}, state?.loomyPermanentLocked)
-    if (Object.keys(this.permanentLockCache).length > 0) {
-      // 冷启动路径上的尽力而为：失败只意味着本次进程内生效，下一次仍会重新迁移。
-      void this.persistLocks().catch(error => {
-        this.ctx.logger?.warn?.(`[channel-pack] 锁定状态迁移未能落盘: ${String(error)}`)
-      })
     }
   }
 
@@ -243,8 +200,7 @@ export class AccountPool {
    * 取快照，于是「取快照」与「写磁盘」之间隔着前面所有已排队的写。磁盘上因此
    * 永远是「最后一次排队的写」的内容，与 `this.cache` / `this.modelCache` 收敛。
    *
-   * ⚠ 三条数据**必须取自同一时刻**：账号、黑名单、锁定镜像字段共用一次快照，
-   * 否则会出现「同一份文档里两个字段自相矛盾」（与 {@link lockFields} 的约定一致）。
+   * ⚠ 账号、黑名单、参数与开关**必须取自同一时刻**的快照。
    *
    * ⚠ 失败**照常向调用方抛出**（与改造前的 `writeAccounts` 一致：登录成功后落盘
    * 失败必须让 `account.create` 报错，不能静默假装成功）。同时用一条
@@ -258,7 +214,6 @@ export class AccountPool {
         accounts: this.cache,
         disabledModels: this.modelCache,
         modelParams: this.paramCache,
-        ...this.lockFields(),
         // ⚠️ 必须与账号、黑名单取自**同一时刻**的快照（见本方法的注释）：
         // 分两次快照会让同一份文档里的字段互相矛盾。
         gatewayEnabled: this.gatewayEnabledCache,
@@ -590,90 +545,6 @@ export class AccountPool {
     // 与 writeAccounts 对称：整体写入必须携带账号列表，否则会被清空 ——
     // 快照由 queueStoreSave 在轮到本次时统一取（三份数据同源）。
     await this.queueStoreSave()
-  }
-
-  /**
-   * 状态文档里那份**镜像字段**（`loomyPermanentLocked`）。
-   *
-   * ⚠️ 它只是镜像，权威表在独立文档（见 {@link persistLocks}）。仍继续同源写出
-   * 有两个理由：① 同机其它 profile 里的**旧版本代码**只认这个字段（它读它、
-   * 也原样写回它），保持一致才能让那一侧的 Loomy 面板显示正确的锁定态；
-   * ② 回退到老版本时用户不会看到「锁定悄悄失效」。
-   * 二者**取自同一次快照**，于是「同一份状态里两个字段自相矛盾」这种隐性分歧
-   * 从结构上就不可能出现。
-   */
-  private lockFields(): Pick<ChannelPackState, 'loomyPermanentLocked'> {
-    return { loomyPermanentLocked: this.permanentLockCache.loomy === true }
-  }
-
-  /**
-   * 某 provider 的「锁定永久积分」是否开启。
-   *
-   * 锁定后选号**只允许消耗会近期作废的积分**，永久积分不参与 ——
-   * 只剩永久积分的账号在锁定期间等同于不可用（用户语义：「没有临时积分后
-   * 找可用账号就是没有可用账号」）。
-   */
-  permanentLocked(provider: string): boolean {
-    this.ensureLoaded()
-    return this.permanentLockCache[provider] === true
-  }
-
-  /**
-   * 设置某 provider 的「锁定永久积分」开关（持久化）。
-   *
-   * ⚠️ 解锁时**删除该键**而不是写 `false`（与模型黑名单同款约定）：表里只留
-   * 真正处于锁定态的 provider，`permanentLocked` 的判据因此始终是
-   * 「键存在且为 true 即锁定」。
-   */
-  async setPermanentLocked(provider: string, locked: boolean): Promise<void> {
-    if (provider.length === 0) return
-    this.ensureLoaded()
-    const next: PermanentLockMap = { ...this.permanentLockCache }
-    if (locked) next[provider] = true
-    else delete next[provider]
-    this.permanentLockCache = next
-    await this.persistLocks()
-  }
-
-  /**
-   * 落盘锁定表：先写**权威**（独立文档），再同步**镜像**（state.json）。
-   *
-   * ⚠️ 顺序与容错都是有意的：
-   * - 权威先落 —— 独立文档才是本 profile 选号的依据；镜像写失败只让另一条
-   *   工作区的面板显示旧值，不会让我们**误烧用户的永久积分**；
-   * - 镜像失败只 warn，不向上抛 —— 否则一次 settings 后端抖动会让面板上的
-   *   「锁定」按钮报错，而实际开关已经生效。
-   *
-   * 写镜像沿用「读 → 改 → 整体写回」的既有约定：必须连同账号与黑名单一起带，
-   * 否则那份文档里的另外两份数据会被抹掉。
-   */
-  private async persistLocks(): Promise<void> {
-    if (this.lockStore.kind === 'memory') {
-      this.ctx.logger?.warn?.('[channel-pack] 无法定位 DSH home，永久积分锁定仅存在于内存中')
-    } else {
-      await this.lockStore.save({ ...this.permanentLockCache })
-    }
-    if (this.store.kind === 'memory') return
-    // 走同一条写队列，避免与账号/黑名单的写乱序覆盖（见 {@link queueStoreSave}）。
-    // ⚠ 这里**必须吞掉**异常（与改造前一致）：镜像写失败只让另一条工作区的面板
-    // 显示旧值，不该让面板上的「锁定」按钮报错 —— 权威文档已经落好了。
-    await this.queueStoreSave().catch(error => {
-      this.ctx.logger?.warn?.(
-        `[channel-pack] 锁定镜像字段写入失败（独立文档已保存，不影响本侧选号）: ${String(error)}`,
-      )
-    })
-  }
-
-  /** 锁定表的当前快照（备份导出用；权威来自独立文档）。 */
-  permanentLocksSnapshot(): PermanentLockMap {
-    this.ensureLoaded()
-    return { ...this.permanentLockCache }
-  }
-
-  /** 全部处于锁定态的 provider（供设置页一次性读取）。 */
-  listPermanentLocked(): string[] {
-    this.ensureLoaded()
-    return Object.keys(this.permanentLockCache).filter(p => this.permanentLockCache[p] === true)
   }
 
   /** 列出某个 provider 的所有账号（含状态信息） */
@@ -1235,14 +1106,11 @@ export class AccountPool {
   }
 
   /**
-   * 读取当前完整状态快照（账号列表 + 模型黑名单 + Loomy 镜像字段）。
+   * 读取当前完整状态快照（账号列表 + 模型黑名单）。
    *
    * 供备份导出使用：返回的副本与进程内权威副本解耦，调用方修改返回值
    * 不会污染池的运行时状态。`disabledModels` 是嵌套结构，必须深拷贝
    * （浅拷贝会让内层 provider 表仍共享引用）。
-   *
-   * ⚠️ 这里**不含**锁定表本体（它住在独立文档里），备份导出要走
-   * {@link permanentLocksSnapshot}。
    */
   getStateSnapshot(): ChannelPackState {
     this.ensureLoaded()
@@ -1253,7 +1121,6 @@ export class AccountPool {
     return {
       accounts: [...this.cache],
       disabledModels,
-      ...this.lockFields(),
     }
   }
 
@@ -1272,21 +1139,12 @@ export class AccountPool {
   async replaceAll(
     accounts: readonly ProviderAccountEntry[],
     disabledModels: ModelDisableMap,
-    permanentLocks?: PermanentLockMap,
   ): Promise<void> {
     const next = sanitizeAccounts(accounts)
     this.cache = next
     this.modelCache = sanitizeDisabledModels(disabledModels)
-    // 备份文件可能来自不含该字段的旧版本：`undefined` 时**保持当前值**，
-    // 而不是重置为空表 —— 否则导入一份老备份会静默解锁用户的永久积分。
-    // 给出表时**整体替换**（备份就是完整状态快照），并同样过滤脏值。
-    if (permanentLocks !== undefined) {
-      this.permanentLockCache = sanitizePermanentLocks(permanentLocks)
-    }
     this.loaded = true
-    // 一次落盘三件事：锁定表进**独立文档**，账号与黑名单进 state.json，
-    // 同时把 Loomy 的镜像字段同步过去（persistLocks 内部就是这套顺序）。
-    await this.persistLocks()
+    await this.queueStoreSave()
   }
 }
 

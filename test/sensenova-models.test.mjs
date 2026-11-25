@@ -383,7 +383,7 @@ test('仅独立 Plan 方法允许商汤，写响应与快照只暴露字段', as
   for (const method of ['plan.setModelEnabled', 'plan.setModelParams']) await rpc(method, { provider })
   await assert.rejects(rpc('model.setParams', { provider }))
   await assert.rejects(rpc('plan.deleteEverything', { provider }))
-  await assert.rejects(rpc('plan.setModelEnabled', { provider: 'loomy' }))
+  await assert.rejects(rpc('plan.setModelEnabled', { provider: 'raccoon' }))
   assert.deepEqual(methods, ['plan.setModelEnabled', 'plan.setModelParams'])
   const snapshot = publicResult('plan.snapshot', { models: [{ id: 'a', name: '模型', enabled: false, maxTokensOverride: 456, secret: 'NEVER_DISPLAY' }], enabledModelIds: ['__hide_all__'], token: 'NEVER_DISPLAY' })
   assert.equal(snapshot.models[0].enabled, false)

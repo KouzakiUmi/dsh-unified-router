@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const [theme = 'light', widthArg = '560', providerId = 'loomy', panelId = 'models', outName = 'preview'] = process.argv.slice(2)
+const [theme = 'light', widthArg = '560', providerId = 'raccoon', panelId = 'models', outName = 'preview'] = process.argv.slice(2)
 const width = Number(widthArg) || 560
 const tick = () => new Promise(resolveTick => setImmediate(resolveTick))
 
@@ -67,7 +67,7 @@ const planSnapshot = { hasApiKey: true, registerProvider: true, providerRegister
   models: [model('sensenova-6-8-flash', 'SenseNova 6.8 Flash', { contextWindow: 262144, defaultContextWindow: 262144 }), model('sensenova-6-8-flash-lite', 'SenseNova 6.8 Flash Lite', { contextWindow: 262144, defaultContextWindow: 262144 })] }
 const buddyAccount = { id: 'workbuddy-1a2b3c4d', name: '示例账号', uid: 'u-demo', signedIn: true, plan: '专业版', signIn: 'kept', updatedAt: NOW,
   windows: [{ name: '周期额度', used: 38, amount: 380, limit: 1000, balance: null, display: '', unit: '积分', resetsAt: '', span: null, runsOutAt: '', runsOut: null }], error: '' }
-const statuses = { statuses: Object.fromEntries(['loomy', 'raccoon', 'raccoon-pro', 'qodercn', 'trae'].map(id => [id,
+const statuses = { statuses: Object.fromEntries(['raccoon', 'raccoon-pro', 'qodercn', 'trae'].map(id => [id,
   { closed: false, accounts: { enabled: 2, total: 2 }, models: { total: 4 } }])) }
 const hostEntries = () => {
   const entry = value => ({ at: NOW, stale: false, value })
@@ -124,7 +124,7 @@ for (let i = 0; i < 6; i++) { await tick(); render() }
 if (panelId !== 'models') { click(node => node.props.id === 'eac-tab-' + panelId); render() }
 for (let i = 0; i < 3; i++) { await tick(); render() }
 function titleOf(id) {
-  return { loomy: 'Loomy', raccoon: 'Raccoon', qodercn: 'Qoder 中国版', trae: 'TRAE', 'sensenova-token-plan': '商汤 Token Plan',
+  return { raccoon: 'Raccoon', qodercn: 'Qoder 中国版', trae: 'TRAE', 'sensenova-token-plan': '商汤 Token Plan',
     workbuddy: 'WorkBuddy', agnes: 'Agnes', unisound: '云知声' }[id] ?? id
 }
 

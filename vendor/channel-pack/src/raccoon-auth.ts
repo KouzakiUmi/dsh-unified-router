@@ -5,9 +5,9 @@
  *
  * | 维度 | raccoon | 对照 |
  * |---|---|---|
- * | 登录 | 微信扫码 + 短信（本地页承载） | Loomy 同型 |
- * | 续期 | **有** `refresh_token` 轮换 | Loomy 没有（恒 false） |
- * | 凭据过期 | JWT `exp` 本地解码 | 比 Loomy 的「登录时刻 + 14 天推算」更准 |
+ * | 登录 | 微信扫码 + 短信（本地页承载） | — |
+ * | 续期 | **有** `refresh_token` 轮换 | — |
+ * | 凭据过期 | JWT `exp` 本地解码 | — |
  *
  * ## 两条硬约束（来自 AGENTS.md 的真实缺陷）
  *
@@ -87,7 +87,7 @@ export class RefreshTokenExpiredError extends Error {
   }
 }
 
-/** 登录/续期后的结果（与 `LoomyLoginResult` 同构）。 */
+/** 登录/续期后的结果。 */
 export interface RaccoonLoginResult {
   /** 已存储的凭据 JSON 字符串。 */
   access: string
@@ -315,7 +315,7 @@ export function parseRaccoonPlan(payload: unknown): RaccoonPlan {
  * Raccoon Work 认证服务。
  *
  * 登录走**本地页承载**的扫码/短信双路径（见 `raccoon-login-page.ts`），
- * 续期走 `refresh_token` 轮换（与 Loomy 不同）。
+ * 续期走 `refresh_token` 轮换。
  */
 export class RaccoonAuth extends Service {
   /** 本实例所属的产品配置。 */

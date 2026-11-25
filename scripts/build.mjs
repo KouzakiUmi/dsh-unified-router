@@ -40,6 +40,8 @@ fs.copyFileSync(path.join(root, 'vendor/channel-pack/qoder-auth-wasm.wasm'), pat
 const clientModules = [
   '../../lib/sensenova-params.js', // 商汤参数与 compat 白名单
   '../../lib/model-catalog.js',
+  '../../lib/channel-contract.js',   // 渠道 wire 契约（账号行 / 模型行的唯一字段源）
+  '../../lib/channel-specs.js',      // 渠道规格表（客户端方法集由 clientMethodSets() 派生）
   '../../lib/apikey-quota-projection.js',
   'core.js',                 // 共享常量、输入校验、wire 归一化
   'store/pending.js',        // 局部非阻塞状态锁
@@ -52,7 +54,6 @@ const clientModules = [
   'panels-core.js',          // 账号、模型、渠道视图
   'providers/pack.js',       // 账号池渠道的共用视图适配器
   'providers/managed.js',    // 自管多账号渠道的共用视图工厂
-  'providers/loomy.js',      // Loomy provider 模块
   'providers/raccoon.js',    // Raccoon provider 模块
   'providers/raccoon-pro.js', // Raccoon 订阅版 provider 模块
   'providers/qodercn.js',    // Qoder 中国版 provider 模块

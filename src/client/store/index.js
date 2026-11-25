@@ -6,8 +6,24 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   const persisted = readChannelCache(cacheStorage())
   const cache = createClientCache(persisted)
   const snapshotProviders = PROVIDERS.filter(item => item.snapshot)
-  const snapshotReads = new Set(['credits.balances', ...snapshotProviders.flatMap(item => item.snapshot.methods)])
-  const sharedFields = ['statuses', 'checkin', 'automation', 'loomyRoute', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
+  /**
+   * 走**宿主持久化中间层**读取的方法（客户端不直接打上游）。
+   *
+   * 账号池渠道的 `provider.status` / `account.list` / `model.list` / `model.params`
+   * 与额度一样都由宿主每分钟采集进 `settings.json`。过去它们不走快照，打开设置页
+   * 就要实时打一遍上游；现在优先读快照，**只有宿主还没采集过**（`snapshot.at === null`）
+   * 时才回落到一次实时读取，并随即请宿主补采，下一次打开即零上游请求。
+   *
+   * 显式刷新（`live: true`）与写后重读仍然走实时路径。
+   */
+  const snapshotReads = new Set([
+    'credits.balances',
+    'provider.status', 'account.list', 'model.list', 'model.params',
+    ...snapshotProviders.flatMap(item => item.snapshot.methods),
+  ])
+  /** 本次读取的结果是否由快照提供（决定要不要推进「最新读取时刻」水位）。 */
+  const snapshotServed = new WeakSet()
+  const sharedFields = ['statuses', 'checkin', 'automation', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
   let state = restoredRouterState(provider, persisted)
   let disposed = false, readController = null, balanceController = null,
     planController = null, planPollTimer = null, planPollGeneration = 0, planRevision = 0,
@@ -53,11 +69,44 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     const live = payload?.live === true
     const cleanPayload = live ? (() => { const { live: _drop, ...rest } = payload; return rest })() : payload
     const cached = snapshotReads.has(method) && !cleanPayload.localOnly && !live
-    try { result = await call(method, cached ? { ...cleanPayload, snapshot: true } : cleanPayload, signal) } catch { throw new Error('主机请求未完成') }
+    try {
+      result = await call(method, cached ? { ...cleanPayload, snapshot: true } : cleanPayload, signal)
+      if (cached && result?.ok === true && result.value?.snapshot?.at === null) {
+        // 宿主还没采集过这份资源（全新安装 / 刚加渠道 / 快照被删）：回落到一次实时读取，
+        // 保证界面不空转；随后请宿主补采，下次打开就由快照直接供给。
+        result = await call(method, cleanPayload, signal)
+        requestSnapshotCollect(method, cleanPayload)
+      }
+    } catch { throw new Error('主机请求未完成') }
     if (signal?.aborted || disposed) throw new Error('请求已结束')
     if (result?.ok !== true) throw new Error('主机未能完成此操作')
-    if (cached && result.value?.snapshot) sync.markSnapshotProtocol()
+    if (cached && result.value?.snapshot) {
+      sync.markSnapshotProtocol()
+      if (result.value.snapshot.at !== null) snapshotServed.add(result.value)
+    }
     return result.value
+  }
+
+  /**
+   * 请宿主补采某渠道的快照（不阻塞读取、不带取消信号）。
+   *
+   * 失败一律吞掉：它只是让「下一次打开」更快，绝不能反噬本次已经拿到的数据。
+   *
+   * ⚠️ **按渠道去重**：首屏一次 `load()` 会对同一渠道连问 `account.list` /
+   * `model.list` / `model.params`，各自都发现「快照为空」——不去重就会对宿主发
+   * 三次 `settings.refresh`，把一次采集变成三次上游请求。`provider.status` 不单独
+   * 触发：任何按渠道的 refresh 都会顺带刷新 `provider.status`，它自己再发一次就是
+   * 重复。去重表按会话保留：宿主本身还有 60 秒定时采集兜底，不需要反复重试。
+   */
+  const collectRequested = new Set()
+  function requestSnapshotCollect(method, payload) {
+    if (disposed) return
+    if (method === 'provider.status') return
+    const provider = payload?.provider
+    if (typeof provider !== 'string' || !provider) return
+    if (collectRequested.has(provider)) return
+    collectRequested.add(provider)
+    void call('settings.refresh', { provider }, new AbortController().signal).catch(() => {})
   }
 
   const sync = createHostSync({
@@ -239,25 +288,29 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
         request('provider.status', { providers: PACK_PROVIDERS.map(p => p.id) }, controller.signal),
         request('account.list', { provider: target }, controller.signal),
         ...sides.map(side => request('model.list', { provider: side }, controller.signal)),
-        providerById(target)?.caps?.permanentLock ? request('credits.permanentLock', { provider: target }, controller.signal) : Promise.resolve({ locked: false }),
         ...sides.map(side => request('model.params', { provider: side }, controller.signal)),
       ])
       if (disposed || controller.signal.aborted) return false
       const [statuses, accounts] = results
       const modelValues = results.slice(2, 2 + sides.length)
-      const lock = results[2 + sides.length]
-      const paramValues = results.slice(3 + sides.length)
+      const paramValues = results.slice(2 + sides.length)
       const rows = accountsFrom(accounts, target)
-      newestAccountRead.set(target, started)
-      for (const side of sides) newestModelRead.set(side, started)
-      newestStatusReadRef.current = started
+      // 水位记的是「手上这份数据有多新」，不是「这次读取发生的时刻」。
+      // 快照供给的读取要记快照自己的 `at`：否则水位被推到 now，宿主下一次采集
+      // （at 只比快照新一点、但早于 now）会被判为陈旧而丢掉，界面白白停滞一轮。
+      const freshnessOf = value => snapshotServed.has(value) ? (value?.snapshot?.at ?? 0) : started
+      newestAccountRead.set(target, Math.max(newestAccountRead.get(target) ?? 0, freshnessOf(accounts)))
+      sides.forEach((side, index) => {
+        newestModelRead.set(side, Math.max(newestModelRead.get(side) ?? 0, freshnessOf(modelValues[index])))
+      })
+      newestStatusReadRef.current = Math.max(newestStatusReadRef.current, freshnessOf(statuses))
       publish({
         accounts: rows,
         models: sides.flatMap((side, index) => modelsFrom(modelValues[index], side)),
         modelSource: { ...state.modelSource, ...Object.fromEntries(sides.flatMap((side, index) =>
           CACHE_MODEL_SOURCES.has(modelValues[index]?.source) ? [[side, modelValues[index].source]] : [])) },
         ...(target === 'qodercn' ? { qoderCatalogIssue: modelValues[0]?.issue ?? '' } : {}),
-        statuses: statusFrom(statuses), locked: lock?.locked === true,
+        statuses: statusFrom(statuses),
         params: Object.assign({}, ...sides.map((side, index) => paramsFrom(paramValues[index], side))),
         selected: rows.some(a => a.id === selection) ? selection : '', loading: false, loadFailed: false,
         notice: '',
@@ -288,10 +341,10 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     const pendingMap = state.pending
     const keep = same && !cached ? {
       accounts: state.accounts, models: state.models, params: state.params,
-      locked: state.locked, balances: state.balances, modelSource: state.modelSource,
+      balances: state.balances, modelSource: state.modelSource,
     } : cached ? {
       accounts: cached.accounts, models: cached.models, balances: cached.balances,
-      params: cached.params, locked: cached.locked, modelSource: cached.modelSource,
+      params: cached.params, modelSource: cached.modelSource,
     } : {}
     publish({
       ...initial(target), ...sharedCards(), ...keep, busy, pending: pendingMap, selected, login: loginFor(target), loading: true,
@@ -450,7 +503,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
     if (method.includes('Model') || method.startsWith('model.')) return `models:${payload?.provider || channel}`
     if (method.includes('login') || method.includes('Login') || method === 'account.create' || method === 'login.poll') return `login:${channel}`
     if (payload?.accountId) return `account:${payload.accountId}`
-    if (method.endsWith('setEnabled') || method.endsWith('setKey') || method === 'credits.permanentLock') return `channel:${payload?.provider || channel}`
+    if (method.endsWith('setEnabled') || method.endsWith('setKey')) return `channel:${payload?.provider || channel}`
     return `channel:${channel}`
   }
 
@@ -690,9 +743,8 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       const target = typeof accountId === 'string' && accountId !== '' ? accountId : state.selected
       if (!target || !providerById(state.provider)?.caps?.onboarding) { publish({ notice: '请选择账号。' }); return Promise.resolve(false) }
       if (!state.accounts.some(a => a.id === target)) { publish({ notice: '账号已变化，请刷新后重试。' }); return Promise.resolve(false) }
-      return store.runAutomationTask(state.provider, state.provider === 'loomy' ? 'completeTasks' : 'claimRewards', target)
+      return store.runAutomationTask(state.provider, 'claimRewards', target)
     },
-    lock(locked) { return mutate('credits.permanentLock', { locked: locked === true }) },
     startLogin() {
       const channel = state.provider
       const existing = loginFor(channel)

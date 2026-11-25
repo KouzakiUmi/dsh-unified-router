@@ -6,6 +6,14 @@
 登录流程、账号池、积分领取、模型黑名单与本地 OpenAI 网关可用。OFM 挂载时关闭上游 OpenCode 账号接入，原有匿名免费车道保持独立。
 目录名与内部标识符在本插件的再构建中统一改为 channel-pack；出处与许可证不变。
 
+## 本地修改：按实际接入范围裁剪（2026-11-25）
+
+本目录的**源代码已被裁剪**：只保留本插件实际接入的渠道（Qoder 国际版 / Qoder 中国版 /
+TRAE / Raccoon 家族）与它们共用的骨架。上面提到的 LobsterAI、Cline、Loomy、MiniMax Code、
+ZCode、Gemini、OpenCode **实现已全部删除**（对应源文件、RPC 分支、探测分支、captcha 载体与
+身份槽子系统），因此本副本不再提供这些渠道。上游的版权与许可声明（`LICENSE`）按 MIT 保留；
+裁剪只删代码，不改许可条款。
+
 - 上游作者：Jet（https://gitee.com/iJetLi）
 - 吸收的提交：`345f0a07b22713c0ae189ca7d8b97ec4f64626c6`（2026-10-06）
 - 许可证：MIT（见 `LICENSE`，与上游一致）

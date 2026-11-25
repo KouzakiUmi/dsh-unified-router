@@ -12,7 +12,7 @@
 // 幂等：按身份匹配既有账号，令牌相同则跳过；重复运行只更新不重复新增。
 //
 // 映射规则（2026-11-17 与用户确认）：
-// - loomy×N → loomy 池（按 userid 去重）
+// - Loomy **不迁移**：该渠道已于 2026-11-25 移除，迁移它的账号只会生产出孤儿条目。
 // - qoder-cn×N → qodercn 池（按 uid 去重）
 // - raccoon×N → **全部进 `raccoon` 单池**，套餐只写成 entry 的 `plan` 标记：
 //   Free → 'free'；subscription/one_time_purchase → 'pro'；未知 → 'unknown'
@@ -96,23 +96,17 @@ const refDel = name => refs.delete(name)
 const serializeRefs = entries => beforeRefs + 'refs:\n' + [...entries.entries()].map(([k, v]) => `  ${k}: ${v}`).join('\n') + '\n' + tailLines.join('\n') + '\n'
 
 // ── 既有账号身份索引 ─────────────────────────────────────────────────────
-const PACK_PROVIDERS = ['loomy', 'raccoon', 'raccoon-pro', 'qodercn', 'trae']
+const PACK_PROVIDERS = ['raccoon', 'raccoon-pro', 'qodercn', 'trae']
 const accounts = state.accounts
 const findByIdentity = (provider, ident) => accounts.find(a => {
   if (a.provider !== provider) return false
   const v = refGetJson(a.credentialRef)
   if (!v) return false
-  if (provider === 'loomy') return v.userid === ident
   if (provider === 'raccoon' || provider === 'raccoon-pro') return maskPhone(v.phone) === ident
   return v.uid === ident
 })
 
 // ── 凭据构造器（magpie auth → channel-pack 凭据形状） ────────────────────
-const buildLoomy = a => ({
-  access_token: a.access, userid: a.uid, phone: a.phone || '',
-  nickname: a.phone ? `Loomy (${tail4(a.phone)})` : 'Loomy',
-  expires_at: String(a.expires || Date.now() + 14 * 86400_000),
-})
 const buildQoder = a => {
   // deviceChat 账号用设备令牌对（与既有 DSH 记录形态一致）；否则用 access/refresh。
   const useDevice = a.deviceChat === true && a.deviceToken
@@ -179,15 +173,7 @@ for (const [key, auth] of Object.entries(magpie)) {
   const base = key.split('#')[0]
   if (!auth || typeof auth !== 'object') continue
 
-  if (base === 'loomy') {
-    const ident = auth.uid
-    const existing = findByIdentity('loomy', ident)
-    const cred = buildLoomy(auth)
-    if (existing) poolUpdate(existing, cred, maskPhone(auth.phone))
-    else poolAdd('loomy', cred, cred.nickname, maskPhone(auth.phone), false) // Loomy 无 refresh 端点
-  }
-
-  else if (base === 'qoder-cn') {
+  if (base === 'qoder-cn') {
     const ident = auth.uid
     const existing = findByIdentity('qodercn', ident)
     const cred = buildQoder(auth)

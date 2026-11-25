@@ -10,7 +10,7 @@
  *           credits.status / credits.claimAll / credits.balances /
  *           model.list / model.setDisabled / model.refresh /
  *           captcha.demand / captcha.carrierUrl / captcha.contribute（内部载体，
- *           载体页见 src/zcode-carrier-page.ts 与 src/captcha-carrier-server.ts）/
+ *           载体页与供给槽已随渠道重写移除）/
  *           backup.export / backup.import / backup.status
  * 另有一条 GET 路由 `/api/channel-pack/captcha-carrier`：渲染内部载体的载体页
  * （⚠ 手工诊断用；guest 加载不到它，见该路由注释里的主进程取证）。
@@ -32,48 +32,15 @@ import {
   isGatewayRunning,
   setGatewayDesiredEnabled,
 } from './openai-gateway/runtime.js'
-import type { LobsteraiAuth } from './lobsterai-auth.js'
 import type { QoderAuth } from './qoder-auth.js'
 import type { TraeAuth } from './trae-auth.js'
-import type { ClineAuth } from './cline-auth.js'
-import { LOOMY } from './loomy-product.js'
 import { creditExpiringWindowDays } from './credit-expiry-window.js'
-import type { LoomyAuth } from './loomy-auth.js'
-import type { LoomyCredential } from './loomy.js'
 import { RACCOON, RACCOON_PRO, type RaccoonProduct } from './raccoon-product.js'
 import type { RaccoonAuth } from './raccoon-auth.js'
-import type { ZcodeAuth } from './zcode-auth.js'
-import { ZCODE } from './zcode-product.js'
-import type { ZcodeCredential } from './zcode.js'
-import { phoneFromUserId, isUsableZcodeCredential } from './zcode.js'
-import type { ZcodeBalanceResult } from './zcode-upstream.js'
-import { ZCODE_LOGIN_PROVIDER, type ZcodeLoginProvider } from './zcode-login.js'
 import type { RaccoonCredential } from './raccoon.js'
 import type { StartedRaccoonLoginFlow } from './raccoon-login-page.js'
-import { MINIMAX } from './minimax-product.js'
-import type { MinimaxAuth, StartedMinimaxLoginFlow } from './minimax-auth.js'
-import { isMinimaxRefreshable, minimaxCredentialExpiresAtMs } from './minimax.js'
-import type { MinimaxCredential } from './minimax.js'
-import {
-  claimMinimaxDailyCheckin,
-  fetchMinimaxCreditBalance,
-  fetchMinimaxSigninStatus,
-} from './minimax-credits.js'
-import { GEMINI, geminiAccountLabel, geminiCredentialExpiresAtMs, isGeminiRefreshable } from './gemini.js'
-import type { GeminiCredential } from './gemini.js'
-import type { GeminiAuth, StartedGeminiLoginFlow } from './gemini-auth.js'
-import { fetchGeminiCreditBalance } from './gemini-credits.js'
-import { LOOMY_TASK_POINTS, LOOMY_TASK_TITLES } from './loomy-onboarding.js'
-import { LOBSTERAI } from './lobsterai-product.js'
 import { QODER, QODER_CN, type QoderProduct } from './qoder-product.js'
 import { TRAE } from './trae-product.js'
-import { CLINE } from './cline-product.js'
-import {
-  isLobsteraiRefreshable,
-  lobsteraiCredentialExpiresAtMs,
-  lobsteraiDisplayNickname,
-} from './lobsterai.js'
-import type { LobsteraiCredential } from './lobsterai.js'
 import {
   fetchQoderUserNickname,
   isQoderRefreshable,
@@ -84,31 +51,13 @@ import type { QoderCredential } from './qoder.js'
 import { claimQoderDailyCheckin, fetchQoderCheckinStatus, fetchQoderCreditBalance } from './qoder-credits.js'
 import { isTraeRefreshable, traeCredentialExpiresAtMs, traeDisplayNickname } from './trae.js'
 import type { TraeCredential } from './trae.js'
-import { fetchClineCreditBalance } from './cline-credits.js'
-import { fetchClineUsageLimits } from './cline-quota.js'
-import { clineUpstreamOf, readClineRequestHistory } from './cline-request-log.js'
 import { readTokenLedger, readTokenLedgerDayMap, readTokenLedgerHistory, TOKEN_LEDGER_HISTORY_MAX_DAYS } from './token-ledger.js'
-import {
-  clineCredentialExpiresAtMs,
-  isClineRefreshable,
-  type ClineCredential,
-} from './cline.js'
 import {
   claimUnitOf,
   type CheckinStatus,
   type ClaimOutcome,
   type CreditBalance,
 } from './credits.js'
-import {
-  captchaDemand,
-  putSuppliedParam,
-} from './captcha-supply.js'
-import { ZCODE_CAPTCHA_FALLBACK, type ZcodeCaptchaConfig } from './zcode-captcha.js'
-import { buildCarrierPageHtml } from './zcode-carrier-page.js'
-import {
-  claimLobsteraiDailyCheckin,
-  fetchLobsteraiCreditBalance,
-} from './lobsterai-credits.js'
 import {
   claimTraeDailyCheckin,
   fetchTraeCheckinStatus,
@@ -124,9 +73,7 @@ import {
   retestAllAccounts,
 } from './account-probe.js'
 import { exportBackup, importBackup } from './backup.js'
-import { handleOpencodeRpc } from './opencode-rpc.js'
 import { clearDeadModels, deadModelIdsFor } from './dead-model-store.js'
-import { OPENCODE } from './opencode-product.js'
 import type {
   ProviderAccountEntry,
   RpcBackupExportResponse,
@@ -160,22 +107,11 @@ import type {
   RpcCreditsBalancesRequest,
   RpcCreditsBalanceExtra,
   RpcCreditsBalancesResponse,
-  RpcClineQuotaRequest,
-  RpcClineQuotaResponse,
-  RpcClineRequestLogRequest,
-  RpcClineRequestLogResponse,
   RpcCreditsClaimAccountResult,
-  RpcSendSmsRequest,
-  RpcSendSmsResponse,
-  RpcSubmitSmsRequest,
-  RpcSubmitSmsResponse,
   RpcOnboardingStatusRequest,
   RpcOnboardingStatusResponse,
   RpcOnboardingClaimRequest,
   RpcOnboardingClaimResponse,
-  RpcLoomyPermanentLockRequest,
-  RpcPermanentLockRequest,
-  RpcPermanentLockResponse,
   RpcModelListRequest,
   RpcModelListResponse,
   RpcModelParamsRequest,
@@ -232,7 +168,7 @@ export const CHANNEL_PACK_API_PATH = '/api/channel-pack'
  *   `admit()` ⇒ 未认证回 401）。桌面版的 guest 与 GUI 是否同 partition、
  *   因而带得上那份会话 cookie，属 Task 5 的**实测项**，不在这里放宽。
  */
-export const CAPTCHA_CARRIER_PATH = '/api/channel-pack/captcha-carrier'
+
 /** Gateway RPC 端点名（connection.rpc.call 的 endpoint 参数） */
 const CHANNEL_PACK_ENDPOINT = 'channel-pack'
 
@@ -241,55 +177,6 @@ function shortId(): string {
   const buf = new Uint8Array(4)
   crypto.getRandomValues(buf)
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-/**
- * ZCode 登录渠道的白名单归一。
- *
- * ## 为什么要有这道
- *
- * `account.create` 的载荷来自**客户端自报**（RPC 入口没有 schema 校验），
- * 而 `ZcodeLoginProvider` 只是个 TypeScript 联合类型 —— 运行时任何字符串都能进来。
- * 原先只写 `req.zcodeProvider ?? 'bigmodel'`：缺省兜底是对的，但**没有校验**，
- * 传入 `zhiPu` / `ZAI`（大小写不同）这类未登记值会被原样送进
- * `startZcodeLogin` → 打到一个不存在的授权端点，表现为
- * 「授权页打不开」或「轮询到超时」这类极难定位的失败。
- *
- * ## 为什么**回落**而不是报错
- *
- * 回落方向与既有的 `?? 'bigmodel'` 兜底一致：老客户端、新客户端、
- * 手改过载荷的用户都还能登录（只是用缺省渠道）。且前端只会下发下拉框里的
- * 两个值，正常路径永远走不到这条分支 —— 它是**兜底**不是**主路径**。
- * 真正非法的输入会留一条 `console.warn`（与本文件其余告警同一惯例），
- * 便于事后发现是哪个客户端在发怪值。
- *
- * @param raw 客户端自报的渠道（可能未登记）
- * @returns 可安全交给 `zcode.startLogin` 的渠道
- */
-export function normalizeZcodeLoginProvider(raw: string | undefined): ZcodeLoginProvider {
-  if (raw === 'zai') return 'zai'
-  if (raw !== ZCODE_LOGIN_PROVIDER) {
-    // ⚠ 只在**非缺省**时记 warn：`undefined` 是绝大多数调用方的形态（老客户端不传），
-    //   对它刷日志等于每建一个账号多一行噪音，会把真正的异常埋掉。
-    if (raw !== undefined) {
-      console.warn(
-        `[channel-pack] 未登记的 zcode 登录渠道 ${JSON.stringify(raw)}，已回落到 ${ZCODE_LOGIN_PROVIDER}`,
-      )
-    }
-  }
-  return ZCODE_LOGIN_PROVIDER
-}
-
-/** 解析 LobsterAI 凭据 JSON；解析失败返回 undefined。 */
-function parseLobsteraiCredential(raw: string): LobsteraiCredential | undefined {
-  try {
-    const parsed = JSON.parse(raw) as LobsteraiCredential
-    return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
-      ? parsed
-      : undefined
-  } catch {
-    return undefined
-  }
 }
 
 /** 解析 Qoder 凭据 JSON；解析失败返回 undefined。 */
@@ -316,18 +203,6 @@ function parseTraeCredential(raw: string): TraeCredential | undefined {
   }
 }
 
-/** 解析 Cline 凭据 JSON；解析失败返回 undefined。 */
-function parseClineCredential(raw: string): ClineCredential | undefined {
-  try {
-    const parsed = JSON.parse(raw) as ClineCredential
-    return typeof parsed === 'object' && parsed !== null && typeof parsed.access_token === 'string'
-      ? parsed
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * 构造 Raccoon 账号的**展示名**：`RaccoonAva (1100)`。
  *
@@ -346,7 +221,7 @@ function parseClineCredential(raw: string): ClineCredential | undefined {
  * 所以「显示 `RaccoonAva`」本身与官方一致、**不是取错字段**；但它是默认名，
  * 注册第二个账号时服务端很可能又给一个相近的名字 → 多账号重名、无法区分。
  *
- * 修法参考 Loomy（`Loomy 2222`）：这边有真实名字可用，故**保留原名再挂尾号**，
+ * 修法：**保留服务端原名再挂尾号**，
  * 兼顾「看得出服务端原名字」与「多账号可区分」。
  *
  * 退化顺序：昵称 + 手机号尾号 → 昵称 + 用户 id → 昵称 → 账号 id。
@@ -372,19 +247,6 @@ export function buildRaccoonNickname(
   if (suffix.length > 0) return `Raccoon ${suffix}`
   return fallbackId
 }
-
-/**
- * 支持「锁定永久积分」的 provider 白名单。
- *
- * ⚠️ **必须与前端 `credits-capabilities.js` 的 `supportsPermanentLock` 一致**：
- * 前端拿它决定要不要渲染按钮、要不要发读取请求；后端拿它拒绝越权写入。
- * 两边不一致的后果是「按钮出现但点了报错」或「功能存在却点不出来」。
- *
- * 当前只有 Loomy 支持锁定永久积分：其服务端给出 dailyBalance 与 balance。
- */
-export const PERMANENT_LOCK_PROVIDERS: ReadonlySet<string> = new Set([
-  LOOMY.id,
-])
 
 /**
  * 汇总一次批量领取的结果。
@@ -739,7 +601,6 @@ function providerIdsOf(
 
 /** RPC 的可选配置；追加字段以兼容现有 provider / modelAdapters 的位置参数调用。 */
 export interface ChannelPackRpcConfig {
-  disableOpencode?: boolean
   nativeOnly?: boolean
   allowedProviders?: readonly string[]
   onRpc?: (call: (method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>) => void
@@ -764,26 +625,11 @@ export interface ChannelPackRpcConfig {
 export function registerChannelPackRpc(
   ctx: Context,
   pool: AccountPool,
-  lobsterai: LobsteraiAuth,
   qoder: QoderAuth,
   /** Qoder **中国版**实例（与 `qoder` 同协议、不同 product；RPC 分支按注册表分派）。 */
   qoderCn: QoderAuth,
   trae: TraeAuth,
-  cline: ClineAuth,
-  loomy: LoomyAuth,
   raccoon: RaccoonAuth,
-  /** MiniMax Code **中国版**实例（OAuth 设备码 + PKCE，与 Qoder 同型但协议不同）。 */
-  minimax: MinimaxAuth,
-  zcode: ZcodeAuth,
-  /**
-   * Gemini（Google Cloud Code Assist 免费线）实例（本地回调 OAuth）。
-   *
-   * ⚠️ **必须排在最后一个 provider 形参位**（即 `zcode` 之后、`modelAdapters`
-   * 之前）：本仓库全部 `registerChannelPackRpc` 调用点都是**位置传参**，历史上已因
-   * 少传/插队错位复发 6 次。新 provider 一律**追加**在末尾，既有的 14 个调用点
-   * 才不用逐个补占位。
-   */
-  gemini: GeminiAuth,
   /**
    * provider → 适配器实例（可选）。
    *
@@ -796,8 +642,8 @@ export function registerChannelPackRpc(
 ): void {
   ctx.inject(['connection'], (connectionCtx) => {
     registerChannelPackEndpoints(
-      connectionCtx as Context, pool, lobsterai,
-      qoder, qoderCn, trae, cline, loomy, raccoon, minimax, zcode, gemini, modelAdapters, config,
+      connectionCtx as Context, pool,
+      qoder, qoderCn, trae, raccoon, modelAdapters, config,
     )
   })
 }
@@ -916,16 +762,10 @@ async function fullCatalogIds(
 function registerChannelPackEndpoints(
   ctx: Context,
   pool: AccountPool,
-  lobsterai: LobsteraiAuth,
   qoder: QoderAuth,
   qoderCn: QoderAuth,
   trae: TraeAuth,
-  cline: ClineAuth,
-  loomy: LoomyAuth,
   raccoon: RaccoonAuth,
-  minimax: MinimaxAuth,
-  zcode: ZcodeAuth,
-  gemini: GeminiAuth,
   modelAdapters?: Readonly<Record<string, ModelCatalogSource>>,
   config: ChannelPackRpcConfig = {},
 ): void {
@@ -1001,15 +841,6 @@ function registerChannelPackEndpoints(
   }
 
   /**
-   * Loomy 短信登录的中间状态（账号 id → { phone, msgid }）。
-   *
-   * 为什么放内存而不是凭据存储：msgid 是**一次性的中间态**（5 分钟有效），
-   * 登录完成后即无意义；写进 `ctx.credentials` 会污染凭据命名空间，
-   * 且它不含任何秘密（不能用于认证）。
-   */
-  const pendingSmsMsgid = new Map<string, { phone: string; msgid: string }>()
-
-  /**
    * 登录后台失败的终态（账号占位条目会被清掉，所以不能再靠 account.list
    * 判断失败）。短暂保留失败原因，让前端下一次 login.poll 能收到可读反馈，
    * 而不是继续等待十分钟直到超时。
@@ -1056,18 +887,19 @@ function registerChannelPackEndpoints(
   ctx.effect?.(() => () => autoCheckin.stop(), 'channel-pack: auto checkin')
 
   /**
-   * 用量徽标读数服务（宿主侧 TTL 缓存 + 只保留启用账号 + 附加订阅读数）。
+   * 用量徽标读数服务（宿主侧 TTL 缓存 + 只保留启用账号）。
    *
-   * ⚠️ 订阅窗口**只对 Cline** 存在（能力矩阵里的 `subscriptionQuota`）—— 这个
-   * 「哪个渠道有窗口」的判断留在装配层，`usage-badge.ts` 因此不认识任何具体渠道。
+   * ⚠️ 必须有这一层：`usage.badge` 端点直接调 `usageBadge.read(...)`，
+   * 装配缺失会在该端点被调用时抛 ReferenceError（本仓库真实踩过 —— 删渠道时
+   * 连装配块一起删了，而调用点还在）。
+   *
+   * `collectQuota` 留给「有独立额度窗口接口」的渠道：本插件当前没有这样的渠道
+   * （原 Cline 的订阅窗口随它一并移除），恒返回 undefined 即表示「本次没有额外读数」。
    */
   const usageBadge = createUsageBadge({
     collectBalances: (provider) =>
       handleMethod('credits.balances', { provider }) as Promise<BadgeRpcResult<RpcCreditsBalancesResponse>>,
-    collectQuota: (provider) =>
-      provider === CLINE.id
-        ? handleMethod('cline.quota', { provider }) as Promise<BadgeRpcResult<RpcClineQuotaResponse>>
-        : undefined,
+    collectQuota: () => undefined,
     listAccounts: (provider) => pool.listAccountsByProvider(provider),
     readPreference: () => badgePreferences.load(),
     readAutoCheckin: () => autoCheckin.state(),
@@ -1123,219 +955,11 @@ function registerChannelPackEndpoints(
   })
 
   /**
-   * 载体页要用的 captcha 配置：**远端优先、拉不到就兜底**。
-   *
-   * ⚠ 远端那次请求**不是**在 GET 处理里现加的额外开销 —— `fetchCaptchaConfig()`
-   * 自带 60 秒 TTL 缓存（`src/zcode-auth.ts` 的 `captchaConfigCacheInstance`），
-   * 与推理侧 `index.ts` 走的是同一份缓存实例。
-   * ⚠ 拉不到（无凭据 / 网络失败 / 该形态的 zcode 实例没有这个方法）一律回落
-   *   `ZCODE_CAPTCHA_FALLBACK`：载体页**必须**给得出去。回 500 的话，client 那边
-   *   表现为「导航成功但没有 `window.__zcodeCaptcha`」，比配置旧一点难查得多。
-   */
-  async function carrierCaptchaConfig(): Promise<ZcodeCaptchaConfig> {
-    try {
-      const remote = await zcode.fetchCaptchaConfig()
-      return remote ?? ZCODE_CAPTCHA_FALLBACK
-    } catch {
-      return ZCODE_CAPTCHA_FALLBACK
-    }
-  }
-
-  /**
-   * 内部载体的载体页（**旧路由：已不是 guest 的入口**，见下面的取证）。
-   *
-   * ## ⚠⚠ 它**不可能**被 `<webview>` guest 加载（评审 C1/C2，2026-10-02 实测取证）
-   * 这条路由挂在应用自己的 host 上，而桌面版主进程对 guest 有两道硬闸
-   * （DSH Desktop 0.2.0-rc.2，`resources/app.asar/lib/main.js`）：
-   * - `allowedNavigation(value)` = http(s) + 无账号密码 + `!isApplicationHost(url)`；
-   * - `isApplicationHost(url)` = **`url.port === host.port` 且（主机相同或回环）**；
-   * - `configureSession().onBeforeRequest` 对命中者直接 `callback({ cancel: true })`；
-   * - guest 的 partition 是 `dsh-sidebar-browser-${randomUUID()}`（**无 `persist:`**），
-   *   Host 的会话 cookie 在 `defaultSession` 里 ⇒ 即便加载到了也过不了 `/api/*` 的认证。
-   *
-   * ⇒ 内部载体的真正入口是**独立回环端口上的小服务**
-   * （`src/captcha-carrier-server.ts`，地址由 `captcha.carrierUrl` 这条 RPC 给）。
-   *
-   * ## 那为什么还留着这条
-   * ① 它是**手工诊断**用的：web 版下 GUI 就是 `http://127.0.0.1:<port>`，
-   *   在浏览器标签里直接打开这一页可以验证「载体页本身能不能产 param」；
-   * ② 表达式只有这一份（`buildCarrierPageHtml`），删路由不会让逻辑分叉；
-   * ③ 保留 = 不破坏既有 `CAPTCHA_CARRIER_PATH` 契约（`tests/unit/zcode-carrier-rpc.spec.ts`）。
-   * ⚠ **别再把 client 导航指回这里** —— 那正是评审 C1/C2 指出的「收益恒为 0」的成因。
-   *
-   * ⚠ 只读、无凭据：这条 GET 不接收任何参数，输出里不含 JWT / token；
-   *   产出的 param 由 guest 自己经 `captcha.contribute` 回传，**不**经这条路由。
-   */
-  connection.fetch.register({
-    path: CAPTCHA_CARRIER_PATH,
-    methods: ['GET'],
-    requestBody: 'buffered' as const,
-    async fetch(request: Request): Promise<Response> {
-      /**
-       * ⚠ 真实挂载下这条**永远轮不到**：dsh 的分发器按 `methods` 集合筛过才调本 handler
-       * （`@deepseek-ai/dsh-client-connection` 里 `fetchRoutes.get(pathname)` +
-       * `methods.has(request.method)`）。留着它不是防御性装饰，是为了**不依赖挂载假设**：
-       * 直接调 handler 的用例（本仓库的 connection 替身就是这么跑的）要能自己判 405，
-       * 且将来有人把 `methods` 放宽成含 POST 时，这里不会静默把 RPC 流量当页面接走。
-       */
-      if (request.method !== 'GET') {
-        return new Response('method not allowed', { status: 405 })
-      }
-      const html = buildCarrierPageHtml(await carrierCaptchaConfig())
-      return new Response(html, {
-        status: 200,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          // 每次都现渲染：配置跟着远端 60 秒 TTL 变，缓存这份只会让载体页拿旧 SceneId。
-          'cache-control': 'no-store',
-        },
-      })
-    },
-  })
-
-  /**
-   * 给 `account.list` 的返回项补上**只存在于凭据里**的展示字段（账号名 / 手机号）。
-   *
-   * ## 为什么只能在 RPC 层补
-   *
-   * 账号池（`channel-pack/state.json`）的条目只有 `id`/`provider`/`nickname`/
-   * `credentialRef` 等字段，**没有**账号名与手机号 —— 它们在**凭据**里
-   * （`user_info.displayName` 与由 17 位 `user_id` 派生的手机号）。
-   * 且 `sanitizeAccounts`（`src/channel-pack-store.ts:173-191`）只保留三个字段，
-   * 写回池也会被丢掉。故每次列表时从**各账号自己的 ref** 现读。
-   *
-   * ## ⚠ 只对 zcode 做，且逐条独立失败
-   *
-   * - 只认 `zcode`：其余 11 个 provider 的凭证形状不同，通读一遍纯属浪费
-   *   （`account.list` 是进面板就发的热路径）。
-   * - 单条解析失败**不影响整行**：拿不到就不补字段，绝不让账号列表整体失败
-   *   （列表可用性远比这两个展示字段重要）。
-   *
-   * ## 取值顺序：先信凭据里已存的，再现场派生
-   *
-   * 新凭据由 `startLogin` 直接写入 `account_name` /
-   * `phone`；**旧凭据**（本次改动之前登录的）没有这两个字段，故现场兜底：
-   * 手机号从 `user_id` 派生、账号名回退到**不像占位串**的 `account_label`。
-   */
-  async function enrichAccountIdentity(
-    accounts: readonly ProviderAccountStatus[],
-    provider: string,
-  ): Promise<ProviderAccountStatus[]> {
-    if (provider !== ZCODE.id) return [...accounts]
-    const out: ProviderAccountStatus[] = []
-    for (const account of accounts) {
-      try {
-        const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-        if (!resolved) { out.push(account); continue }
-        const credential = JSON.parse(resolved.value) as ZcodeCredential
-        const accountName = typeof credential.account_name === 'string'
-          && credential.account_name.trim().length > 0
-          ? credential.account_name.trim()
-          // 旧凭据没有 account_name：只有 `account_label` 不是占位串时才能当名字用。
-          // `id:xxxxxx` 与 `设备xxxxxxxx` 都是兜底产物，展示它们等于没展示。
-          : (typeof credential.account_label === 'string'
-            && credential.account_label.trim().length > 0
-            && !/^id:/.test(credential.account_label)
-            && !/^设备/.test(credential.account_label)
-            ? credential.account_label.trim()
-            : undefined)
-        const phone = typeof credential.phone === 'string' && credential.phone.trim().length > 0
-          ? credential.phone.trim()
-          : phoneFromUserId(credential.user_id)
-        out.push({
-          ...account,
-          ...(accountName !== undefined ? { accountName } : {}),
-          ...(phone !== undefined ? { phone } : {}),
-        })
-      } catch {
-        // 凭据损坏/未配置：保留原条目（这些账号在卡片上会由额度那一栏报错说明）。
-        out.push(account)
-      }
-    }
-    return out
-  }
-
-  /**
-   * 把上游余额**逐桶**映射成 `CreditBalance`。
-   *
-   * ## 为什么必须逐桶（而不是只取首桶）
-   *
-   * `CreditBalance` 的形状是 `{total, packages[], expiredTotal?}` 这类**积分包**
-   * 结构，而 ZCode 是「按模型分的 token 额度池」。上游一个 resource bucket
-   * = 一个模型一段额度，故**一个桶一个包**。
-   *
-   * ⚠ 旧实现只取 `buckets[0]`（经 `result.planName`）拼**一个**包，但
-   * `balance.total` 用的是 `result.remaining`（**全桶汇总**）—— 多桶账号下
-   * 那个包的数字比它自己的 `totalUnits` 还大，自相矛盾，且其余模型的额度
-   * 被**静默丢掉**，用户看不出「GLM-5.3 与 GLM-5.3-Flash 各剩多少」。
-   *
-   * ## 空桶的兜底
-   *
-   * 上游可能一个桶都不给（实测企业版之外仍有账号只有 0 桶）。此时**不能**返回
-   * 空 `packages`（前端会显示成「没有额度」而不是「查不到」），故给一个具名占位包，
-   * 让 UI 至少能显示「0 / 0」并带上 `result.planName`。
-   */
-  function buildZcodeBalance(result: ZcodeBalanceResult): CreditBalance {
-    const packages: CreditBalance['packages'] = result.buckets.map((bucket) => {
-      const remaining = bucket.availableUnits ?? bucket.remainingUnits ?? 0
-      const total = bucket.totalUnits ?? 0
-      return {
-        name: bucket.showName ?? result.planName ?? 'ZCode 免费额度',
-        // ⚠ 单位是 **token**（不是 credit）—— 如实标注，
-        // 避免用户以为 ZCode 有 1 亿积分。
-        unit: 'token',
-        remaining,
-        total,
-        used: Math.max(0, total - remaining),
-        active: true,
-        // ZCode 的额度按日刷新（`period: 'one_time'` 的活动包到点失效），
-        // 故周期起止都留空，只用 `expiredTime` 给到期时刻。
-        cycleStartTime: '',
-        cycleEndTime: '',
-        expiredTime: bucket.expiresAt !== undefined
-          ? new Date(bucket.expiresAt * 1000).toISOString()
-          : (result.expiresAt !== undefined ? new Date(result.expiresAt * 1000).toISOString() : ''),
-      }
-    })
-    if (packages.length === 0) {
-      packages.push({
-        name: result.planName ?? 'ZCode 免费额度',
-        unit: 'token',
-        remaining: result.remaining,
-        total: result.total,
-        used: Math.max(0, result.total - result.remaining),
-        active: true,
-        cycleStartTime: '',
-        cycleEndTime: '',
-        expiredTime: result.expiresAt !== undefined
-          ? new Date(result.expiresAt * 1000).toISOString()
-          : '',
-      })
-    }
-    return {
-      // 仍是**全桶汇总**，与 `packages` 逐项之和一致（`fetchZcodeBalance` 的
-      // `:251-260` 就是这么累加的）。
-      total: result.remaining,
-      // ZCode 不在同一响应里区分「已失效包」，故为 0。
-      expiredTotal: 0,
-      packages,
-    }
-  }
-
-  /**
    * 分发端点方法到对应的处理器。
    *
-   * ⚠️ **opencode 的方法在此之前先试一次**（2026-10-02 修）。
-   *
-   * 背景：`opencode-rpc.ts` 曾自己调 `rpc.register('channel-pack', …)`，以为能与
-   * 本文件的 handler 并存。真机报障「添加失败：unknown method:
-   * opencode.addAnonymous」—— Channel Pack **只有这一条通道**（本函数的
-   * `connection.fetch.register`），它的 `switch` 穷举所有方法，
-   * `default` 直接回 `unknown method` 且不让路。
-   *
-   * ⚠️ 顺序很重要：必须放在 `switch` **之前**、且 `handleOpencodeRpc` 对不认识
-   * 的方法返回 `undefined` —— 否则 opencode 的方法名永远落不到这里，
-   * 反过来（switch 先匹配）又会被别的 provider 的 case 误吞。
+   * 顺序纪律：先做**渠道归属校验**（allowedProviders / isSupportedProvider），
+   * 再进 `switch`。校验必须在前面 —— 否则退役或未注册的 provider 会先被某个
+   * case 误吞，用户看到的错误就变成「方法不存在」而不是真正的「渠道不支持」。
    */
   async function handleMethod(method: string, payload: unknown, signal?: AbortSignal): Promise<unknown> {
     // 旧客户端仍可能携带退役 provider 或历史账号 id。拒绝调用但不删除数据。
@@ -1347,18 +971,11 @@ function registerChannelPackEndpoints(
       if ((request?.provider !== undefined && !allowed.includes(String(request.provider)))
         || (account !== undefined && !allowed.includes(account.provider))
         || (Array.isArray(request?.providers) && request.providers.some(id => !allowed.includes(String(id))))) {
-        return { ok: false, error: { code: 'provider-unsupported', message: '仅支持 Loomy、Raccoon、Qoder 中国版。' } }
+        return { ok: false, error: { code: 'provider-unsupported', message: '仅支持已启用的渠道。' } }
       }
     }
     if ((request?.provider !== undefined && !isSupportedProvider(request.provider)) || (account !== undefined && !isSupportedProvider(account.provider))) {
       return { ok: false, error: { code: 'provider-unsupported', message: '不支持此渠道。' } }
-    }
-    if (method.startsWith('opencode.')) {
-      if (config.disableOpencode === true) {
-        return { ok: false, error: { code: 'provider-disabled', message: 'OpenCode account integration is disabled in this host' } }
-      }
-      const handled = await handleOpencodeRpc(ctx, pool, method, payload)
-      if (handled !== undefined) return handled
     }
     switch (method) {
       case 'account.list': {
@@ -1370,15 +987,12 @@ function registerChannelPackEndpoints(
             !!await pool.resolveCredentialForAccount(account.id)))
           return { ok: true, value: { accounts: accounts.filter((_account, index) => ready[index]) } }
         }
-        return { ok: true, value: { accounts: await enrichAccountIdentity(accounts, req.provider) } }
+        return { ok: true, value: { accounts } }
       }
 
       case 'account.create': {
         const req = payload as RpcCreateAccountRequest
         const { provider } = req
-        if (provider === 'opencode' && config.disableOpencode === true) {
-          return { ok: false, error: { code: 'provider-disabled', message: 'OpenCode account integration is disabled in this host' } }
-        }
         const id = `${provider}-${shortId()}`
         const suffix = shortId().toUpperCase()
         // ⚠️ 凭据 ref 前缀只允许 `A-Z0-9`（既有全部 ref 都是这个字符集），而
@@ -1388,33 +1002,7 @@ function registerChannelPackEndpoints(
         // ⚠️ 必须与 `channel-pack-store.ts` 的 REF_PREFIX_TO_PROVIDER 表一致，
         // 否则 `state.json` 丢失时该 provider 的账号无法从凭据文件恢复。
         const refName = `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '')}_ACCOUNT_${suffix}`
-if (provider === LOBSTERAI.id) {
-
-          const started = await lobsterai.startLogin({ refName })
-          await pool.addAccount({
-            id,
-            provider: LOBSTERAI.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-          started.result.then(async (loginResult) => {
-            const credential = parseLobsteraiCredential(loginResult.access)
-            await pool.updateAccount(id, {
-              // ⚠️ 用 `lobsteraiDisplayNickname`：服务端把**手机号本身**当昵称
-              // 下发且只脱敏到「露末 4 位」，需归一化为末 2 位（用户要求）。
-              nickname: lobsteraiDisplayNickname(credential, id),
-              expiresAt: credential !== undefined ? lobsteraiCredentialExpiresAtMs(credential) : undefined,
-              refreshable: credential !== undefined && isLobsteraiRefreshable(credential),
-            })
-          }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${LOBSTERAI.id} login failed for ${id}: ${String(error)}`)
-            void pool.removeAccount(id).catch(() => {})
-          })
-          return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
-        } else if (isQoderFamily(provider)) {
+        if (isQoderFamily(provider)) {
 
           // 但登录机制不同：它是**设备码轮询**（不开本地回调服务器，见 src/qoder-oauth.ts），
 
@@ -1493,100 +1081,8 @@ if (provider === LOBSTERAI.id) {
             void pool.removeAccount(id).catch(() => {})
           })
           return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
-        } else if (provider === CLINE.id) {
-          // Cline 是 **WorkOS 设备码轮询**登录（见 src/cline-oauth.ts）：
-          // 与 Qoder 同为「不开本地回调服务器」的轮询式，但判据形态不同 ——
-          // Qoder 看 HTTP 404，Cline 看响应体的 `error: authorization_pending`。
-          //
-          // ⚠️ 与 Qoder 的另一处差异：`startLogin` 内部要先发一次
-          // `POST {workOsBase}/user_management/authorize/device` 拿到设备码，
-          // 才能返回 loginUrl（Qoder 的 URL 是纯本地构造的）。那只是一次
-          // 快速 POST，仍远快于浏览器手势窗口，故两步式的理由与 Qoder 一致。
-          const started = await cline.startLogin({ refName })
-          // 先登记启用的占位条目（无凭据），使前端 login.poll 能立即看到该账号；
-          // 登录成功后再回填昵称/有效期等真实字段。
-          await pool.addAccount({
-            id,
-            provider: CLINE.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-          started.result.then(async (loginResult) => {
-            const credential = parseClineCredential(loginResult.access)
-            await pool.updateAccount(id, {
-              nickname: credential?.nickname !== undefined && credential.nickname.length > 0
-                ? credential.nickname
-                : id,
-              expiresAt: credential !== undefined ? clineCredentialExpiresAtMs(credential) : undefined,
-              refreshable: credential !== undefined && isClineRefreshable(credential),
-            })
-          }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${CLINE.id} login failed for ${id}: ${String(error)}`)
-            // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
-            void pool.removeAccount(id).catch(() => {})
-          })
-          return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
-        } else if (provider === LOOMY.id) {
-          // Loomy 走**微信扫码**登录（与其余 provider 同为「两步式」）：
-          // 起本地服务器承载弹窗页（内联二维码 + 轮询 + 首次绑手机号表单），
-          // 立即返回 `loginUrl` 让前端 `window.open`。
-          //
-          // ⚠️ **真实缺陷**（用户报障「新建账号失败：Loomy 短信登录需要手机号」）：
-          // 早期实现要求 `account.create` **必须带 phone**，但表单要等它返回
-          // `loginMode:'sms'` 才渲染 —— 用户根本没机会输入手机号，直接报错，
-          // 表单永远出不来。**顺序死锁**。改用微信扫码后此矛盾消失：
-          // 手机号只在「首次扫码」时由弹窗页自己收集。
-          //
-          // ⚠️ 先登记**占位条目**（无凭据），使前端 `login.poll` 能立即看到该账号；
-          // 登录成功后再回填昵称/有效期。
-          await pool.addAccount({
-            id,
-            provider: LOOMY.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-
-          let started
-          try {
-            started = await loomy.startWechatLogin()
-          } catch (error) {
-            // 取二维码 uuid 失败（网络/页面结构变化）：删掉占位条目，不留幽灵账号。
-            void pool.removeAccount(id).catch(() => {})
-            const reason = error instanceof Error ? error.message : String(error)
-            throw new Error(`无法启动 Loomy 微信登录（获取二维码失败）：${reason}`)
-          }
-
-          started.result.then(async (login) => {
-            const result = await loomy.persistWechatLogin(login, { refName })
-            const credential = JSON.parse(result.access) as LoomyCredential
-            await pool.updateAccount(id, {
-              // 用手机号尾号让多账号可区分（Loomy 无独立昵称接口；
-              // 微信昵称可能有，优先用它）。
-              nickname: login.nickname !== undefined && login.nickname.length > 0
-                ? login.nickname
-                : credential.phone.length >= 4
-                  ? `Loomy ${credential.phone.slice(-4)}`
-                  : id,
-              expiresAt: result.expires > 0 ? result.expires : undefined,
-              // ⚠️ 恒 false：Loomy 无续期端点。
-              refreshable: false,
-            })
-          }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${LOOMY.id} wechat login failed for ${id}: ${String(error)}`)
-            // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
-            void pool.removeAccount(id).catch(() => {})
-          })
-
-          return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
         } else if (isRaccoonFamily(provider)) {
-          // raccoon（免费版 / 订阅版同族）走**本地页承载**的微信扫码 / 短信双路径登录
-          //（与 Loomy 同型）：
+          // raccoon（免费版 / 订阅版同族）走**本地页承载**的微信扫码 / 短信双路径登录：
           // `startLogin` 立即返回指向 127.0.0.1 的 `loginUrl`，后台 await 结果。
           //
           // ⚠️ 绝不能在用户授权完成后才返回 loginUrl —— `window.open` 只在
@@ -1640,11 +1136,10 @@ if (provider === LOBSTERAI.id) {
               // 相近的默认名 → 多账号重名、无法区分。
               //
               // 故追加**手机号尾号**消歧：`RaccoonAva (1100)`。
-              // 与 Loomy 的 `Loomy 2222` 同策略（那边没有真实名字可用，
-              // 这边有，所以保留原名再挂尾号）。
+              // 保留服务端原名，再挂手机号尾号消歧。
               nickname: buildRaccoonNickname(saved, id),
               expiresAt: result.expires > 0 ? result.expires : undefined,
-              // ⚠️ raccoon **有** refresh 端点，与 Loomy（恒 false）不同。
+              // ⚠️ raccoon **有** refresh 端点，这里是真续期。
               refreshable: result.refreshable,
               // 与昵称/有效期**同一次落盘**：分两次写会多一次整文档重写，
               // 且中途失败会留下「有昵称无套餐」的半态。
@@ -1658,219 +1153,6 @@ if (provider === LOBSTERAI.id) {
           })
 
           return { ok: true, value: { accountId: id, loginUrl: raccoonStarted.loginUrl } }
-        } else if (provider === MINIMAX.id) {
-          // MiniMax Code（中国版）走 **OAuth 设备码 + PKCE**（与 Qoder 同型：
-          // 不起本地监听端口，`startLogin` 立即返回指向 `agent.minimax.cn` 的
-          // `verification_uri_complete`，后台轮询换 token）。
-          //
-          // ⚠️ 绝不能在用户授权完成后才返回 loginUrl —— `window.open` 只在
-          //    用户手势窗口内有效，那时手势早已过期、弹窗必被拦截。
-          //
-          // ⚠️ 先登记**占位条目**（无凭据），使前端 `login.poll` 能立即看到该账号；
-          //    登录成功后再回填昵称与 `expiresAt`。失败则删除占位条目。
-          //    写法照 `RACCOON.id` 分支（那是已验证的形态）。
-          await pool.addAccount({
-            id,
-            provider: MINIMAX.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-
-          let minimaxStarted: StartedMinimaxLoginFlow
-          try {
-            minimaxStarted = await minimax.startLogin()
-          } catch (error) {
-            // 设备码申请失败：删掉占位条目，不留幽灵账号。
-            void pool.removeAccount(id).catch(() => {})
-            const reason = error instanceof Error ? error.message : String(error)
-            throw new Error(`无法启动 MiniMax 登录（设备码申请失败）：${reason}`)
-          }
-
-          minimaxStarted.result.then(async (credential) => {
-            const result = await minimax.persistLogin(credential, { refName })
-            await pool.updateAccount(id, {
-              // ⚠️ `persistLogin` 的 `accountId` 对真实凭据**恒为 `undefined`** ——
-              // MiniMax 的 `access_token` **不是 JWT**（`mmoat_` 前缀、60 字符、
-              // 0 个点），故 `decodeJwtSub` 恒不命中、`account_id` 不会被写入。
-              // 这是**预期行为**（账号 id 由本层生成），不是缺陷：此时退化为 `id`。
-              // 一旦上游改发 JWT，这里会自动用上服务端的 account_id。
-              nickname: result.accountId === undefined ? id : `MiniMax ${result.accountId.slice(0, 8)}`,
-              // ⚠️ **必须用 `minimaxCredentialExpiresAtMs`**（优先 `expires_at`，
-              // 它由 OAuth 响应的 `expires_in` 自算）—— 不能指望从 token 解 JWT，
-              // 那样会得到 `undefined`，UI 永远显示「未知」。
-              expiresAt: minimaxCredentialExpiresAtMs(credential),
-              // ⚠️ MiniMax **有** refresh 端点（与 Loomy 恒 false 不同）。
-              refreshable: isMinimaxRefreshable(credential),
-            })
-          }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${MINIMAX.id} login failed for ${id}: ${String(error)}`)
-            // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
-            void pool.removeAccount(id).catch(() => {})
-          })
-
-          return { ok: true, value: { accountId: id, loginUrl: minimaxStarted.loginUrl } }
-        } else if (provider === ZCODE.id) {
-          /**
-           * ## ⚠ 本分支**不再读官方客户端的本机凭据**（2026-10-05 用户决策）
-           *
-           * 早先有两道「先复用本机已有账号」的短路（孤儿条目收编 + 同 `user_id`
-           * 去重返回），它们依赖解密 `~/.zcode/v2/credentials.json` ——
-           * **已整体删除**（理由见 `src/zcode.ts` 文件头）。⇒ 现在点「添加账号」
-           * **一律**新起一轮 OAuth。
-           *
-           * ⚠ 「点一次多一条」仍由**登录成功后**的去重兜住（下方
-           * `loginResult` 分支里的 `findAccountIdByIdentityField`）——
-           * 判据是插件自己拿到的 `user_id`，不再依赖本机文件。
-           */
-          const started = await zcode.startLogin({
-            refName,
-            // ⚠️ 缺省 `'bigmodel'`（既有行为不变）；`'zai'` 走 chat.z.ai 国际版。
-            // ⚠️ 必须过白名单（真实修复，Gitee issue IKJLK3 E2）：`req` 是**客户端
-            //   自报**的（RPC 载荷没有 schema 校验），原先只做 `?? 'bigmodel'` 兜底，
-            //   任何其它字符串都会被原样送进 `startZcodeLogin` → 打到一个不存在的
-            //   授权端点，表现为「授权页打不开 / 轮询到超时」这类难以定位的失败。
-            //   未登记值一律回落到缺省渠道并记日志（不报错，见下）。
-            provider: normalizeZcodeLoginProvider(req.zcodeProvider),
-          })
-          // 先登记占位条目（无凭据），使前端 `login.poll` 能立即看到该账号；
-          // 登录成功后再回填昵称。失败则删除占位条目。
-          await pool.addAccount({
-            id,
-            provider: ZCODE.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            // ⚠ 静态凭据（JWT 无 exp），没有 refresh 端点 —— 恒 false。
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-          started.result.then(async (saved) => {
-            /**
-             * ★★ **重复账号去重**（真实缺陷，2026-10-02）。
-             *
-             * ## 为什么必须做
-             *
-             * 同一账号点两次「添加账号」会得到**两条独立条目** ——
-             * 它们各自参与选号、各自消耗额度，而 UI 上看起来像两个账号
-             * （昵称也一样，无从分辨）。此前 `user_id` 甚至**没有被存进
-             * 凭据**，连判据都没有。
-             *
-             * ## 判据必须是 `user_id`，不能用 `device_mid`
-             *
-             * `device_mid` 在插件登录路径下由我们**随机生成**
-             * （`generateDeviceMid()`，实测其值不被服务端绑定校验）——
-             * **同一账号每次重新登录都会变**。拿它判重会把同一账号
-             * 判成不同账号，反而**永远去重不掉**。
-             * `user_id` 是**服务端下发**的稳定标识，才正确。
-             *
-             * ## 时机：必须在**登录成功之后**
-             *
-             * 登录前只有占位条目（无凭据、无 `user_id`），无从判断 ——
-             * 故去重放在这个回调里，不在 `addAccount` 之前。
-             *
-             * ## ⚠ 处置：**不删条目**，而是把它标成**停用**并改名
-             *
-             * 为什么不直接 `removeAccount(id)`：前端 `login.poll` 是靠
-             * 「条目还在 + 凭据已写入」判断登录成功的。
-             * **删掉条目会让它显示成「登录失败」**，而事实恰恰相反
-             * （登录成功了，只是这个账号已存在）—— 那会误导用户去反复重试。
-             *
-             * 停止则该条目：① 仍在列表里（`login.poll` 如实报告成功）；
-             * ② `enabled: false` ⇒ **不参与自动选号**（这是去重的实际效果）；
-             * ③ 昵称写明「重复」⇒ 用户一眼能看出发生了什么、可自行删除。
-             *
-             * ⚠ 保留**原来那条**（`existingId`）继续可用，不动它：它可能
-             * 已被排序、改名或承载限流记录，删它损失更大。
-             */
-            const userId = saved.credential.user_id
-            const label = saved.credential.account_label ?? id
-            if (typeof userId === 'string' && userId.length > 0) {
-              const existingId = await pool.findAccountIdByIdentityField(
-                ZCODE.id,
-                'user_id',
-                userId,
-              )
-              if (existingId.length > 0 && existingId !== id) {
-                ctx.logger.warn(
-                  `[channel-pack] zcode 该账号（user_id=${userId}）已存在于 ${existingId}，`
-                  + `新条目 ${id} 已自动停用（不参与选号）`,
-                )
-                await pool.updateAccount(id, {
-                  nickname: `ZCode ${label}（重复，已停用）`,
-                  enabled: false,
-                })
-                return
-              }
-            }
-            await pool.updateAccount(id, { nickname: `ZCode ${label}` })
-          }).catch((error: unknown) => {
-            ctx.logger.warn(`[channel-pack] background ${ZCODE.id} login failed for ${id}: ${String(error)}`)
-            // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
-            void pool.removeAccount(id).catch(() => {})
-          })
-          return { ok: true, value: { accountId: id, loginUrl: started.loginUrl } }
-        } else if (provider === GEMINI.id) {
-          /**
-           * Gemini（Cloud Code Assist）走**浏览器回调式 OAuth**（本地
-           * `createServer` 监听 `127.0.0.1` 的 `/oauth-callback`）。
-           *
-           * ⚠️ 先登记**占位条目**（无凭据），使前端 `login.poll` 能立即看到
-           * 该账号；登录成功后再回填昵称与 `expiresAt`。失败则删除占位条目，
-           * 不留幽灵账号（照 MINIMAX.id 分支的已验证形态）。
-           */
-          await pool.addAccount({
-            id,
-            provider: GEMINI.id,
-            nickname: id,
-            enabled: true,
-            credentialRef: refName,
-            refreshable: false,
-            createdAt: Date.now(),
-          })
-          pendingLoginFailures.delete(id)
-
-          let geminiStarted: StartedGeminiLoginFlow
-          try {
-            geminiStarted = await gemini.startLogin()
-          } catch (error) {
-            // 回调端口占用/网络失败：删掉占位条目，不留幽灵账号。
-            void pool.removeAccount(id).catch(() => {})
-            const reason = error instanceof Error ? error.message : String(error)
-            throw new Error(`无法启动 Gemini 登录（本地回调服务启动失败）：${reason}`)
-          }
-
-          geminiStarted.result.then(async (credential) => {
-            // ⚠️ 不接收 `persistLogin` 的返回值：它给的是 OIDC `sub`，只适合当稳定
-            // 标识。展示名一律走 `geminiAccountLabel`（见下）。
-            await gemini.persistLogin(credential, { refName })
-            await pool.updateAccount(id, {
-              // ⚠️ 用 `geminiAccountLabel`（邮箱优先）而非 `accountId.slice(0, 8)`：
-              // `sub` 是 21 位数字，截前 8 位得到 `Gemini 10500520` 这种**不可辨认**
-              // 的展示名（用户报障 2026-10-03）。`sub` 的价值是「稳定标识」，不是
-              // 「显示名」—— 展示要的是可辨识，邮箱正好。
-              // 取不到邮箱时该函数回退 `sub`，两者都无则退化为池 id。
-              nickname: geminiAccountLabel(credential) ?? id,
-              // ⚠️ **必须用 `geminiCredentialExpiresAtMs`**：它认 `expiry`
-              //（RFC3339）与 `expires_in`，取不到就返回 `undefined` ——
-              // 传 `undefined` 是「不知道」，不会被写成 0 而让 UI 显示「已过期」。
-              expiresAt: geminiCredentialExpiresAtMs(credential),
-              // ⚠️ Google OAuth 默认 `access_type=offline`，故 refresh_token
-              // 必定下发；这里仍按凭据本体如实判定，不写死 true。
-              refreshable: isGeminiRefreshable(credential),
-            })
-            pendingLoginFailures.delete(id)
-          }).catch((error: unknown) => {
-            const reason = error instanceof Error ? error.message : String(error)
-            ctx.logger.warn(`[channel-pack] background ${GEMINI.id} login failed for ${id}: ${reason}`)
-            pendingLoginFailures.set(id, reason.slice(0, 500))
-            // 登录失败：移除占位条目，避免留下无凭据的幽灵账号
-            void pool.removeAccount(id).catch(() => {})
-          })
-
-          return { ok: true, value: { accountId: id, loginUrl: geminiStarted.loginUrl } }
         } else {
           return { ok: false, error: { code: 'bad-request', message: `unknown provider: ${provider}` } }
         }
@@ -1938,9 +1220,6 @@ if (provider === LOBSTERAI.id) {
           // 调用方是仓库外的脚本/手工 RPC。下面三处历史注释曾把它写成
           // 「账号卡片的刷新按钮」——那是失实的，会把排障的人引到不存在的 UI。
           switch (entry.provider) {
-            case LOBSTERAI.id:
-              await lobsterai.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
             case QODER.id:
             case QODER_CN.id:
               // 同协议族：按 provider 找到对应实例。
@@ -1948,19 +1227,11 @@ if (provider === LOBSTERAI.id) {
               // ⚠️ **不要**图省事写 `qoder.refreshAccountCredential(...)` ——
               // 那会让中国版账号的续期去刷国际版的凭据（两站 token 不通用，
               // CN 永远续不动而国际版被无谓刷一次）。该串用由
-              // `lobsterai-rpc-dispatch.spec.ts` 的行为级用例锁死（已做反向验证）。
+              // 行为级用例锁死（已做反向验证）。
               await requireQoderFamily(entry.provider).auth.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case TRAE.id:
               await trae.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
-            case CLINE.id:
-              await cline.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
-            case LOOMY.id:
-              // ⚠️ Loomy **没有 refresh 端点**：这里只能做**有效性探测**，
-              // 失效时抛「请重新登录」。见 LoomyAuth.refreshAccountCredential。
-              await loomy.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             case RACCOON.id:
             case RACCOON_PRO.id:
@@ -1973,30 +1244,6 @@ if (provider === LOBSTERAI.id) {
               // ⚠️ 按 provider 取 auth 实例（照 Qoder 家族）：写死 `raccoon` 会让
               // 订阅版账号的续期去读写免费版的默认 ref。
               await requireRaccoonFamily(entry.provider).auth.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
-            case MINIMAX.id:
-              // MiniMax **有** refresh 端点（`/oauth2/token` 的 refresh_token 授权），
-              // 这里是真续期。⚠️ 必须传 pool + entry.id —— 续期后要把新的
-              // `expiresAt` 写回账号池，否则 UI 一直显示「已过期」。
-              await minimax.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
-            case ZCODE.id:
-              /**
-               * zcode **没有 refresh 端点**（凭据是静态的，与 Loomy 同类）。
-               *
-               * 但这个方法仍做实事：**逐账号重读自己的 ref 并规范化回写** ——
-               * 用户重新登录后重新调用 `account.refresh` 即可生效而无需重启 DSH。
-               * 凭据不可用时如实抛错（引导用户重新登录该账号）。
-               */
-              await zcode.refreshAccountCredential(entry.credentialRef, pool, entry.id)
-              break
-            case GEMINI.id:
-              // Gemini **有** refresh 端点（`oauth2.googleapis.com/token` 的
-              // `refresh_token` grant），这里是真续期。
-              // ⚠️ 必须传 pool + entry.id —— 续期后要把新的 `expiresAt` 写回
-              // 账号池，否则 UI 一直显示「已过期」而实际能正常发消息。
-              // ⚠️ Google 会**轮换 refresh_token**，`GeminiAuth` 内部已回写新值。
-              await gemini.refreshAccountCredential(entry.credentialRef, pool, entry.id)
               break
             default:
               throw new Error(`Unknown provider: ${entry.provider}`)
@@ -2025,7 +1272,7 @@ if (provider === LOBSTERAI.id) {
            * `account.refresh` **全仓库零调用方**：面板 `plugin-src/client/channel-pack.js`
            * 的 42 处 `rpcCall(` 里没有它（账号卡片的按钮是 测试/重测/重置/停用/代理/
            * 指纹/删除，**没有「刷新」**）；另两处 `rpcCall(变量)` 的实参经追溯只有
-           * `opencode.*` 四个方法。它从来就是给仓库外脚本/手工 RPC 用的端点。
+           * 仓库外脚本/手工 RPC 用的端点。
            * ⇒ 这是**对外部调用方的破坏性契约变更**：原先误判的调用方会从「静默错」
            * 变成 `unwrapRpcResult` 抛错，属预期的「提前炸」。成功路径仍是
            * `ok:true + value.success:true`，未变。
@@ -2038,7 +1285,7 @@ if (provider === LOBSTERAI.id) {
            * `Select-String -Path plugin-src\client\*.js -Pattern "rpcCall\('account\."`
            * （应零命中；`account.refreshable` 是另一个字段名，不是端点）。
            *
-           * 回归用例在 `tests/unit/lobsterai-rpc-dispatch.spec.ts` 的
+           * 回归用例在行为级用例的
            * 「issue IKJOZA」段（锁死「失败不得是 ok:true」+「失败必须带原因」）。
            */
           return {
@@ -2062,114 +1309,20 @@ if (provider === LOBSTERAI.id) {
         const entry = accounts.find((a) => a.id === req.accountId)
         if (!entry) return { ok: true, value: { done: false } }
         // 检查凭据是否已实际写入（占位条目没有凭据）。
-        //
-        // ⚠ **不能只判「resolve 出了非空字符串」**（审查发现）：占位条目被
-        //   `credentials.set` 写入过一段**残缺 JSON** 时（例如只有 `zcode_jwt`、
-        //   没有 `device_mid`），`resolve` 照样返回字符串，UI 就会弹「账号已添加」
-        //   而实际上该账号一发请求就 `凭据无效`。这里对 zcode 追加**形状校验**。
         const ref = credentialRef(entry.credentialRef)
         const resolved = await ctx.credentials.resolve(ref)
         if (!resolved) return { ok: true, value: { done: false } }
-        if (entry.provider === ZCODE.id) {
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(resolved.value)
-          } catch {
-            return { ok: true, value: { done: false } }
-          }
-          if (!isUsableZcodeCredential(parsed)) return { ok: true, value: { done: false } }
-        }
         return { ok: true, value: { done: true, success: true } }
       }
 
       /**
-       * 下发短信验证码（**仅 Loomy，备用登录路径**）。
-       *
-       * ⚠️ 主路径是**微信扫码**（`account.create` 返回本地弹窗页）。
-       * 本端点与 `login.submitSms` 保留为**可独立调用的备用路径** ——
-       * 不依赖 `account.create` 的中间态（早期版本从内存表取手机号，
-       * 改微信登录后那张表不再被填充，会退化成坏死的死代码）。
-       *
-       * 手机号由**本端点自己接收**，故可脱离 `account.create` 单独使用。
-       */
-      case 'login.sendSms': {
-        const req = payload as RpcSendSmsRequest
-        if (req.provider !== LOOMY.id) {
-          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
-        }
-        const phone = typeof req.phone === 'string' ? req.phone.trim() : ''
-        if (!/^1[3-9]\d{9}$/.test(phone)) {
-          return { ok: false, error: { code: 'bad-request', message: '需要 11 位有效手机号（phone）' } }
-        }
-        const msgid = await loomy.sendSmsCode(phone)
-        // 暂存在内存，供 submitSms 取用（一次性中间态，不写凭据存储）。
-        pendingSmsMsgid.set(req.accountId, { phone, msgid })
-        return { ok: true, value: { msgid } satisfies RpcSendSmsResponse }
-      }
-
-      /**
-       * 提交短信验证码完成登录（**仅 Loomy，备用登录路径**）。
-       *
-       * 成功后：写凭据 → 回填账号昵称/有效期 → 清理中间态。
-       */
-      case 'login.submitSms': {
-        const req = payload as RpcSubmitSmsRequest
-        if (req.provider !== LOOMY.id) {
-          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
-        }
-        const pending = pendingSmsMsgid.get(req.accountId)
-        if (pending === undefined || pending.msgid.length === 0) {
-          return {
-            ok: true,
-            value: { done: false, error: '请先发送验证码' } satisfies RpcSubmitSmsResponse,
-          }
-        }
-        const account = pool.findAccount(req.accountId)
-        if (account === undefined) {
-          return {
-            ok: true,
-            value: { done: false, error: '账号不存在（可能已被删除）' } satisfies RpcSubmitSmsResponse,
-          }
-        }
-        try {
-          const result = await loomy.loginWithSmsCode(pending.phone, req.code, pending.msgid, {
-            refName: account.credentialRef,
-          })
-          const credential = JSON.parse(result.access) as LoomyCredential
-          await pool.updateAccount(req.accountId, {
-            // Loomy 无昵称接口，用手机号尾号让多账号可区分（比 `loomy-xxxx` 有用）。
-            nickname: credential.phone.length >= 4
-              ? `Loomy ${credential.phone.slice(-4)}`
-              : req.accountId,
-            expiresAt: result.expires > 0 ? result.expires : undefined,
-            // ⚠️ 恒 false：Loomy 无续期端点。
-            refreshable: false,
-          })
-          pendingSmsMsgid.delete(req.accountId)
-          return { ok: true, value: { done: true } satisfies RpcSubmitSmsResponse }
-        } catch (error) {
-          // ⚠️ 登录失败**不删除占位条目**：用户可能只是验证码输错，
-          // 保留条目让他能重试（`login.sendSms` 会重新发码）。
-          return {
-            ok: true,
-            value: {
-              done: false,
-              error: error instanceof Error ? error.message : String(error),
-            } satisfies RpcSubmitSmsResponse,
-          }
-        }
-      }
-
-      /**
-       * 查询新手任务 / 一次性奖励状态（**Loomy** 的新手任务、**Raccoon 族**
-       *（免费版 / 订阅版）的登录奖励，只读）。
+       * 查询一次性奖励状态（Raccoon 族免费版 / 订阅版的登录奖励，只读）。
        *
        * ⚠️ 只读：**不得**在此触发任何 `complete`/`claim`（面板挂载时会调用它）。
-       * ⚠️ 两类 provider 共用本端点，故判据是「属于其中之一」而非只认 Loomy。
        */
       case 'onboarding.status': {
         const req = payload as RpcOnboardingStatusRequest
-        if (req.provider !== LOOMY.id && !isRaccoonFamily(req.provider)) {
+        if (!isRaccoonFamily(req.provider)) {
           return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
         }
         const account = pool.findAccount(req.accountId)
@@ -2182,7 +1335,7 @@ if (provider === LOBSTERAI.id) {
         }
         if (isRaccoonFamily(req.provider)) {
           // raccoon 只有**一项**一次性奖励（桌面端登录奖励 3000 分），
-          // 把它映射成 Loomy 那套「任务」形状的一项，复用同一个 RPC 与 UI。
+          // 把它映射成统一的「任务」形状的一项，复用同一个 RPC 与 UI。
           // ⚠️ 已领状态靠**账单反查**（服务端没有单独的状态端点）。
           // ⚠️ 用**该 provider 自己的** auth 实例：两个产品账号池独立，
           // 借免费版实例会读另一个池的默认凭据。
@@ -2200,85 +1353,17 @@ if (provider === LOBSTERAI.id) {
             } satisfies RpcOnboardingStatusResponse,
           }
         }
-        const credential = JSON.parse(resolved.value) as LoomyCredential
-        const state = await loomy.fetchOnboardingTasks(credential)
-        return {
-          ok: true,
-          value: {
-            tasks: state.tasks,
-            earned: state.earned,
-            total: state.total,
-            titles: { ...LOOMY_TASK_TITLES },
-            points: { ...LOOMY_TASK_POINTS },
-          } satisfies RpcOnboardingStatusResponse,
-        }
       }
 
       /**
-       * 「锁定永久积分」开关（读 / 写，**provider 维度**）。
-       *
-       * **用户需求**：锁定后选号只允许消耗**会近期作废**的积分，永久积分不参与 ——
-       * 只剩永久积分的账号在锁定期间等同于不可用（「锁定后没有临时积分后找
-       * 可用账号就是没有可用账号」）。解锁后恢复「没临时积分就用永久积分」。
-       *
-       * ⚠️ 开关是 **provider 级**（不分账号），持久化在
-       * `$DSH_HOME/channel-pack/permanent-locks.json` 的 `locks` 表里（**不放 state.json**：
-       * 那份文档同机多 profile 共享，另一条工作区的旧版本整体重写它时不会带上
-       * 自己不认识的键 —— 理由见 `src/permanent-lock-store.ts` 文件头）
-       * （`loomyPermanentLocked` 是同一值的兼容副本，见 `channel-pack-store.ts`）。
-       *
-       * ⚠️ `locked` 省略时**只读**（供面板初始化），给出布尔值才写入。
-       */
-      case 'credits.permanentLock':
-      /**
-       * Loomy 的历史端点名 —— 与上面**同一实现**，只是 provider 固定为 loomy
-       * （老客户端 bundle 仍在调它，直接删会让 Loomy 面板的按钮静默失效）。
-       */
-      case 'loomy.permanentLock': {
-        const req = payload as RpcPermanentLockRequest & RpcLoomyPermanentLockRequest
-        // 老端点不认 provider 参数：即便载荷里带了也别照着执行。
-        const provider = method === 'loomy.permanentLock'
-          ? LOOMY.id
-          : (typeof req.provider === 'string' ? req.provider.trim() : '')
-        if (!PERMANENT_LOCK_PROVIDERS.has(provider)) {
-          return {
-            ok: false,
-            error: { code: 'bad-request', message: `该 provider 不支持锁定永久积分：${provider || '(空)'}` },
-          }
-        }
-        const lockResponse = (): RpcPermanentLockResponse => ({
-          provider,
-          locked: pool.permanentLocked(provider),
-        })
-        if (req.locked === undefined) {
-          return { ok: true, value: lockResponse() }
-        }
-        if (typeof req.locked !== 'boolean') {
-          return { ok: false, error: { code: 'bad-request', message: 'locked 必须是布尔值' } }
-        }
-        await pool.setPermanentLocked(provider, req.locked)
-        // ⚠️ 与 `model.setDisabled` 同理：本次写入会改变**选号结果**
-        // （进而改变哪些账号会被使用），故广播一次让界面重新读取状态。
-        // 包 try/catch：通知失败不能反噬已经落盘的开关。
-        try {
-          ctx.emit('llm/adapters-updated')
-        } catch (error) {
-          ctx.logger?.warn?.(`[channel-pack] 广播 llm/adapters-updated 失败（不影响已保存的开关）: ${String(error)}`)
-        }
-        return { ok: true, value: lockResponse() }
-      }
-
-      /**
-       * 领取新手任务 / 一次性奖励（**Loomy** 的新手任务、**Raccoon 族**的
-       * 登录奖励，一次性）。
+       * 领取一次性奖励（Raccoon 族的登录奖励）。
        *
        * ⚠️ 这是**写**操作，且**每号只能领一次** —— 与 `credits.claimAll`
        *（每日签到）语义完全不同，故独立端点。
        */
       case 'onboarding.claim': {
         const req = payload as RpcOnboardingClaimRequest
-        // ⚠️ 两类 provider 共用本端点（Loomy 的新手任务 / Raccoon 族的登录奖励）。
-        if (req.provider !== LOOMY.id && !isRaccoonFamily(req.provider)) {
+        if (!isRaccoonFamily(req.provider)) {
           return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
         }
         const account = pool.findAccount(req.accountId)
@@ -2326,21 +1411,6 @@ if (provider === LOBSTERAI.id) {
               total: points,
             } satisfies RpcOnboardingClaimResponse,
           }
-        }
-        const credential = JSON.parse(resolved.value) as LoomyCredential
-        const result = await loomy.claimOnboardingTasks(credential)
-        return {
-          ok: true,
-          value: {
-            claimed: result.claimed.map((item) => ({
-              key: item.key,
-              title: LOOMY_TASK_TITLES[item.key] ?? item.key,
-              points: item.points,
-            })),
-            skipped: result.skipped,
-            earned: result.earned,
-            total: result.total,
-          } satisfies RpcOnboardingClaimResponse,
         }
       }
 
@@ -2472,19 +1542,6 @@ if (provider === LOBSTERAI.id) {
       // 各渠道显式分派协议，未知或退役渠道不调用任何默认端点。
       case 'credits.status': {
         const req = payload as RpcCreditsStatusRequest & { accountId?: string }
-        if (req.provider === LOBSTERAI.id) {
-          // LobsterAI 没有独立的「签到状态」端点：活动状态要经
-
-          // CheckinStatus 不同构（无 streak/dailyCredit 等概念）。
-          // 故这里如实返回 null，而不是臆造一份状态对象。
-          const accounts = await pool.listAccounts(req.provider)
-          return {
-            ok: true,
-            value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
-            } satisfies RpcCreditsStatusResponse,
-          }
-        }
         if (req.provider === TRAE.id || isQoderFamily(req.provider)) {
           const accounts = (await pool.listAccounts(req.provider)).filter(entry => req.accountId === undefined || entry.id === req.accountId)
           const value = await collectCreditsStatus(accounts, undefined, {
@@ -2493,49 +1550,6 @@ if (provider === LOBSTERAI.id) {
               ? fetchTraeCheckinStatus(credential as TraeCredential, TRAE)
               : fetchQoderCheckinStatus(credential as QoderCredential, requireQoderFamily(req.provider).product),
           })
-          return { ok: true, value: { accounts: value } satisfies RpcCreditsStatusResponse }
-        }
-        if (req.provider === CLINE.id) {
-          // Cline **没有签到端点**（对整个 sidecar 二进制做字符串扫描，
-          // checkin / check-in / daily / campaign 均无任何 Cline 业务端点命中；
-
-          // 如实返回 null，而不是臆造一份状态对象。
-          const accounts = await pool.listAccounts(req.provider)
-          return {
-            ok: true,
-            value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
-            } satisfies RpcCreditsStatusResponse,
-          }
-        }
-        if (req.provider === LOOMY.id) {
-          // Loomy 没有独立的「签到状态」端点：每日额度由 `POST /points/first-login`
-
-          // 如实返回 null，由 claimAll 内部处理幂等。
-          const accounts = await pool.listAccounts(req.provider)
-          return {
-            ok: true,
-            value: {
-              accounts: accounts.map((entry) => ({ accountId: entry.id, nickname: entry.nickname, status: null })),
-            } satisfies RpcCreditsStatusResponse,
-          }
-        }
-        if (req.provider === MINIMAX.id) {
-          // ⚠️ MiniMax **有**独立的签到状态端点（`/minimax-cloud/api/v1/signin/status`），
-          // 与 LobsterAI/TRAE/Cline 那几个「如实返回 null」的 provider 不同 ——
-          // 故走共享 helper 真查（`fetchMinimaxSigninStatus` 失败时返回 null，
-          // 由 helper 逐账号 try/catch 兜住，单账号失败不中断整体）。
-          //
-          // ⚠️ **判据是 `is_today && status===3`**（见 `minimaxPanelToCheckinStatus`），
-          // 不是「没有 Claimable」。`active` 恒 true（拿到响应即 true）。
-          const minimaxStatusAccounts = await pool.listAccounts(req.provider)
-          const value = await collectCreditsStatus<MinimaxCredential, undefined>(
-            minimaxStatusAccounts, undefined, {
-              resolve: (ref) => ctx.credentials.resolve(ref),
-              fetchStatus: (credential) => fetchMinimaxSigninStatus(credential),
-              warn: (msg) => ctx.logger?.warn?.(msg),
-            },
-          )
           return { ok: true, value: { accounts: value } satisfies RpcCreditsStatusResponse }
         }
         return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
@@ -2559,20 +1573,6 @@ if (provider === LOBSTERAI.id) {
             resolve: (ref) => ctx.credentials.resolve(ref),
             claim: (credential) => claimQoderDailyCheckin(credential, product),
             signal,
-            precheckStatus: false,
-            warn: (msg) => ctx.logger?.warn?.(msg),
-          })
-          return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
-        }
-        if (req.provider === LOBSTERAI.id) {
-          // LobsterAI 的 clientVersion 是签到必填参数，需动态解析
-          //（带缓存，通常无额外网络开销）。
-          const clientVersion = await lobsterai.resolveClientVersion()
-          const value = await collectClaimResults<LobsteraiCredential, typeof LOBSTERAI>(accounts, LOBSTERAI, {
-            resolve: (ref) => ctx.credentials.resolve(ref),
-            claim: (credential, product) =>
-              claimLobsteraiDailyCheckin(credential, product, clientVersion),
-            // 领取流程内部已做 slot/context 预检，不需要外部再查一次状态。
             precheckStatus: false,
             warn: (msg) => ctx.logger?.warn?.(msg),
           })
@@ -2607,59 +1607,6 @@ if (provider === LOBSTERAI.id) {
           })
           return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
         }
-        if (req.provider === LOOMY.id) {
-          // Loomy 的「签到」= `POST /points/first-login`（触发每日赠送额度）。
-          // ⚠️ 语义**不是**「+5000 积分」：`dailyBalance = dailyQuota - dailyConsumed`，
-          // 消耗后不回补。文案由 claimLoomyDailyQuota 的 already-claimed 表达。
-          // 领取流程自带幂等判据（`alreadyProcessed`），故不做额外预检。
-          const values: RpcCreditsClaimAccountResult[] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            if (!resolved) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                outcome: { kind: 'failed', code: -1, message: '凭据未配置' },
-              })
-              continue
-            }
-            let credential: LoomyCredential
-            try {
-              credential = JSON.parse(resolved.value) as LoomyCredential
-            } catch {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                outcome: { kind: 'failed', code: -1, message: '凭据解析失败' },
-              })
-              continue
-            }
-            const outcome = await loomy.claimDailyQuota(credential)
-            values.push({ accountId: account.id, nickname: account.nickname, outcome })
-          }
-          return {
-            ok: true,
-            value: {
-              summary: computeClaimSummary(values.map((v) => v.outcome)),
-              results: values,
-            } satisfies RpcCreditsClaimAllResponse,
-          }
-        }
-        if (req.provider === CLINE.id) {
-          // Cline **没有签到端点**（见 src/cline-credits.ts 的模块注释：
-          // 对整个 sidecar 做字符串扫描，无任何 checkin/campaign 业务端点）。
-          // 客户端按能力矩阵（`credits-capabilities.js` 的
-          // `cline: { balance: true, dailyCheckin: false }`）根本不会渲染
-          // 「一键领取积分」按钮、也不会发起本调用；这里显式返回可读错误，
-          // 而不是落到下面 `productById` 的 `unsupported provider` 泛化文案
-          // —— 后者会让排查者以为是「provider 没注册」，而真相是「该产品无此能力」。
-          return {
-            ok: false,
-            error: {
-              code: 'bad-request',
-              message: 'Cline 不支持每日签到（其后端没有签到接口）',
-            },
-          }
-        }
         if (isRaccoonFamily(req.provider)) {
           // raccoon（免费版 / 订阅版同族）**没有签到端点**：每日 300 积分由服务端按日自动发放
           //（账单里的 `daily_grant`，实测注册后 1 分钟即到账），
@@ -2676,84 +1623,6 @@ if (provider === LOBSTERAI.id) {
             },
           }
         }
-        if (req.provider === MINIMAX.id) {
-          // ⚠️ **必须开启状态预检**（`precheckStatus` 默认为 true，不要传 false）。
-          //
-          // 理由与 TRAE 那条同型（见上方 TRAE 分支的详细注释）：MiniMax 的
-          // `claimMinimaxDailyCheckin` 靠响应体的 `claim_result` 判幂等
-          //（`1`=真领取、`2`=已领过），这在 **HTTP 层**是可靠的；但状态预检是
-          // 第二道防线 —— 若某天服务端对已领账号也回 `claim_result: 1`，
-          // 预检能靠 `todayCheckedIn` 先挡住，避免把「今天已领」报成「+积分」。
-          // 反之传 false 会让已签到账号走到 claim 请求（多发一次 POST）。
-          const value = await collectClaimResults<MinimaxCredential, undefined>(accounts, undefined, {
-            resolve: (ref) => ctx.credentials.resolve(ref),
-            fetchStatus: (credential) => fetchMinimaxSigninStatus(credential),
-            claim: (credential) => claimMinimaxDailyCheckin(credential),
-            warn: (msg) => ctx.logger?.warn?.(msg),
-          })
-          return { ok: true, value: value satisfies RpcCreditsClaimAllResponse }
-        }
-        if (req.provider === ZCODE.id) {
-          /**
-           * ZCode 的「一键领取」= 补激活上报 → preview → 逐个 claim。
-           *
-           * ⚠ **每个 plan 都要重新产一个 captcha**（captcha 一次性，
-           * 复用会得 `3007`，这条路径每个 plan 都现产新的）—— 故不能复用 `collectClaimResults`
-           * 那套「一个凭据一次 claim」的形状（它假设 `claim()` 内部
-           * 自己处理幂等），这里自己遍历账号与 plan。
-           *
-           * ⚠ ZCode **没有**独立的「今日是否已领」端点，故不调
-           * `precheckStatus`（`claimDailyWith` **自带**激活上报与
-           * preview 查询，重复调用只会多发一次无谓请求）。
-           */
-          const results: RpcCreditsClaimAllResponse['results'] = []
-          const outcomes: ClaimOutcome[] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            let accountOutcomes: ClaimOutcome[]
-            if (!resolved) {
-              accountOutcomes = [{ kind: 'failed', code: -1, message: '凭据未配置' }]
-            } else {
-              let credential: ZcodeCredential | undefined
-              try {
-                credential = JSON.parse(resolved.value) as ZcodeCredential
-              } catch {
-                credential = undefined
-              }
-              if (credential === undefined) {
-                accountOutcomes = [{ kind: 'failed', code: -1, message: '凭据解析失败' }]
-              } else {
-                /**
-                 * captcha 回调：每次都现产一个新 param。
-                 * 缺浏览器时抛错由 `claimDailyFor` 内部转成可读的
-                 * failed outcome（不让整个端点失败）。
-                 *
-                 * ⚠⚠ **必须原样把 `config` 透传给 `mintCaptcha`**（真实缺陷，
-                 * Gitee issue IKJNPS）。region 与 param 必须是**同一份配置**签出来的：
-                 * 阿里云验签成对校验二者，不一致即 `400 / 3007`。此前这里**自己**去
-                 * 拉一份 captcha 配置（拿到的是服务端真实 region，如 `sgp`），
-                 * 而 `claimDailyFor` 的 region 走兜底常量 `cn` ⇒ 非 cn 区账号
-                 * 「一键领取」100% 失败（用户报障：15/15 全部 captcha 校验失败）。
-                 * 现在配置由 `claimDailyWith` 解析一次并传进来，两边天然同源。
-                 */
-                accountOutcomes = await zcode.claimDailyFor(credential, async (config) => {
-                  return await zcode.mintCaptcha(config)
-                })
-              }
-            }
-            // ⚠ 一个账号可能有多条 outcome（多个 plan）——
-            // `RpcCreditsClaimAccountResult` 只装一条，故逐条展开。
-            for (const outcome of accountOutcomes) {
-              results.push({ accountId: account.id, nickname: account.nickname, outcome })
-              outcomes.push(outcome)
-            }
-          }
-          return {
-            ok: true,
-            value: { results, summary: computeClaimSummary(outcomes) } satisfies RpcCreditsClaimAllResponse,
-          }
-        }
         return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
       }
 
@@ -2765,24 +1634,6 @@ if (provider === LOBSTERAI.id) {
       case 'credits.balances': {
         const req = payload as RpcCreditsBalancesRequest
         const accounts = await pool.listAccounts(req.provider)
-        if (req.provider === LOBSTERAI.id) {
-          const values = await collectCreditBalances<LobsteraiCredential, typeof LOBSTERAI>(accounts, LOBSTERAI, {
-            resolve: (ref) => ctx.credentials.resolve(ref),
-            fetchBalance: (credential, product) => fetchLobsteraiCreditBalance(credential, product),
-            warn: (msg) => ctx.logger?.warn?.(msg),
-          })
-          // ⚠️ LobsterAI 也回传窗口天数（用户报障「账号的积分没按长期、临时方式
-          // 显示」）：它的每个资源包都带 `expiresAt`（已归一化到
-          // `deductionEndTime`），面板要按到期远近分「长期 / 临时」。
-
-          return {
-            ok: true,
-            value: {
-              accounts: values,
-              windowDays: creditExpiringWindowDays(),
-            } satisfies RpcCreditsBalancesResponse,
-          }
-        }
         if (isQoderFamily(req.provider)) {
           const { product } = requireQoderFamily(req.provider)
           // 余额来自 `GET {product.openApiBase}/sash/api/v2/me/usage`（实测只需
@@ -2821,68 +1672,6 @@ if (provider === LOBSTERAI.id) {
           }
           return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
         }
-        if (req.provider === OPENCODE.id) {
-          // ⚠️⚠️ **这里不查远端余额**（设计决定，2026-10-02，与用户确认走「限额状态」路 A）。
-          //
-          // ## 为什么
-          //
-          // OpenCode Zen **没有公开的余额查询端点**：实测 `/zen/v1/` 下的
-          // `balance` / `credits` / `usage` / `billing` / `quota` / `limits` /
-          // `subscription` / `workspace` 等 15 个候选路径**全部 404**
-          // （返回官网页面 HTML，不是 API 的 JSON 404）。
-          // 它确实有额度概念（余额耗尽回 `402 Insufficient account funds`），
-          // 但那个数字只在控制台网页里看，没有 API 可查。
-          //
-          // ⇒ 徽标展示**我们真正测得到的东西**：每个通道（账号槽 / 匿名通道）
-          // 当前是否可用、是否处于限额冷却。数据全部来自**本地状态**
-          // （账号池的 `modelRateLimits` 与 `enabled`），**零网络请求**。
-          //
-          // ## 语义映射（不伪装成「余额」）
-          //
-          // `CreditBalance.total` 在此表示「**当前可用通道数**」，单位固定
-          // 「通道」；限额中的通道数放进 `expiredTotal`，面板据此显示
-          // 「另有 N 限额中」——与其它 provider 的「已失效资源包」口径一致，
-          // 徽标的 UI 逻辑不用改。
-          const values = accounts.map((account) => {
-            const now = Date.now()
-            const limits = Object.entries(account.modelRateLimits ?? {})
-            const limitedUntil = limits.reduce((max, [, resetAt]) => Math.max(max, Number(resetAt) || 0), 0)
-            // 只数**尚未到期**的限额（已过期的交给 sweepExpiredRateLimits 清理）。
-            const limitedModels = limits.filter(([, resetAt]) => Number(resetAt) > now).length
-            const available = account.enabled && limitedUntil <= now ? 1 : 0
-            // ⚠️ `CreditPackage` 的必填字段对 opencode 大多**无意义**
-            // （remaining/used/cycle* 都是「资源包计费周期」的概念，
-            // 而我们表达的是「通道是否可用」）。按类型要求填中性值，
-            // 徽标 UI 实际只读 `unit` / `total` / `active`（见 badge-model.js
-            // 的 creditGroupsOf），故这些字段不会出现在展示里。
-            const balance: CreditBalance = {
-              total: available,
-              packages: [{
-                name: limitedModels > 0 ? `${limitedModels} 个模型限额中` : '可用通道',
-                unit: '通道',
-                remaining: available,
-                total: available,
-                used: 0,
-                active: true,
-                cycleStartTime: '',
-                cycleEndTime: '',
-                expiredTime: '',
-              }],
-              expiredTotal: account.enabled && limitedUntil > now ? 1 : 0,
-            }
-            return {
-              accountId: account.id,
-              nickname: account.nickname,
-              balance,
-              ...(!account.enabled
-                ? { error: '已停用' }
-                : limitedUntil > now
-                  ? { error: `限额中，${new Date(limitedUntil).toLocaleString('zh-CN')} 恢复` }
-                  : {}),
-            }
-          })
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
         if (req.provider === TRAE.id) {
           const values = await collectCreditBalances(accounts, TRAE, {
             resolve: (ref) => ctx.credentials.resolve(ref),
@@ -2903,351 +1692,7 @@ if (provider === LOBSTERAI.id) {
             } satisfies RpcCreditsBalancesResponse,
           }
         }
-        if (req.provider === MINIMAX.id) {
-          // 余额来自 `GET /minimax-cloud/api/v1/credit/details`。
-          //
-          // ⚠️ **该端点是平铺响应**（`total_count` 与 `base_resp` 同级、**没有
-          // `data` 键**）—— 与签到端点不同。`fetchMinimaxCreditBalance` 内部已
-          // 用 `unwrapEnvelopeData` 兼容两种形状。
-          // ⚠️ 查不到时（null）由 helper 统一补「余额查询失败」文案，卡片显示
-          // 原因而非 0 —— 这与「余额为 0」是**两回事**，不能混为一谈
-          //（本机实测 `total_count: 0` 且 `details` 缺失正是「真的为 0」）。
-          const values = await collectCreditBalances<MinimaxCredential, undefined>(accounts, undefined, {
-            resolve: (ref) => ctx.credentials.resolve(ref),
-            fetchBalance: (credential) => fetchMinimaxCreditBalance(credential),
-            warn: (msg) => ctx.logger?.warn?.(msg),
-          })
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
-        if (req.provider === GEMINI.id) {
-          // 余额 = **配额窗口**（不是充值积分）：`POST
-          // /v1internal:retrieveUserQuotaSummary` 两个桶（`gemini-5h` /
-          // `gemini-weekly`）的剩余比例。
-          //
-          // ⚠️ 用 `fetchBalanceDetailed`（而非 `fetchBalance`）：Gemini 的
-          // 「未授权」与「查询失败」是**两回事** —— 前者要显示「尚未授权 Google
-          // 账号」、后者要显示具体原因（网络/HTTP/响应形状）。
-          // `collectCreditBalances` 会把 `{balance: null, error}` 原样透传给
-          // 卡片（helper 只在 `error` 缺失时才补「余额查询失败」），故这里
-          // **不需要**像 CLINE 分支那样手写 for 循环。
-          //
-          // ⚠️ 第二实参传 `GEMINI` 而不是 minimax 那样的 `undefined`：
-          // `fetchGeminiCreditBalance` 的第二形参就是 product（端点/超时来自
-          // 产品配置）。
-          //
-          // ⚠️ 账号规格（Pro / Free / Ultra）搭这趟车回来：`loadCodeAssist` 与
-          // 配额是同一函数里**并行**发的两个端点，档位挂在 `result.tier` 上。
-          // 这里把它翻译成面板要的 `extra.accountTier` —— `label` 是短标签
-          // （面板只放得下一个词），`title` 是上游原文（hover 才看得到）。
-          // 档位取不到时 `extra` 缺席，面板不渲染那一行（**不是错误**）。
-          const values = await collectCreditBalances<GeminiCredential, typeof GEMINI>(accounts, GEMINI, {
-            resolve: (ref) => ctx.credentials.resolve(ref),
-            fetchBalanceDetailed: async (credential) => {
-              const { balance, error, tier } = await fetchGeminiCreditBalance(credential, GEMINI, { force: req.force === true })
-              const extra: RpcCreditsBalanceExtra | undefined = tier === undefined
-                ? undefined
-                : { accountTier: { label: tier.label, title: `${tier.name}（${tier.id}）` } }
-              return {
-                balance,
-                ...error === undefined ? {} : { error },
-                ...extra === undefined ? {} : { extra },
-              }
-            },
-            warn: (msg) => ctx.logger?.warn?.(msg),
-          })
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
-        if (req.provider === CLINE.id) {
-          // 余额来自 `GET /api/v1/users/{accountId}/balance`（实测
-          // `{data:{userId, balance}, success:true}`）。与 Qoder 分支同因：
-          // `fetchClineCreditBalance` 只吃 ClineCredential，故不用
-          // collectCreditBalances 的泛型（它会把产品配置转发给 fetchBalance）。
-          //
-          // ⚠️ 账号 id 必须用凭据里的 `account_id`（`usr-…`），**不是** JWT 的
-          // `sub`（`user_…`）—— 传后者实测返回 `400 Invalid request format`。
-          const values: RpcCreditsBalancesResponse['accounts'] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            if (!resolved) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据未配置',
-              })
-              continue
-            }
-            let credential: ClineCredential
-            try {
-              credential = JSON.parse(resolved.value) as ClineCredential
-            } catch {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据解析失败',
-              })
-              continue
-            }
-            const result = await fetchClineCreditBalance(credential, CLINE)
-            values.push({
-              accountId: account.id,
-              nickname: account.nickname,
-              balance: result.balance,
-              // 查不到时带上**具体原因**（含 HTTP 状态码与错误体摘要），
-              // 而不是笼统一句「查询失败」—— 卡片显示原因而非 0
-              //（0 是「已用光」的语义，会误导用户）。
-              ...result.balance === null
-                ? { error: result.error ?? '积分查询失败（凭据失效或响应异常）' }
-                : {},
-            })
-          }
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
-        if (req.provider === LOOMY.id) {
-          // 余额来自 `GET /points/records`（**只读**，无副作用）。
-          // ⚠️ 刻意不用 `first-login`：那是**写**端点，在「打开面板」这种
-          // 高频路径上调用会意外触发签到。
-          const values: RpcCreditsBalancesResponse['accounts'] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            if (!resolved) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据未配置',
-              })
-              continue
-            }
-            let credential: LoomyCredential
-            try {
-              credential = JSON.parse(resolved.value) as LoomyCredential
-            } catch {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据解析失败',
-              })
-              continue
-            }
-            const balance = await loomy.fetchCreditBalance(credential)
-            values.push({
-              accountId: account.id,
-              nickname: account.nickname,
-              balance,
-              // 查不到时带原因（不显示成 0，0 是「已用光」的语义）。
-              ...balance === null ? { error: '积分查询失败（凭据失效或响应异常）' } : {},
-            })
-          }
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
-        if (isRaccoonFamily(req.provider)) {
-          // 余额来自 `GET /points/v1/balance`（**只读**，无副作用）。
-          // ⚠️ 取该 provider 自己的 auth：两产品账号池独立，余额互不影响。
-          const raccoonAuth = requireRaccoonFamily(req.provider).auth
-          const values: RpcCreditsBalancesResponse['accounts'] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            if (!resolved) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据未配置',
-              })
-              continue
-            }
-            let credential: RaccoonCredential
-            try {
-              credential = JSON.parse(resolved.value) as RaccoonCredential
-            } catch {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据解析失败',
-              })
-              continue
-            }
-            const balance = await raccoonAuth.fetchCreditBalance(credential)
-            values.push({
-              accountId: account.id,
-              nickname: account.nickname,
-              balance,
-              // ⚠️ 查不到时带原因（**不显示成 0** —— 0 是「已用光」的语义，
-              // 把「查询失败」显示成 0 会让用户以为自己积分没了）。
-              ...balance === null ? { error: '积分查询失败（凭据失效或响应异常）' } : {},
-            })
-          }
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
-        if (req.provider === ZCODE.id) {
-          /**
-           * 余额来自 `GET /zcode-plan/billing/balance`（**只读**，无副作用）。
-           *
-           * ⚠ ZCode 的额度单位是 **token**，而 Channel Pack 这个字段的语义是
-           * 「积分」。两者量纲不同 —— 但都要展示，故这里如实返回数值
-           * 并在错误文案里说明来源。`balance: null` 表示**查不到**
-           * （不显示成 0，0 是「已用光」的语义）。
-           */
-          const values: RpcCreditsBalancesResponse['accounts'] = []
-          for (const account of accounts) {
-            signal?.throwIfAborted()
-            const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-            if (!resolved) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据未配置',
-              })
-              continue
-            }
-            let credential: ZcodeCredential
-            try {
-              credential = JSON.parse(resolved.value) as ZcodeCredential
-            } catch {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '凭据解析失败',
-              })
-              continue
-            }
-            const result = await zcode.fetchBalanceFor(credential)
-            if (result === undefined) {
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '额度查询失败（凭据失效或网络异常）',
-              })
-              continue
-            }
-            if (result.enterprise === true) {
-              // 企业版不下发额度数字、只给外部链接 —— 如实说明，不显示 0。
-              values.push({
-                accountId: account.id, nickname: account.nickname,
-                balance: null, error: '企业版账号不下发额度数字，请在 ZCode 内查看',
-              })
-              continue
-            }
-            values.push({
-              accountId: account.id,
-              nickname: account.nickname,
-              /**
-               * ⚠ `CreditBalance` 的形状是 `{total, packages[], expiredTotal?}`
-               * 这类**积分包**结构，而 ZCode 是「按日的 token 额度池」。
-               * 两者结构不同，故**逐桶**如实映射 —— 上游一个 resource bucket
-               * 就是一个包，包名用 `show_name`（实测是模型名，如
-               * `GLM-5.3-Flash`）。
-               *
-               * ## ⚠⚠ 这里曾经只映射 `buckets[0]`（真实缺陷）
-               *
-               * 旧实现只取 `result.planName`（= `buckets[0]?.showName`）拼**一个**
-               * 包 —— 多桶账号的其余额度被**静默丢掉**，UI 上看起来只有
-               * 一个模型的额度。而 `result.remaining` / `total` 却是**全桶汇总**，
-               * 于是那一个包的数字比它自己的 `totalUnits` 还大，自相矛盾。
-               *
-               * 实测（本机账号）上游只回一个桶（`GLM-5.3-Flash`），
-               * 但**不能按「只有一个桶」来写** —— 那正是把缺陷固化成契约；
-               * 且用户要看的恰恰是「GLM-5.3 与 GLM-5.3-Flash 各自剩多少」，
-               * 前端需要按模型逐行渲染、缺桶的模型显示占位。
-               */
-              balance: buildZcodeBalance(result),
-            })
-          }
-          return { ok: true, value: { accounts: values } satisfies RpcCreditsBalancesResponse }
-        }
         return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${req.provider}` } }
-      }
-
-      // ── Cline「订阅额度」：官方额度窗口 + 请求记录 ──
-      //
-      // 参考实现：`github.com/codeOct/dsh-cline-pass` 的额度管理与请求记录部分。
-      // 两者都用 Cline 网关自己的端点（不是本地记账），故与「余额」是三份
-      // 互不相同的读数：余额答「还剩多少」，额度答「各时间窗用掉百分之几」，
-      // 请求记录答「每一笔花了多少」。
-      //
-      // ⚠️ **两个端点都只认 Cline**（额度端点路径里的 `users/me` 与请求记录的
-      // `usages` 都是 Cline 网关的形状）。别的 provider 一律 `bad-request` ——
-      // 这正是「不要在 UI 上吞掉错误，而是不发起这个请求」那条既有约定的
-      // 服务端一半（客户端另由 `supportsSubscriptionQuota` 门控）。
-      case 'cline.quota': {
-        const req = payload as RpcClineQuotaRequest
-        if (typeof req.provider !== 'string' || req.provider !== CLINE.id) {
-          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${String(req.provider)}` } }
-        }
-        const accounts = await pool.listAccounts(req.provider)
-        const values: RpcClineQuotaResponse['accounts'] = []
-        for (const account of accounts) {
-          const resolved = await ctx.credentials.resolve(credentialRef(account.credentialRef))
-          if (!resolved) {
-            values.push({
-              accountId: account.id, nickname: account.nickname,
-              ok: false, windows: [], error: '凭据未配置',
-            })
-            continue
-          }
-          let credential: ClineCredential
-          try {
-            credential = JSON.parse(resolved.value) as ClineCredential
-          } catch {
-            values.push({
-              accountId: account.id, nickname: account.nickname,
-              ok: false, windows: [], error: '凭据解析失败',
-            })
-            continue
-          }
-          const result = await fetchClineUsageLimits(credential, CLINE)
-          values.push({
-            accountId: account.id,
-            nickname: account.nickname,
-            ok: result.ok,
-            windows: result.windows,
-            // ⚠️ 失败时带上**具体原因**（含 HTTP 状态与网关文案），
-            // 而不是笼统一句「查询失败」—— 面板要显示原因而非 0%。
-            ...result.error === undefined ? {} : { error: result.error },
-          })
-        }
-        return { ok: true, value: { accounts: values } satisfies RpcClineQuotaResponse }
-      }
-
-      case 'cline.requestLog': {
-        const req = payload as RpcClineRequestLogRequest
-        if (typeof req.provider !== 'string' || req.provider !== CLINE.id) {
-          return { ok: false, error: { code: 'bad-request', message: `unsupported provider: ${String(req.provider)}` } }
-        }
-        if (typeof req.accountId !== 'string' || req.accountId.trim().length === 0) {
-          return { ok: false, error: { code: 'bad-request', message: 'accountId 不能为空' } }
-        }
-        // 记录是**本插件自己发出的请求流水**(进程内存,重启即丢,见
-        // src/cline-request-log.ts),不是网关的 /usages —— 后者记的是该账号
-        // 在官方所有渠道的消费:没有延迟/首块时间,表格字段也对不齐参考实现。
-        //
-        // ⚠️ `accountId` 必传(按账号过滤)——「订阅额度」面板用**同一个**
-        // 翻页索引同时切额度窗口与请求记录,两个区域必须看同一个账号。
-        // ⚠️ 记录可能是**失败**行(error 有值):失败的请求是排查
-        // 「为什么没回复」的第一线索,与成功行同表展示、错误消息随行给出。
-        return {
-          ok: true,
-          value: {
-            rows: readClineRequestHistory({ accountId: req.accountId, limit: req.limit }).map((row) => ({
-              ts: row.ts,
-              model: row.model,
-              // ⚠️ **优先用网关报的真实上游渠道**（`alibaba` 等，见
-              // `src/cline-routing.ts`）；它没报时才回落到模型命名空间
-              // （`cline-pass` / `cline-free`）—— 后者是**订阅通道**
-              // （甚至可能是厂商名），不是 serving channel，用户报障点正在于此。
-              upstream: row.upstream.length > 0 ? row.upstream : clineUpstreamOf(row.model),
-              // ⚠️ 必须透传「是否收到 usage」：表格据此把未知显示成 `—`,
-              // 而不是 0（0 会被读成「瞬间完成、没花 token」）。
-              usageReported: row.usageReported,
-              inputTokens: row.inputTokens,
-              outputTokens: row.outputTokens,
-              ...row.cacheReadTokens !== undefined ? { cacheReadTokens: row.cacheReadTokens } : {},
-              ...row.reasoningTokens !== undefined ? { reasoningTokens: row.reasoningTokens } : {},
-              // 推理强度：空串也照传（展示层据「空串 ⇒ 不渲染那一行」判断，
-              // 若在这里省略字段，前端就得同时处理 undefined 与 '' 两种缺省）。
-              effort: row.effort,
-              ttftMs: row.ttftMs,
-              // ⚠️ 首个**正文**块耗时必须透传：展示层的「输出速率」拿它当分母
-              // 起点（分子是正文 token 数）。缺了它速率会虚高到物理不可能的值
-              // —— 用户报障的 `11814.8 t/s` 就是分子分母跨阶段的产物。
-              ttfcMs: row.ttfcMs,
-              totalMs: row.totalMs,
-              ...row.error !== undefined ? { error: row.error } : {},
-            })),
-          } satisfies RpcClineRequestLogResponse,
-        }
       }
 
       // ── 模型列表可见性（黑名单开关）──
@@ -3317,7 +1762,7 @@ if (provider === LOBSTERAI.id) {
         if (all !== undefined) {
           catalog = [...all]
           // ⚠️ **不再补回「黑名单里有、目录里没有」的裸 id**（2026-11-18 修正，用户报障
-          // 「Loomy 里怎么还有不存在的 qwen3.8-max」）。
+          // 「设置页里怎么还有上游不存在的 qwen3.8-max」）。
           //
           // 旧实现在这里 `catalog.push({ id, name: id })`，本意是「万一全量目录漏了
           // 某个被关掉的模型，至少还能看到并重新打开」。但 `disabledModels` 是**历史
@@ -3941,90 +2386,6 @@ if (provider === LOBSTERAI.id) {
           models,
           modelsSource,
         }
-        return { ok: true, value }
-      }
-
-      // ── 内部 captcha 载体（二期）──
-      //
-      // 这两条是**客户端驱动**的通道：DSH 的 `connection.fetch` 只有
-      // `client-request` / `server-response` 两种消息（server 无法反向要求 GUI 干活），
-      // 所以「server 要 param」只能被表达成一个**需求位**，由 GUI 轮询着读，
-      // 产出来再 POST 回这条 contribute。语义与取舍见 `src/captcha-supply.ts` 文件头。
-      //
-      // ⚠ web 版：GUI 里没有 `dshDesktop.browser` ⇒ 没人读需求位、也没人贡献
-      //   ⇒ 槽长期为空 ⇒ 载体链直接退回既有 chromium 路径，行为不变。
-
-      /** client 心跳问「现在要不要产 param」——不需要时 client 一次都不产（零配额消耗）。 */
-      case 'captcha.demand': {
-        const value: RpcCaptchaDemandResponse = { active: captchaDemand() }
-        return { ok: true, value }
-      }
-
-      /**
-       * ★ 评审 C1/C2：client 每轮问一次「载体页在哪个地址」。
-       *
-       * ## 为什么是 RPC 而不是 client 里的一个常量
-       * 载体页**不能**挂在插件自己的 `/api/…` 上：桌面版主进程的
-       * `allowedNavigation()` / `onBeforeRequest` 都会以 `isApplicationHost(url)`
-       * 拒掉「**端口相同** 且 主机相同/回环」的地址（asar `lib/main.js`），
-       * 而那个端口就是 Host 自己的端口 ⇒ guest 连文档都建不起来。
-       * 换端口才绕得开 ⇒ 端口是 server 运行时挑的，client 只能**问**（见
-       * `src/captcha-carrier-server.ts` 文件头的完整取证）。
-       *
-       * ## 返回 `null` 的含义
-       * 服务没起（`DSH_ZCODE_INTERNAL_CARRIER=0` / 候选端口全被占）。client 拿到
-       * `null` 就记一条 `no-carrier-url` 并**安静返回**：不建 guest、不导航。
-       * ⚠ 这是 web 版之外的另一条「安静退出」路径，别把它当错误报。
-       */
-      case 'captcha.carrierUrl': {
-        // ⚠ 判一下方法存不存在：这条 RPC 允许「没有内部载体能力」的宿主形态（老插件
-        //   骨架 / 替身）回答，**回 null 即可**，不该把整次分派变成错误。
-        const url = typeof zcode.carrierPageUrl === 'function'
-          ? await zcode.carrierPageUrl()
-          : null
-        const value: RpcCaptchaCarrierUrlResponse = { url: url ?? null }
-        return { ok: true, value }
-      }
-
-      /** client 把内部载体产的 param 放进供给槽（一次性，取走即清）。 */
-      case 'captcha.contribute': {
-        const req = payload as RpcCaptchaContributeRequest
-        /**
-         * param 的「产出时刻」= **server 到达时刻 − client 报告的相对耗时**。
-         *
-         * ⚠ 不用 client 的绝对时间戳：那会把跨端时钟漂移引进时效闸（快了永不判过期、
-         *   慢了一投放就过期 ⇒ 内部载体静默永不可用，日志还看着像「client 没产」）。
-         * ⚠ 也不用纯到达时刻：那会把年龄**低估**一个 client→server 的跳数。
-         *   相对耗时是同机单向差值，比绝对时钟可靠 ⇒ 两者结合既无漂移也不低估。
-         * elapsedMs 缺失/非法时退回到达时刻（保守地偏小年龄，由 PARAM_MAX_AGE_MS 兜住）。
-         */
-        const elapsed = typeof req.elapsedMs === 'number' && Number.isSafeInteger(req.elapsedMs)
-          && req.elapsedMs >= 0 && req.elapsedMs < 5 * 60_000 ? req.elapsedMs : 0
-        const interactive = req.interactive === true
-        const accepted = putSuppliedParam(
-          typeof req.param === 'string' ? req.param : '',
-          Date.now() - elapsed,
-          { interactive },
-        )
-        ctx.logger.info(
-          `[channel-pack] zcode 内部载体贡献 param: accepted=${String(accepted)} elapsedMs=${String(elapsed)}`
-          + `${interactive ? ' interactive=true' : ''}`,
-        )
-        /**
-         * ⚠ 交互式必须**显式告警**（评审 I2）：那是 SDK 被降级成滑块/拼图的唯一信号，
-         *   也是这台机器**设备信誉下降**的唯一预警 —— chromium 那条腿早就有同样的
-         *   `warn`（见 `ZcodeAuth.captchaPoolInstance()`），内部载体这段此前只打进
-         *   client 控制台，host 侧一个字都看不到（等于没有预警）。
-         * ⚠ 只在被**收下**时告警：被拒的那条（垃圾 param）报「交互式」是噪声。
-         */
-        if (accepted && interactive) {
-          ctx.logger?.warn?.(
-            '[channel-pack] zcode 内部载体的 captcha 被降级为**交互式验证**（滑块/拼图）—— '
-            + '设备信誉可能已下降；内部载体的价值是「去掉对 chromium 的依赖」，'
-            + '不是绕过风控，请降低调用频率或稍后再试。',
-          )
-        }
-        const value: RpcCaptchaContributeResponse = { accepted }
         return { ok: true, value }
       }
 

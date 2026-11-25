@@ -45,14 +45,18 @@ function setup({ saveParams, model = {}, paged = false, catalog } = {}) {
         if (saveParams) await saveParams(payload)
         params[payload.modelId] = payload.params
       }
-      const value = method === 'model.list' ? { models }
+      const value = method === 'model.list'
+        ? { models }
         : method === 'provider.status' ? { statuses: {} }
         : method === 'account.list' ? { accounts: [] }
         : ['model.params', 'model.setParams'].includes(method) ? { params } : {}
       return { ok: true, value }
     } } },
   }
-  vm.runInNewContext(source, { URL, AbortController, window: { __ModuleLoader__: { load(spec) {
+  // 默认渠道用单面渠道（TRAE）：Raccoon 家族是两张模型面，客户端对多组模型不分页，
+  // 而本文件验的正是单列表分页。
+  const localStorage = { getItem: key => key === 'eac-unified-router-last-provider' ? 'trae' : null, setItem() {}, removeItem() {} }
+  vm.runInNewContext(source, { URL, AbortController, localStorage, window: { __ModuleLoader__: { load(spec) {
     spec.factory(() => react).apply(ctx)
   } } } })
   const render = () => {

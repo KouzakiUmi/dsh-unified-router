@@ -103,7 +103,7 @@ test('商汤默认打开模型，渠道分区分开提供 API Key 和控制台�
       window7d: { limit: 1200000, remaining: 1080000, resetAt: 1900100000 },
       grantBalance: 0,
     }] })
-    nodes(tree).find(n => n.props['aria-label'] === '切换到 Loomy').props.onClick()
+    nodes(tree).find(n => n.props['aria-label'] === '切换到 Raccoon').props.onClick()
     await tick(); f.render()
     tree = await f.enterPlan()
     tree = f.clickTab(tree, 'eac-tab-advanced')
@@ -259,7 +259,7 @@ test('旧轮询无视取消且切回商汤，不清除新页面的定时器', as
     await store.load('sensenova-token-plan')
     const [[oldId, oldTimer]] = timers; timers.delete(oldId)
     const oldPolling = oldTimer()
-    await tick(); await store.load('loomy'); await store.load('sensenova-token-plan')
+    await tick(); await store.load('raccoon'); await store.load('sensenova-token-plan')
     const currentTimers = [...timers.keys()]
     assert.equal(currentTimers.length, 1)
     pending.resolve({ ok: true, value: f.plan() })
@@ -297,9 +297,9 @@ test('商汤写操作延迟完成时切换渠道，不强行跳回商汤', async
     await store.load('sensenova-token-plan')
     const pending = store.planSetKey('sk-fixture')
     await tick()
-    await store.load('loomy')
+    await store.load('raccoon')
     wait.resolve({ ok: true, value: { hasApiKey: true } })
     await pending
-    assert.equal(store.getSnapshot().provider, 'loomy')
+    assert.equal(store.getSnapshot().provider, 'raccoon')
   } finally { store.dispose(); f.react.dispose() }
 })

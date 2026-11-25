@@ -27,27 +27,12 @@
 import { isSupportedProvider } from './channel-pack-store.js'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createUserMessage, LlmError } from '@deepseek-ai/dsh-llm'
-import { LobsteraiAdapter } from './lobsterai-adapter.js'
 import { QoderAdapter } from './qoder-adapter.js'
-import { ClineAdapter } from './cline-adapter.js'
-import { ZcodeAdapter } from './zcode-adapter.js'
 import { TraeAdapter } from './trae-adapter.js'
 import { isRateLimited, parseRateLimitError } from './rate-limit.js'
-import { lobsteraiProductById } from './lobsterai-product.js'
 import { qoderProductById } from './qoder-product.js'
-import { clineProductById } from './cline-product.js'
-import { zcodeProductById } from './zcode-product.js'
-import { GeminiAdapter } from './gemini-adapter.js'
-import { LoomyAdapter } from './loomy-adapter.js'
-import { GEMINI, GEMINI_DEFAULT_PROJECT, GEMINI_SESSION_LANE_SMOKE } from './gemini.js'
-import { LOOMY } from './loomy-product.js'
-import type { LobsteraiCredential } from './lobsterai.js'
 import type { QoderCredential } from './qoder.js'
-import type { ClineCredential } from './cline.js'
-import type { ZcodeCredential } from './zcode.js'
 import type { TraeCredential } from './trae.js'
-import type { GeminiCredential } from './gemini.js'
-import type { LoomyCredential } from './loomy.js'
 import type {
   ProbeAccountResult,
   ProbeModelResult,
@@ -66,15 +51,15 @@ const TRAE_PROVIDER_ID = 'trae'
  * 探测可能涉及的凭据联合类型。
  *
  * 提为具名别名而非在各处重复多元联合：新增 provider 时只需改这一处，
- * 避免签名与实现漂移（本文件已**四次**因「分派表没跟上新增 provider」出缺陷）。
+ * 避免签名与实现漂移（本文件历史上**四次**因「分派表没跟上新增 provider」出缺陷）。
+ *
+ * 当前只有 qoder 家族（qoder / qodercn）与 trae —— 国际渠道已于 2026-11-25
+ * 随「全部重写」整体移除，它们的凭据类型不再存在，**别再把它们写回联合里**
+ * （类型删了还留着名字是 esbuild 查不出来的：它只剥类型、不校验）。
  */
 type ProbeCredential =
-  | LobsteraiCredential
   | QoderCredential
-  | ClineCredential
-  | ZcodeCredential
   | TraeCredential
-  | GeminiCredential
 
 /** 探测请求的提示语（与 e2e 探针保持一致，最大化可比性）。 */
 const PROBE_PROMPT = '只回答两个字：收到'
@@ -180,33 +165,14 @@ async function probeWithAdapter(
   // refresh 设为 no-op：探测不应触发全局续期流程（那会影响其他账号与
   // 其他并发会话），凭据真的过期就让它以 AUTH 失败并如实上报。
   //
-  // **七条产品线各自选适配器**，顺序不能颠倒也不能漏判：
+  // **三条产品线各自选适配器**，顺序不能颠倒也不能漏判：
 
-  // - LobsterAI → LobsteraiAdapter（自己的端点与头族）；
   // - Qoder 系（qoder / qodercn）→ QoderAdapter（WASM 加密体 + 签名头族）；
-  // - Cline → ClineAdapter（WorkOS 凭据 + 自己的端点）；
-  // - ZCode（智谱）→ ZcodeAdapter（Anthropic Messages 体 + 阿里云 captcha 参数）；
-  // - TRAE → TraeAdapter（SOLO 格式请求体 + Cloud-IDE-JWT 头族）；
-
+  // - TRAE → TraeAdapter（SOLO 格式请求体 + Cloud-IDE-JWT 头族）。
   //
-  // ⚠️ **这个分派表已四次因「新增 provider 没同步」而出缺陷**，改它前先读完：
-  //
-
-  // 2. 加了 lobsterai 分支后**仍漏掉 trae** → TRAE 账号同样落入 else，
-
-  //    缺陷时发现，实测 `productById('trae')` 与 `lobsteraiProductById('trae')`
-  //    均为 undefined）；
-  // 3. 加了 trae 分支后**仍漏掉 qoder / qodercn / cline** → 三者同样落入
-
-  //    凭据。它们的「重测 / 重置」按钮**确实会渲染**（`RATE_LIMIT_CAPABILITIES`
-  //    对未登记的 provider 默认视为有限流，当时只有 loomy 显式登记为 false），
-  //    且 Qoder 的额度受限**每次都会**写 `modelRateLimits`（按 UTC+8 当日
-  //    24:00 标记），于是「点重测 → 拿到签名错误 → 标记也清不掉」成为稳定
-  //    可复现的死循环；
-  // 4. 补上 qoder / qodercn / cline 之后**仍漏掉 zcode**（本次）→ 同型第 4 次。
-  //    它的写入点 `zcode-adapter.ts` 的 `switchAccountOnQuota()` 与 Qoder
-  //    **完全同款**（同样按 UTC+8 当日 24:00 标记该模型），而那个写入点是
-  //    在本分支建立**之后**才进 master 的 —— 正是「清单靠记忆维护」必漏的情形。
+  // ⚠️ 本仓库**只接这三个 provider**（另加账号池里的 raccoon 家族，它有独立适配器、
+  // 不走本分派）。国际渠道（lobsterai / cline / zcode / minimax / gemini / opencode）
+  // 已于 2026-11-25 随「全部重写」整体移除，不再需要为它们维护分支。
   //
   // ⚠️ **判据是「该 provider 会不会写 `modelRateLimits`」**（写了才有重测按钮、
   // 才需要在这里分派）。但**不要靠记忆维护清单**，直接机械核对写入方：
@@ -218,26 +184,11 @@ async function probeWithAdapter(
   // 积分耗尽时静默降级、**不写**标记，故它落 else 无害（`retestAccount`
   // 取不到 modelId 时根本不构造适配器）。新增 provider 时务必同步本分支，
   // 并补 `tests/unit/account-probe-adapter.spec.ts` 的对应用例。
-  const lobsteraiProduct = lobsteraiProductById(entry.provider)
   const qoderProduct = qoderProductById(entry.provider)
-  const clineProduct = clineProductById(entry.provider)
-  const zcodeProduct = zcodeProductById(entry.provider)
   let adapter:
-    | LobsteraiAdapter
     | QoderAdapter
-    | ClineAdapter
-    | ZcodeAdapter
     | TraeAdapter
-    | GeminiAdapter
-    | LoomyAdapter
-  if (lobsteraiProduct !== undefined) {
-    adapter = new LobsteraiAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as LobsteraiCredential,
-      refresh: async () => {},
-      product: lobsteraiProduct,
-    })
-  } else if (qoderProduct !== undefined) {
+  if (qoderProduct !== undefined) {
     // Qoder 国际版与中国版**共用同一个适配器类**，差异全在 product 配置里
     // （区域端点、client_id、模型表）。探测只发一次最小纯文本请求，不涉及
     // 工具/图片，故除了 product 之外无需注入其它钩子；`uid` 由凭据自身携带
@@ -248,50 +199,6 @@ async function probeWithAdapter(
       refresh: async () => {},
       product: qoderProduct,
     })
-  } else if (clineProduct !== undefined) {
-    adapter = new ClineAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as ClineCredential,
-      refresh: async () => {},
-      product: clineProduct,
-    })
-  } else if (zcodeProduct !== undefined) {
-    // ZCode 的免费额度通道（`/zcode-plan/anthropic`）**按需**要 captcha：
-    // 默认先不带验证头探一次，被 `3007` 拒才产出（需要验证时复用同一个 param
-    // 必再得 `3007`）。
-    // ⇒ 探测路径若上游当下不要验证，**不会**拉起浏览器；要验证才拉。
-    //
-    // ⚠️ 已知取舍：探测路径**没有** `mintCaptcha` 透传通道（`ProbeDeps` 里没有
-    // 这一项），故**一旦上游索要验证**，这里的适配器就**自建**一个常驻浏览器
-    // （上游不要验证时压根不 mint，也就不会拉）。若宿主里已有 `index.ts`
-    // 注入的那台（`zcode.mintCaptcha`），短时会并存两台（约 200MB/台）。
-
-    // （UTC+8 当日 24:00）会一直清不掉。
-    // 后续若要消除这层浪费，应给 `ProbeDeps` 加一条 `mintCaptcha` 透传，
-    // 与 `index.ts` 的 `zcode.mintCaptcha` 共用同一台常驻浏览器。
-    adapter = new ZcodeAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as ZcodeCredential,
-      refresh: async () => {},
-      product: zcodeProduct,
-    })
-  } else if (entry.provider === LOOMY.id) {
-    // Loomy（讯飞）→ LoomyAdapter。
-    //
-    // 它此前**没有分支**，于是「测试」必然落到 else 抛
-    // `Unsupported probe adapter: loomy`，而客户端又把原因读成空串，用户看到的
-    // 是一句「测试失败：」后面什么都没有（#681）。
-    //
-    // 探测场景下 `accountPool` / `fetchRemoteModels` 都可缺省：`loadModels()`
-    // 会退回 `product.fallbackModels`，`providerCatalogVisible` 在
-    // `accountPool === undefined` 时直接返回 true。`refresh` 同样置空 ——
-    // Loomy 没有 refresh 端点，凭据真过期就让它以 AUTH 失败如实上报。
-    adapter = new LoomyAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as LoomyCredential,
-      refresh: async () => {},
-      product: LOOMY,
-    })
   } else if (entry.provider === TRAE_PROVIDER_ID) {
     // TRAE 只有一个产品（`TRAE` 常量），没有 productById 式的查表，
     // 故直接按 provider id 判定。不传 product → TraeAdapter 内部默认用 TRAE。
@@ -299,34 +206,6 @@ async function probeWithAdapter(
       credentialRef: ref,
       resolveCredential: async () => credential as TraeCredential,
       refresh: async () => {},
-    })
-  } else if (entry.provider === GEMINI.id) {
-    // Gemini（Cloud Code Assist）→ GeminiAdapter。
-    //
-    // ⚠️ 与 zcode 同因：GeminiAdapter 的限流/额度路径**会写** `modelRateLimits`
-    //（见 `gemini-adapter.ts` 的 `updateModelRateLimit` 调用），故必须有分支。
-
-    // 探测必然失败，而账号卡片上的「重测」永远清不掉那个标记。
-    //
-    // 探测只发一次最小纯文本请求，不涉及图片/工具，故除 product 与 lane 外
-    // 无需其它钩子。
-    //
-    // ⚠️ lane 必须是 `smoke`：原版实测冒烟路径与推理路径的 sessionId **不同**
-    //（同 prompt 同预算下取值不同，说明 lane 进了哈希）。不传会让探测流量与
-    // 真实推理混进同一个会话，污染会话归并与 thoughtSignature 回填。
-    //
-    // ⚠️ `project` **显式钉兜底串**，与上面「刻意不传 accountPool / fetchRemoteModels」
-    // 同一个理由：探测是**轻量存活检查**，要的是一次到推理端点的真请求。
-    // 若走自动探测，会先多打一次 `loadCodeAssist`，且 LCA 失败（限流/网络抖动）
-    // 会让探测报「项目号探测失败」而不是它真正要报的「账号仍受限」—— 反而掩盖
-    // 了用户点「重测」想知道的答案。探测**不写**任何东西（不传 persistProject）。
-    adapter = new GeminiAdapter({
-      credentialRef: ref,
-      resolveCredential: async () => credential as GeminiCredential,
-      refresh: async () => {},
-      sessionLane: GEMINI_SESSION_LANE_SMOKE,
-      project: GEMINI_DEFAULT_PROJECT,
-      product: GEMINI,
     })
   } else {
     throw new Error(`Unsupported probe adapter: ${entry.provider}`)

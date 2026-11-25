@@ -44,7 +44,7 @@ const EXTRA_DISPLAY_TIERS = Object.freeze([
   { label: '16K', min: 15_000, max: 17_000 },
 ])
 // 各渠道的档位取值并不统一，这里必须全部认：
-// - Loomy/Qoder 是 none..max 的强度档；
+// - Qoder 是 none..max 的强度档；
 // - TRAE 是 light / high / extra_high；
 // - Raccoon 老模型是 on/off 两态（见 raccoonThinkingExtraBody）；
 // - Raccoon 新目录用托管档位 level_1..level_5（名字与

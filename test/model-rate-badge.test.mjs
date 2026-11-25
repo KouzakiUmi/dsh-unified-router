@@ -68,7 +68,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
   const hooks = registerHooks({ resolve(specifier, context, next) { return specifier.startsWith('@deepseek-ai/') ? { url: kernel, shortCircuit: true } : next(specifier, context) } })
   const originalHome = process.env.DSH_HOME; const stateDir = process.env.DSH_CHANNEL_PACK_STATE_DIR; const originalFetch = globalThis.fetch
   process.env.DSH_HOME = scratch; process.env.DSH_CHANNEL_PACK_STATE_DIR = scratch
-  // 全程离网（fetch 一律抛错）：loomy / qoder 走各自的兜底表；raccoon 在用例中段
+  // 全程离网（fetch 一律抛错）：qoder 走兜底表；raccoon 在用例中段
   // 才切成联机（下面的 fetch 桩供它一家的目录），trae 直接用 auth 的目录接口桩。
   let online = false
   const raccoonCatalog = {
@@ -122,7 +122,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
       return { badgeOf: id => models.find(model => model.id === id)?.badge, models }
     }
 
-    // Loomy 已停用（适配器不注册），其倍率徽标验证随之移除。
+    // Loomy 渠道已移除，其倍率徽标验证随之移除。
 
     // ===== qodercn：兜底表的 priceFactor / promotion（不能真拉上游，需 WASM 签名） =====
     const qoder = await badges('qodercn')

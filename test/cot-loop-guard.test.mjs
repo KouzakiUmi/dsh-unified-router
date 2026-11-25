@@ -217,7 +217,7 @@ test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 p
     })()
 
     // 验证覆盖所有类型 provider（不仅限于原 channel-pack，也覆盖新渠道、API Key 及宿主任意其它 provider）
-    for (const provider of ['loomy', 'raccoon-pro', 'trae', 'workbuddy', 'astudio', 'doubaowork', 'codearts', 'agnes', 'any-third-party-provider']) {
+    for (const provider of ['raccoon-pro', 'trae', 'workbuddy', 'astudio', 'doubaowork', 'codearts', 'agnes', 'any-third-party-provider']) {
       const out = await collect(streamHook.fn({ provider, model: 'test-m' }, makeLoopStream))
       assert.equal(out.at(-1)?.type, 'finish', `${provider} 应被统一保护并切断`)
       assert.deepEqual(out.at(-1)?.reason, { kind: 'stop' })

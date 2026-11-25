@@ -40,21 +40,12 @@ export function createHostSync({
       const credits = get('credits.balances')
       const checkin = get('checkin.status', 'daily')
       const automation = get('automation.status', 'automation')
-      const loomyRoute = get('loomy.routeStatus', 'loomy')
       const patch = {}
       if (checkin?.value) patch.checkin = checkin.value
       if (automation?.value) patch.automation = automationFrom(automation.value)
-      if (loomyRoute?.value) patch.loomyRoute = loomyRouteFrom(loomyRoute.value)
       if (status?.value && status.at >= newestStatusReadRef.current) patch.statuses = statusFrom(status.value)
       if (accounts?.value && accounts.at >= (newestAccountRead.get(state.provider) ?? 0) && (!state.loading || !state.accounts.length)) {
         patch.accounts = accountsFrom(accounts.value, state.provider)
-      }
-      if (loomyRoute?.value && state.provider === 'loomy') {
-        const list = patch.accounts ?? state.accounts
-        patch.accounts = list.map(({ route: _old, ...account }) => ({
-          ...account,
-          ...(patch.loomyRoute.accounts[account.id] ? { route: patch.loomyRoute.accounts[account.id] } : {}),
-        }))
       }
       if (packAllowed(state.provider)) {
         const sides = modelProvidersOf(state.provider)

@@ -59,7 +59,6 @@ const qoderPlanSelector: BadgePlanSelector = Object.freeze({
 export const BADGE_PLAN_SELECTORS: Readonly<Record<string, BadgePlanSelector>> = Object.freeze({
   qoder: qoderPlanSelector,
   qodercn: qoderPlanSelector,
-  zcode: Object.freeze({ kind: 'balance' }) as BadgePlanSelector,
 })
 
 /** 该渠道的套餐形态；未登记返回 `undefined`（＝无订阅）。 */

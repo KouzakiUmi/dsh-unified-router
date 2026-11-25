@@ -78,30 +78,6 @@ function renderLogin(login, ui) {
       login.canCheck ? button('取消', () => ui.act('forgetLogin'), ui.disabled) : null))
 }
 
-function renderRouteOverview(overview, ui) {
-  if (!overview?.counts) return null
-  const { counts, skipRouted, lastCheckedAt } = overview
-  const unhealthy = counts.expired + counts.exhausted
-  const tags = [
-    counts.clean > 0 && [`正常 ${counts.clean}`, 'success'],
-    counts.routed > 0 && [`改路由 ${counts.routed}`, 'error'],
-    unhealthy > 0 && [`异常 ${unhealthy}`, 'warn'],
-    counts.unknown > 0 && [`无账本 ${counts.unknown}`],
-    counts.unchecked > 0 && [`未检测 ${counts.unchecked}`],
-    [skipRouted ? '自动避开改路由' : '未避开改路由', skipRouted ? 'info' : 'warn'],
-  ]
-  return h('div', { className: 'eac-callout', role: 'region', 'aria-label': 'Loomy 上游路由状态' },
-    h('div', { className: 'eac-callout-copy' },
-      h('div', { className: 'eac-row-head' },
-        h('p', { className: 'eac-callout-title' }, '上游路由状态'),
-        ...renderTags(tags)),
-      h('p', { className: 'eac-muted' }, lastCheckedAt > 0
-        ? `最近检测 ${displayTime(lastCheckedAt)} · 只读检测（0 积分）`
-        : '只读检测（0 积分），识别静默改路由。')),
-    h('div', { className: 'eac-callout-actions' },
-      ...renderActions([{ label: '路由设置', panel: 'advanced', open: 'route-check' }], ui)))
-}
-
 function AccountsPanel(view, ui) {
   const { rows } = view
   const summary = []
@@ -116,7 +92,6 @@ function AccountsPanel(view, ui) {
     summary: summary.length ? summary : null,
     actions: renderActions(view.actions, ui, `login:${ui.providerId}`),
     children: [
-      renderRouteOverview(view.routeOverview, ui),
       renderLogin(view.login, ui),
       showImport ? h('div', { className: 'eac-callout' },
         h(CredentialImportForm, {

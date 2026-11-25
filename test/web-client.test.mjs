@@ -39,13 +39,12 @@ function hostFixture() {
     calls.push({ method, payload, signal })
     if (overrides.has(method)) return overrides.get(method)(payload, signal)
     const p = payload.provider
-    if (method === 'provider.status') return { ok: true, value: { statuses: Object.fromEntries(['loomy', 'raccoon', 'qodercn'].map(p => [p, { closed: false, accounts: { enabled: 2 }, models: { total: 31 } }])) } }
+    if (method === 'provider.status') return { ok: true, value: { statuses: Object.fromEntries(['raccoon', 'qodercn', 'trae'].map(p => [p, { closed: false, accounts: { enabled: 2 }, models: { total: 31 } }])) } }
     if (method === 'account.list') return { ok: true, value: { accounts: [
       { id: `${p}-a`, provider: p, nickname: '账号 A', enabled: true, credentialRef: 'NEVER_DISPLAY', token: 'NEVER_DISPLAY' },
       { id: `${p}-b`, provider: p, nickname: '账号 B', enabled: false },
     ] } }
     if (method === 'model.list') return { ok: true, value: { models: Array.from({ length: 31 }, (_, i) => ({ id: `${p}-m${i}`, name: `模型 ${i}`, disabled: false, dead: i === 1 })) } }
-    if (method === 'credits.permanentLock') return { ok: true, value: { locked: payload.locked === true } }
     if (method === 'model.params') return { ok: true, value: { provider: p, params: {} } }
     if (method === 'model.setParams') return { ok: true, value: { provider: p, params: payload.params ? { [payload.modelId]: payload.params } : {} } }
     if (method === 'account.create') return { ok: true, value: { accountId: `${p}-pending`, loginUrl: 'http://127.0.0.1:3311/login?state=fixture' } }
@@ -76,19 +75,20 @@ test('客户端只注册 settings.section，不声明聊天或侧栏入口；实
   const Settings = registrations[0].component
   react.begin(); const tree = Settings({ ctx }); react.flush(); await tick()
   assert.equal(tree.props.className, 'eac-settings')
-  // 首屏：5 项基础读取 + 自动查余额 = 6；**外加**快照型渠道的卡片预热
-  // （商汤 plan.snapshot、WorkBuddy snapshot + models），否则那两张渠道 tab 在
-  // 「点进去之前」永远是「未添加账号 / 状态未读取」（用户反复报障）。API Key 渠道
-  // （Agnes、云知声）各预热一份 apikey.snapshot，同样不计入基础读取。
+  // 首屏基础读取：settings.snapshot、provider.status、account.list、自动查余额各 1 次，
+  // Raccoon 家族卡的目录与参数按两侧各读一次（model.list ×2 + model.params ×2），共 8 项。
+  // **外加**快照型渠道的卡片预热（商汤 plan.snapshot、WorkBuddy snapshot + models），
+  // 否则那两张渠道 tab 在「点进去之前」永远是「未添加账号 / 状态未读取」（用户反复报障）。
+  // API Key 渠道（Agnes、云知声）各预热一份 apikey.snapshot，同样不计入基础读取。
   const coreReads = transport.filter(args => !['plan.snapshot', 'workbuddy.snapshot', 'workbuddy.models', 'apikey.snapshot', 'managed.snapshot', 'managed.models'].includes(args[2].method))
-  assert.equal(coreReads.length, 7)
+  assert.equal(coreReads.length, 8)
   assert.ok(coreReads.some(args => args[2].method === 'settings.snapshot'))
   assert.deepEqual(transport.map(args => args[2].method).filter(m => ['plan.snapshot', 'workbuddy.snapshot', 'workbuddy.models'].includes(m)).sort(),
     ['plan.snapshot', 'workbuddy.models', 'workbuddy.snapshot'], '卡片预热要读两侧快照')
   assert.ok(transport.every(args => args[0] === '/api' && args[1] === 'unified-router' && args[3] instanceof AbortSignal))
   assert.equal(host.calls.some(c => c.method === 'account.create'), false)
   const before = transport.length
-  treeNodes(tree).find(n => n.props['aria-label'] === '切换到 Loomy').props.onClick()
+  treeNodes(tree).find(n => n.props['aria-label'] === '切换到 Raccoon').props.onClick()
   await tick()
   assert.equal(transport.length, before, '当前渠道已选中，重复点击不应再触发整页读取')
   react.dispose()
@@ -160,7 +160,7 @@ test('账号紧凑列表：两个账号同时可见，点「管理」展开后�
   const detail = treeNodes(tree).find(n => n.props.className === 'eac-row-more')
   assert.equal(detail.props.id, more.props['aria-controls'], '展开按钮与详情区域有可访问的关联')
   const form = treeNodes(tree).find(n => typeof n.type === 'function' && n.type.name === 'AccountForm')
-  assert.equal(form.props.key, 'loomy:loomy-a')
+  assert.equal(form.props.key, 'raccoon:raccoon-a')
   react.dispose()
 })
 
@@ -171,6 +171,10 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   const byText = (tree, text) => treeNodes(tree).filter(n => n.type === 'button' && n.children.includes(text))
   render(); await tick()
+  // Raccoon 家族卡的渠道分区是两个「模型提供方」开关；「关闭渠道」开关是单渠道
+  // （TRAE）的形状，先切过去再断言。
+  treeNodes(render()).find(n => n.props['aria-label'] === '切换到 TRAE').props.onClick()
+  await tick()
   let tree = render()
   // 运行中：绿色档（CSS 只定义了 success/warn，旧实现的 is-on 没有配色）。
   assert.equal(treeNodes(tree).find(n => n.props.className === 'eac-status-chip').props['data-tone'], 'success')
@@ -194,7 +198,7 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   react.dispose()
 })
 
-test('渠道卡片九张（AStudio 已停用）：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
+test('渠道卡片八张（AStudio 已停用、Loomy 已移除）：旧豆包工作选择回到首项，Raccoon 两个模型面仍只占一张卡片', async () => {
   const { module, react } = loadClient(undefined, {
     localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'doubaowork' : null },
   }); const host = hostFixture(); let Settings
@@ -205,7 +209,7 @@ test('渠道卡片九张（AStudio 已停用）：旧豆包工作选择回到首
   const tabs = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
   // `raccoon-pro` 是模型层的第二个 provider，不是一张卡片。
   assert.deepEqual(tabs.map(n => n.props['aria-label'].replace('切换到 ', '')),
-    ['Loomy', 'Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'CodeArts'])
+    ['Raccoon', 'Qoder 中国版', 'TRAE', '商汤 Token Plan', 'WorkBuddy', 'Agnes', '云知声', 'CodeArts'])
   assert.equal(tabs[0].props['aria-selected'], true)
   assert.ok(tabs.every(tab => tab.props['aria-controls'] === 'eac-provider-workspace'))
   const workspace = treeNodes(render()).find(n => n.props.id === 'eac-provider-workspace')
@@ -249,13 +253,13 @@ test('写操作后的自动重读不再重复查询余额且保留已查结果',
     assert.equal(host.calls.filter(c => c.method === 'credits.balances').length, 1) // 进入渠道自动查一次
     await tick() // 自动查余额是后台请求，等它落地
     assert.ok(store.getSnapshot().balances.length > 0)
-    await store.toggleModel('loomy-m2')
+    await store.toggleModel('raccoon:raccoon-m2')
     assert.equal(host.calls.filter(c => c.method === 'credits.balances').length, 1) // 启停模型不重复打余额接口
     assert.ok(store.getSnapshot().balances.length > 0, '写操作后的重读保留已查余额，不清空成「待查询」')
     await store.load()
     assert.equal(host.calls.filter(c => c.method === 'credits.balances').length, 2) // 手动刷新仍会查
-    await store.load('raccoon')
-    assert.equal(store.getSnapshot().balances.some(b => b.accountId.startsWith('loomy')), false, '切换渠道后不残留旧渠道余额')
+    await store.load('qodercn')
+    assert.equal(store.getSnapshot().balances.some(b => b.accountId.startsWith('raccoon')), false, '切换渠道后不残留旧渠道余额')
   } finally { store.dispose() }
 })
 
@@ -269,10 +273,10 @@ test('余额查询在途时写操作不中止它，结果落地后仍显示', as
     await tick()
     const pending = host.calls.find(c => c.method === 'credits.balances')
     assert.ok(pending, '进入渠道应发起余额查询')
-    await store.toggleModel('loomy-m2') // 写操作触发后台重读
+    await store.toggleModel('raccoon:raccoon-m2') // 写操作触发后台重读
     assert.equal(pending.signal.aborted, false, '写操作不应中止在途的余额查询')
     assert.equal(store.getSnapshot().balances.length, 0, '余额未返回时保持空，不清成零')
-    gate.resolve({ ok: true, value: { accounts: [{ accountId: 'loomy-a', balance: { total: 7 } }] } })
+    gate.resolve({ ok: true, value: { accounts: [{ accountId: 'raccoon-a', balance: { total: 7 } }] } })
     await tick(); await tick()
     assert.equal(store.getSnapshot().balances.length, 1)
     assert.equal(store.getSnapshot().balances[0].total, 7)
@@ -299,7 +303,7 @@ test('登录地址不可用时给出本地原因，不泄露地址本身', async
   const store = module.createRouterStore(host.call)
   try {
     await store.load()
-    host.overrides.set('account.create', async () => ({ ok: true, value: { accountId: 'loomy-p', loginUrl: 'http://evil.test/login?token=SECRET' } }))
+    host.overrides.set('account.create', async () => ({ ok: true, value: { accountId: 'raccoon-p', loginUrl: 'http://evil.test/login?token=SECRET' } }))
     assert.equal(await store.startLogin(), false)
     assert.match(store.getSnapshot().notice, /登录地址不可用/)
     assert.doesNotMatch(store.getSnapshot().notice, /SECRET|evil\.test/)
@@ -346,13 +350,13 @@ test('读取及余额只保留展示字段；零余额与未知余额区分，Qo
 
 test('切换渠道取消旧读请求，忽略不遵守 AbortSignal 的迟到响应', async () => {
   const { module } = loadClient(); const host = hostFixture(); const wait = deferred()
-  host.overrides.set('account.list', async (payload, signal) => payload.provider === 'loomy'
+  host.overrides.set('account.list', async (payload, signal) => payload.provider === 'trae'
     ? wait.promise : { ok: true, value: { accounts: [{ id: 'qodercn-a', provider: 'qodercn', nickname: '新渠道账号', enabled: true }] } })
   const store = module.createRouterStore(host.call)
   try {
-    const old = store.load('loomy'); await tick(); await store.load('qodercn')
-    assert.equal(host.calls.find(c => c.method === 'account.list' && c.payload.provider === 'loomy').signal.aborted, true)
-    wait.resolve({ ok: true, value: { accounts: [{ id: 'old', provider: 'loomy', nickname: '旧渠道账号' }] } }); await old
+    const old = store.load('trae'); await tick(); await store.load('qodercn')
+    assert.equal(host.calls.find(c => c.method === 'account.list' && c.payload.provider === 'trae').signal.aborted, true)
+    wait.resolve({ ok: true, value: { accounts: [{ id: 'old', provider: 'trae', nickname: '旧渠道账号' }] } }); await old
     assert.equal(store.getSnapshot().provider, 'qodercn')
     assert.equal(store.getSnapshot().accounts[0].nickname, '新渠道账号')
   } finally { store.dispose() }
@@ -362,17 +366,17 @@ test('保存目标精确，删除确认有账号及 nonce，旧确认不会误�
   const { module } = loadClient(); const host = hostFixture(); const store = module.createRouterStore(host.call)
   try {
     await store.load()
-    assert.equal(await store.save('loomy-a', '', true), false)
+    assert.equal(await store.save('raccoon-a', '', true), false)
     assert.equal(host.calls.filter(c => c.method === 'account.update').length, 0)
-    await store.save('loomy-b', 'B 新备注', false)
+    await store.save('raccoon-b', 'B 新备注', false)
     const saved = host.calls.find(c => c.method === 'account.update').payload
-    assert.equal(saved.accountId, 'loomy-b'); assert.equal(saved.patch.nickname, 'B 新备注'); assert.equal(saved.patch.enabled, false)
-    store.select('loomy-a'); store.requestDelete('loomy-a'); const old = { ...store.getSnapshot().pendingDelete }
-    store.select('loomy-b'); store.requestDelete('loomy-b')
+    assert.equal(saved.accountId, 'raccoon-b'); assert.equal(saved.patch.nickname, 'B 新备注'); assert.equal(saved.patch.enabled, false)
+    store.select('raccoon-a'); store.requestDelete('raccoon-a'); const old = { ...store.getSnapshot().pendingDelete }
+    store.select('raccoon-b'); store.requestDelete('raccoon-b')
     assert.equal(await store.confirmDelete(old), false)
     assert.equal(host.calls.filter(c => c.method === 'account.delete').length, 0)
     await store.confirmDelete({ ...store.getSnapshot().pendingDelete })
-    assert.equal(host.calls.find(c => c.method === 'account.delete').payload.accountId, 'loomy-b')
+    assert.equal(host.calls.find(c => c.method === 'account.delete').payload.accountId, 'raccoon-b')
   } finally { store.dispose() }
 })
 
@@ -383,7 +387,7 @@ test('登录由显式点击准备、检查；网址可用真正链接打开且�
     assert.match(module.safeLoginUrl('https://example.com/login'), /^https:/)
     assert.match(module.safeLoginUrl('http://127.0.0.1:3311/login'), /^http:/)
     await store.load(); assert.equal(host.calls.filter(c => c.method === 'account.create').length, 0)
-    await store.startLogin(); assert.equal(store.getSnapshot().login.accountId, 'loomy-pending')
+    await store.startLogin(); assert.equal(store.getSnapshot().login.accountId, 'raccoon-pending')
     const before = host.calls.length; await store.startLogin(); assert.equal(host.calls.length, before)
     assert.equal(host.calls.filter(c => c.method === 'login.poll').length, 0)
     await store.pollLogin(); assert.equal(store.getSnapshot().login, null)
@@ -420,7 +424,7 @@ test('网络失败及服务端错误只显示固定中文，写操作不自动�
   try {
     await store.load()
     host.overrides.set('account.update', async () => { throw new Error('secret token NEVER_DISPLAY') })
-    assert.equal(await store.save('loomy-a', '新备注', true), false)
+    assert.equal(await store.save('raccoon-a', '新备注', true), false)
     assert.equal(host.calls.filter(c => c.method === 'account.update').length, 1)
     assert.doesNotMatch(store.getSnapshot().notice, /NEVER_DISPLAY|token/)
     assert.match(store.getSnapshot().notice, /操作失败/)
@@ -435,15 +439,15 @@ test('写操作后的旧渠道刷新被取消时不覆盖新渠道提示，卸�
   try {
     await store.load()
     const oldRefresh = deferred()
-    host.overrides.set('account.list', async payload => payload.provider === 'loomy' ? oldRefresh.promise : { ok: true, value: { accounts: [] } })
-    const write = store.save('loomy-a', '旧渠道保存', true)
+    host.overrides.set('account.list', async payload => payload.provider === 'raccoon' ? oldRefresh.promise : { ok: true, value: { accounts: [] } })
+    const write = store.save('raccoon-a', '旧渠道保存', true)
     await tick(); await store.load('qodercn')
     const notice = store.getSnapshot().notice
     oldRefresh.resolve({ ok: true, value: { accounts: [] } }); await write
     assert.equal(store.getSnapshot().provider, 'qodercn'); assert.equal(store.getSnapshot().notice, notice)
     store.dispose()
     assert.ok(host.calls.filter(c => c.method !== 'account.update').every(c => c.signal.aborted))
-    assert.equal(await store.load('loomy'), false)
+    assert.equal(await store.load('raccoon'), false)
   } finally { store.dispose() }
 })
 
@@ -454,7 +458,7 @@ test('写操作后的后台重读失败：保留旧列表，提示说明是上�
     await store.load()
     assert.ok(store.getSnapshot().accounts.length > 0)
     host.overrides.set('account.list', async () => ({ ok: false }))
-    await store.save('loomy-a', '账号 A', true)
+    await store.save('raccoon-a', '账号 A', true)
     const snapshot = store.getSnapshot()
     assert.ok(snapshot.accounts.length > 0, '重读失败不应清空账号列表')
     assert.ok(snapshot.models.length > 0, '重读失败不应清空模型列表')
@@ -468,8 +472,8 @@ test('手动刷新余额不会被慢的自动查询覆盖', async () => {
   let slow = true
   host.overrides.set('credits.balances', async () => {
     // 第一次是进入渠道的自动查询（慢），第二次是用户手动刷新（快）。
-    if (slow) { slow = false; await new Promise(r => setTimeout(r, 40)); return { ok: true, value: { accounts: [{ accountId: 'loomy-a', balance: { total: 11 } }] } } }
-    return { ok: true, value: { accounts: [{ accountId: 'loomy-a', balance: { total: 99 } }] } }
+    if (slow) { slow = false; await new Promise(r => setTimeout(r, 40)); return { ok: true, value: { accounts: [{ accountId: 'raccoon-a', balance: { total: 11 } }] } } }
+    return { ok: true, value: { accounts: [{ accountId: 'raccoon-a', balance: { total: 99 } }] } }
   })
   const store = module.createRouterStore(host.call)
   try {
@@ -485,21 +489,23 @@ test('手动刷新余额不会被慢的自动查询覆盖', async () => {
 test('领取每日额度与任务奖励后刷新余额', async () => {
   const { module } = loadClient(); const host = hostFixture()
   let total = 7
-  host.overrides.set('credits.balances', async () => ({ ok: true, value: { accounts: [{ accountId: 'loomy-a', balance: { total } }] } }))
+  host.overrides.set('credits.balances', async () => ({ ok: true, value: { accounts: [{ accountId: 'trae-a', balance: { total } }] } }))
   host.overrides.set('credits.claimAll', async () => { total = 42; return { ok: true, value: { results: [{ outcome: { kind: 'claimed' } }] } } })
   const store = module.createRouterStore(host.call)
   try {
-    await store.load(); await tick()
+    // 「一键领取每日额度」是 dailyReward 渠道的动作：Raccoon 没有该端点（claim 直接短路）。
+    await store.load('trae'); await tick()
     assert.equal(store.getSnapshot().balances[0].total, 7)
     await store.claim(); await tick(); await tick()
     assert.equal(store.getSnapshot().balances[0].total, 42, '领取后应显示新额度')
   } finally { store.dispose() }
   const fresh = hostFixture()
-  fresh.overrides.set('credits.balances', async () => ({ ok: true, value: { accounts: [{ accountId: 'loomy-a', balance: { total } }] } }))
+  // 任务奖励（onboarding.claim）只剩 Raccoon 族：后半段用 Raccoon 断言领取奖励后余额可用。
+  fresh.overrides.set('credits.balances', async () => ({ ok: true, value: { accounts: [{ accountId: 'raccoon-a', balance: { total } }] } }))
   const onboarding = module.createRouterStore(fresh.call)
   try {
-    await onboarding.load(); await tick()
-    await onboarding.onboarding('loomy-a'); await tick(); await tick()
+    await onboarding.load('raccoon'); await tick()
+    await onboarding.onboarding('raccoon-a'); await tick(); await tick()
     assert.ok(onboarding.getSnapshot().balances.length > 0, '领取奖励后余额可用')
   } finally { onboarding.dispose() }
 })
@@ -511,12 +517,12 @@ test('领取后的余额查询纳入统一取消生命周期', async () => {
     claiming = true
     return { ok: true, value: { results: [{ outcome: { kind: 'claimed' } }] } }
   })
-  host.overrides.set('credits.balances', async payload => claiming && payload.provider === 'loomy'
+  host.overrides.set('credits.balances', async payload => claiming && payload.provider === 'trae'
     ? gate.promise
     : { ok: true, value: { accounts: [{ accountId: `${payload.provider}-a`, balance: { total: 7 } }] } })
   const store = module.createRouterStore(host.call)
   try {
-    await store.load(); await tick()
+    await store.load('trae'); await tick()
     const pendingClaim = store.claim()
     await tick(); await tick()
     const pendingBalance = host.calls.filter(c => c.method === 'credits.balances').at(-1)
@@ -542,6 +548,10 @@ test('全部领取在途时按钮按渠道作用域禁用', async () => {
   const claimButton = tree => treeNodes(tree).find(n => n.type === 'button' && (n.children || []).includes('全部领取'))
   try {
     render(); await tick()
+    // 「全部领取」是 dailyReward 渠道的动作：Raccoon 没有该端点（按钮不渲染），
+    // 切到 TRAE 再断言按钮的渠道作用域。
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 TRAE').props.onClick()
+    await tick()
     treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
     assert.equal(!claimButton(render()).props.disabled, true)
     claimButton(render()).props.onClick(); await tick()
@@ -577,9 +587,9 @@ test('切换渠道保留其他渠道卡片的最近状态', async () => {
     : host.call(method, payload, signal)
   const store = module.createRouterStore(call)
   try {
-    await store.load('loomy')
+    await store.load('trae')
     const statuses = store.getSnapshot().statuses
-    assert.ok(statuses.loomy && statuses.raccoon && statuses.qodercn)
+    assert.ok(statuses.raccoon && statuses.qodercn && statuses.trae)
     await store.load('sensenova-token-plan')
     assert.equal(store.getSnapshot().statuses, statuses)
     const plan = store.getSnapshot().plan
@@ -654,11 +664,11 @@ test('WorkBuddy 读取落地多账号与全局模型，切换渠道后卡片保�
     assert.equal(wb.models[0].name, '模型一')
     assert.equal(wb.models[0].free, true)
     // 切到 pack 渠道：账号/模型/余额是渠道自有数据，换渠道必须清空……
-    assert.equal(await store.load('loomy'), true)
-    assert.deepEqual(Array.from(store.getSnapshot().accounts, a => a.id), ['loomy-a', 'loomy-b'])
+    assert.equal(await store.load('trae'), true)
+    assert.deepEqual(Array.from(store.getSnapshot().accounts, a => a.id), ['trae-a', 'trae-b'])
     // ……而卡片级状态跨渠道保留（sharedCards 保留同一份对象）。
     assert.equal(store.getSnapshot().workbuddy, wb)
-    // 切回 WorkBuddy：不能残留 loomy 的账号与模型。
+    // 切回 WorkBuddy：不能残留 TRAE 的账号与模型。
     assert.equal(await store.load('workbuddy'), true)
     assert.deepEqual(Array.from(store.getSnapshot().accounts), [])
     assert.deepEqual(Array.from(store.getSnapshot().models), [])
@@ -865,17 +875,16 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   module.apply(ctx)
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   const hasText = (tree, needle) => treeNodes(tree).some(n => (n.children || []).some(c => typeof c === 'string' && c.includes(needle)))
+  // Raccoon 现在是默认渠道：首屏读取完成后进模型分区就会自动补拉两侧目录，
+  // 先配置好两侧的补拉响应再渲染。
+  host.overrides.set('model.refresh', async payload => ({ ok: true, value: payload.provider === 'raccoon'
+    ? { count: 2, source: 'remote' } : { count: 4, source: 'fallback' } }))
   render(); await tick()
   // 卡片：一张家族卡，副行是「账号数（单池）· 模型数（两侧之和）」。
   const cards = treeNodes(render()).filter(n => typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('切换到 '))
-  // 9 张：AStudio 已停用（`card: false`），不再出现在渠道选择器里。
-  assert.equal(cards.length, 9)
+  // 8 张：AStudio 已停用（`card: false`）、Loomy 已移除，不再出现在渠道选择器里。
+  assert.equal(cards.length, 8)
   assert.ok(hasText(render(), '3 账号 · 6 模型'))
-  // 默认进入模型页，切换渠道前先配置该渠道的补拉响应。
-  host.overrides.set('model.refresh', async payload => ({ ok: true, value: payload.provider === 'raccoon'
-    ? { count: 2, source: 'remote' } : { count: 4, source: 'fallback' } }))
-  treeNodes(render()).find(n => n.props['aria-label'] === '切换到 Raccoon').props.onClick()
-  await tick(); render()
   let tree = render()
   assert.equal(treeNodes(tree).find(n => n.props.id === 'eac-tab-models').props['aria-selected'], true)
   treeNodes(tree).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
@@ -894,7 +903,7 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   assert.deepEqual(groups.map(n => n.props['data-model-provider']), ['raccoon', 'raccoon-pro'])
   assert.ok(hasText(tree, '免费模型 · 31'))
   assert.ok(hasText(tree, '订阅模型 · 31'))
-  // 进模型分区会自动补拉两侧目录：每侧各一次 model.refresh，各自记来源。
+  // 首屏读取完成后自动补拉两侧目录：每侧各一次 model.refresh，各自记来源。
   assert.deepEqual(host.calls.filter(c => c.method === 'model.refresh' && c.payload.provider.startsWith('raccoon')).map(c => c.payload.provider),
     ['raccoon', 'raccoon-pro'])
   const groupText = group => treeNodes(group).flatMap(n => n.children || []).filter(c => typeof c === 'string').join(' ')
@@ -932,8 +941,8 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
 
 test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互相覆盖', async () => {
   const { module, react } = loadClient(); const host = hostFixture(); let Settings
-  // loomy 目录：一条订阅限定（带倍率）、一条订阅限定（无倍率）、一条普通免费。
-  host.overrides.set('model.list', async payload => payload.provider === 'loomy'
+  // raccoon 目录（免费面）：一条订阅限定（带倍率）、一条订阅限定（无倍率）、一条普通免费。
+  host.overrides.set('model.list', async payload => payload.provider === 'raccoon'
     ? { ok: true, value: { models: [
       { id: 'pro-model', name: '会员模型', disabled: false, subscriptionOnly: true, rate: { label: 'x0.80', tone: 'neutral' } },
       { id: 'pro-free', name: '会员免费模型', disabled: false, subscriptionOnly: true, isFree: true },
@@ -960,7 +969,11 @@ test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互�
 })
 
 test('模型目录真拉上游：进模型分区自动补拉一次，兜底/远端来源与刷新按钮如实反映', async () => {
-  const { module, react } = loadClient(); const host = hostFixture(); let Settings
+  // 默认渠道 Raccoon 是家族卡（首屏后会对两侧各补拉一次）；这个用例断言单渠道的
+  // 补拉次数，把首屏直接落在 TRAE 上。
+  const { module, react } = loadClient(reactHarness(), {
+    localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'trae' : null },
+  }); const host = hostFixture(); let Settings
   // 主机回报：先是内置目录（上游拉不到），手动刷新后变成远端目录。
   let source = 'fallback'
   host.overrides.set('model.refresh', async () => ({ ok: true, value: { count: source === 'remote' ? 31 : 2, source } }))
@@ -976,7 +989,7 @@ test('模型目录真拉上游：进模型分区自动补拉一次，兜底/远�
   let tree = render()
   await tick(); await tick(); await tick()
   assert.equal(host.calls.filter(c => c.method === 'model.refresh').length, 1)
-  assert.equal(host.calls.filter(c => c.method === 'model.refresh').at(-1).payload.provider, 'loomy')
+  assert.equal(host.calls.filter(c => c.method === 'model.refresh').at(-1).payload.provider, 'trae')
   tree = render()
   assert.equal(hasText(tree, '内置目录'), true)
   assert.equal(hasText(tree, '远端目录'), false)
@@ -998,7 +1011,7 @@ test('模型目录真拉上游：进模型分区自动补拉一次，兜底/远�
   assert.equal(hasText(tree, '内置目录'), false)
   assert.equal(host.calls.filter(c => c.method === 'model.list').length, readsBefore + 1, '刷新后必须重读一次目录')
   // 目录本身没变（fixture 恒 31 条），来源结论才是这次刷新的产出。
-  assert.equal(host.calls.filter(c => c.method === 'model.list').at(-1).payload.provider, 'loomy')
+  assert.equal(host.calls.filter(c => c.method === 'model.list').at(-1).payload.provider, 'trae')
   react.dispose()
 })
 
@@ -1034,19 +1047,19 @@ test('Raccoon 家族卡：两侧目录各自刷新、来源各自记录，只刷
 test('切回已读渠道立即恢复缓存：账号可见、无读取提示、后台仍刷新', async () => {
   const { module } = loadClient(); const host = hostFixture(); const store = module.createRouterStore(host.call)
   try {
-    await store.load('loomy'); await tick() // 等自动余额落地，缓存里也带上额度
+    await store.load('trae'); await tick() // 等自动余额落地，缓存里也带上额度
     const raccoon = store.load('raccoon')
     await tick()
-    const loading = store.load('loomy') // 不 await：切回的瞬间就要有内容
+    const loading = store.load('trae') // 不 await：切回的瞬间就要有内容
     const snapshot = store.getSnapshot()
-    assert.equal(snapshot.provider, 'loomy')
+    assert.equal(snapshot.provider, 'trae')
     assert.ok(snapshot.accounts.length > 0, '缓存的账号立刻可见')
     assert.equal(snapshot.loading, true, '后台仍在刷新')
     assert.equal(snapshot.notice, '', '有缓存时不显示「正在读取渠道状态…」')
-    assert.equal(host.calls.filter(c => c.method === 'account.list' && c.payload.provider === 'loomy').length, 2,
+    assert.equal(host.calls.filter(c => c.method === 'account.list' && c.payload.provider === 'trae').length, 2,
       '缓存只影响显示，不跳过任何 RPC')
     await loading; await raccoon
-    assert.deepEqual(Array.from(store.getSnapshot().accounts, a => a.id), ['loomy-a', 'loomy-b'])
+    assert.deepEqual(Array.from(store.getSnapshot().accounts, a => a.id), ['trae-a', 'trae-b'])
     assert.equal(store.getSnapshot().loading, false)
   } finally { store.dispose() }
 })
@@ -1054,7 +1067,7 @@ test('切回已读渠道立即恢复缓存：账号可见、无读取提示、�
 test('打开设置页直接读上次查看的渠道，不再从第一个渠道点起', async () => {
   // ⚠️ 客户端代码跑在 vm 沙箱里，它看到的 `globalThis` 是沙箱全局 ——
   // 所以 sessionStorage 必须注入沙箱，打在测试进程的 globalThis 上无效。
-  const memory = new Map([['eac-unified-router-last-provider', 'raccoon']])
+  const memory = new Map([['eac-unified-router-last-provider', 'qodercn']])
   const sessionStorage = {
     getItem: key => (memory.has(key) ? memory.get(key) : null),
     setItem: (key, value) => { memory.set(key, String(value)) },
@@ -1064,10 +1077,10 @@ test('打开设置页直接读上次查看的渠道，不再从第一个渠道�
   const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
   module.apply(ctx)
   react.begin(); Settings({ ctx }); react.flush(); await tick()
-  // 首个渠道读取必须落在记住的那个渠道上：不再有一次 loomy 的整轮读取。
+  // 首个渠道读取必须落在记住的那个渠道上：不再有一次默认渠道（Raccoon）的整轮读取。
   const firstChannelRead = host.calls.find(c => c.method === 'account.list')
-  assert.equal(firstChannelRead.payload.provider, 'raccoon')
-  assert.equal(host.calls.some(c => c.method === 'account.list' && c.payload.provider === 'loomy'), false)
+  assert.equal(firstChannelRead.payload.provider, 'qodercn')
+  assert.equal(host.calls.some(c => c.method === 'account.list' && c.payload.provider === 'raccoon'), false)
   react.dispose()
 })
 
@@ -1076,14 +1089,14 @@ test('静默刷新只打卡片计数与当前渠道余额，不置 busy 也不�
   const calls = []
   const store = module.createRouterStore(async (method, payload) => {
     calls.push(method)
-    if (method === 'provider.status') return { ok: true, value: { statuses: { loomy: { closed: false, accounts: { enabled: 1 }, models: { total: 3 } } } } }
-    if (method === 'account.list') return { ok: true, value: { accounts: [{ id: 'loomy-a', provider: 'loomy', nickname: '账号 A', enabled: true }] } }
+    if (method === 'provider.status') return { ok: true, value: { statuses: { trae: { closed: false, accounts: { enabled: 1 }, models: { total: 3 } } } } }
+    if (method === 'account.list') return { ok: true, value: { accounts: [{ id: 'trae-a', provider: 'trae', nickname: '账号 A', enabled: true }] } }
     if (method === 'model.list') return { ok: true, value: { models: [{ id: 'm1', name: '模型一' }] } }
-    if (method === 'credits.balances') return { ok: true, value: { accounts: [{ accountId: 'loomy-a', nickname: '账号 A', balance: { total: 42, packages: [] } }] } }
+    if (method === 'credits.balances') return { ok: true, value: { accounts: [{ accountId: 'trae-a', nickname: '账号 A', balance: { total: 42, packages: [] } }] } }
     return { ok: true, value: {} }
   })
   try {
-    await store.load('loomy')
+    await store.load('trae')
     calls.length = 0
     const before = store.getSnapshot()
     await store.refreshLight()
@@ -1098,7 +1111,7 @@ test('静默刷新只打卡片计数与当前渠道余额，不置 busy 也不�
 test('首次进入的渠道无缓存：仍显示读取提示', async () => {
   const { module } = loadClient(); const host = hostFixture(); const store = module.createRouterStore(host.call)
   try {
-    await store.load('loomy')
+    await store.load('trae')
     const loading = store.load('qodercn') // 该渠道还没读过，没有缓存
     const snapshot = store.getSnapshot()
     assert.deepEqual(Array.from(snapshot.accounts), [])
@@ -1122,7 +1135,7 @@ test('sessionStorage 持久化：重进设置页恢复缓存且只含公开字�
   } } } }, { filename: 'client.js' })
   const host = hostFixture()
   const first = module.createRouterStore(host.call)
-  await first.load('loomy'); await tick()
+  await first.load('trae'); await tick()
   const persisted = cells.get('eac-unified-router-cache-v1')
   assert.equal(typeof persisted, 'string', '读取成功后写入渠道缓存')
   assert.doesNotMatch(persisted, /NEVER_DISPLAY|credentialRef|token/, '缓存只含公开展示字段')
@@ -1130,10 +1143,10 @@ test('sessionStorage 持久化：重进设置页恢复缓存且只含公开字�
   assert.ok(cells.has('eac-unified-router-cache-v1'), 'dispose 只清内存缓存，不清 sessionStorage')
   // 「重进设置页」：同一 context 里新建 store，不 await 就能看到账号。
   const second = module.createRouterStore(host.call)
-  const loading = second.load('loomy')
+  const loading = second.load('trae')
   const snapshot = second.getSnapshot()
-  assert.deepEqual(Array.from(snapshot.accounts, a => a.id), ['loomy-a', 'loomy-b'])
-  assert.ok(snapshot.statuses.loomy, '卡片级状态也恢复，状态点不是一片灰')
+  assert.deepEqual(Array.from(snapshot.accounts, a => a.id), ['trae-a', 'trae-b'])
+  assert.ok(snapshot.statuses.trae, '卡片级状态也恢复，状态点不是一片灰')
   assert.equal(snapshot.notice, '')
   await loading
   second.dispose()
@@ -1158,7 +1171,7 @@ test('卡片级状态存 localStorage：重启后渠道 tab 首屏就有上次�
   } }))
   host.overrides.set('workbuddy.models', async () => ({ ok: true, value: { models: [{ id: 'hy4std', name: 'Hy4', free: true }] } }))
   const first = module.createRouterStore(host.call)
-  await first.load('loomy')
+  await first.load('trae')
   await first.prefetchCards?.()
   await tick()
   const raw = cells.get('eac-unified-router-cache-v1')
@@ -1175,22 +1188,22 @@ test('卡片级状态存 localStorage：重启后渠道 tab 首屏就有上次�
   assert.equal(snapshot.plan?.hasApiKey, true, '商汤卡片状态要跨重启恢复')
   assert.equal(snapshot.workbuddy?.accounts?.length, 1, 'WorkBuddy 账号要跨重启恢复')
   assert.deepEqual(snapshot.workbuddy?.loginUrl, '', '登录地址不落盘')
-  assert.ok(snapshot.statuses.loomy, 'pack 渠道的卡片计数同样恢复')
+  assert.ok(snapshot.statuses.trae, 'pack 渠道的卡片计数同样恢复')
   second.dispose()
 })
 
 test('缓存不跨渠道串数据', async () => {
   const { module } = loadClient(); const host = hostFixture(); const store = module.createRouterStore(host.call)
   try {
-    await store.load('loomy'); await tick()
+    await store.load('trae'); await tick()
     const raccoon = store.load('raccoon') // 该渠道首次进入，没有缓存
     assert.deepEqual(Array.from(store.getSnapshot().accounts), [], '首次进入的渠道不能显示上一渠道的账号')
     await raccoon
-    const back = store.load('loomy')
+    const back = store.load('trae')
     const snapshot = store.getSnapshot()
-    assert.equal(snapshot.provider, 'loomy')
+    assert.equal(snapshot.provider, 'trae')
     assert.ok(snapshot.accounts.length > 0)
-    assert.ok(snapshot.accounts.every(a => a.provider === 'loomy'), '缓存命中的是 loomy 自己的账号池')
+    assert.ok(snapshot.accounts.every(a => a.provider === 'trae'), '缓存命中的是 TRAE 自己的账号池')
     await back
   } finally { store.dispose() }
 })
@@ -1229,8 +1242,8 @@ test('设置批量读取宿主快照，切换时恢复额度并静默更新当�
     if (method === 'settings.snapshot') {
       snapshotCalls.push(method)
       return { ok: true, value: { cursor, entries: payload.cursor === cursor ? null : {
-        'loomy/account.list': { value: { accounts: [{ id: 'loomy-a', provider: 'loomy', nickname: '后台账号' }] }, at: Date.now() + 1000, stale: false },
-        'loomy/credits.balances': { value: { accounts: [{ accountId: 'loomy-a', balance: { total }, updatedAt: 123 }] }, at: 123, stale: false },
+        'trae/account.list': { value: { accounts: [{ id: 'trae-a', provider: 'trae', nickname: '后台账号' }] }, at: Date.now() + 1000, stale: false },
+        'trae/credits.balances': { value: { accounts: [{ accountId: 'trae-a', balance: { total }, updatedAt: 123 }] }, at: 123, stale: false },
         'workbuddy/workbuddy.snapshot': { value: { accounts: [accountRow('workbuddy-aaaaaaaa', '甲')] }, at: 123, stale: false },
       } } }
     }
@@ -1241,7 +1254,7 @@ test('设置批量读取宿主快照，切换时恢复额度并静默更新当�
     return fixture.call(method, payload, signal)
   })
   try {
-    await store.load('loomy')
+    await store.load('trae')
     await store.readHostSnapshots()
     assert.equal(store.getSnapshot().accounts[0].nickname, '后台账号')
     assert.equal(store.getSnapshot().balances[0].total, 420)
@@ -1294,8 +1307,8 @@ test('账号行从宿主签到快照显示已签到并停用当轮领取入口',
   host.overrides.set('settings.snapshot', async () => ({
     ok: true, value: { cursor: 'checkin-v1', entries: {
       'daily/checkin.status': { value: { enabled: true, providers: {
-        loomy: { date, resetHour: 0, enabled: false, accounts: [
-          { accountId: 'loomy-a', kind: 'claimed' }, { accountId: 'loomy-b', kind: 'already-claimed' },
+        trae: { date, resetHour: 0, enabled: false, accounts: [
+          { accountId: 'trae-a', kind: 'claimed' }, { accountId: 'trae-b', kind: 'already-claimed' },
         ] },
       } } },
     } },
@@ -1306,6 +1319,10 @@ test('账号行从宿主签到快照显示已签到并停用当轮领取入口',
   const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
   try {
     render()
+    await tick()
+    // 「全部领取」入口与签到徽标按 dailyReward 渠道断言：Raccoon 没有一键领取
+    // （`dailyReward: false`），切到 TRAE。
+    treeNodes(render()).find(n => n.props['aria-label'] === '切换到 TRAE').props.onClick()
     await tick()
     treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
     const nodes = treeNodes(render())
@@ -1455,4 +1472,91 @@ test('各渠道设置页统一展示积分单位、同名包聚合、总计汇�
     assert.match(allText(t), /800 \/ 1,000\| 积分/)
     assert.match(allText(t), /剩余 80%/)
   } finally { react.dispose() }
+})
+
+// 宿主快照协议桩：命中快照读方法时附带 `snapshot: { at, stale }`。
+// `at: null` 表示「宿主还没采集过这份资源」——客户端应回落实时读取。
+function snapshotHost({ at = null, stale = false } = {}) {
+  const host = hostFixture()
+  const snapshotMethods = new Set(['provider.status', 'account.list', 'model.list', 'model.params', 'credits.balances'])
+  const call = async (method, payload, signal) => {
+    const result = await host.call(method, payload, signal)
+    if (payload?.snapshot === true && snapshotMethods.has(method) && result?.ok === true) {
+      return { ok: true, value: { ...result.value, snapshot: { at, stale } } }
+    }
+    return result
+  }
+  return { ...host, call }
+}
+
+test('账号池渠道首屏优先读宿主持久化快照：命中即零实时读取，也不打扰宿主补采', async () => {
+  const { module } = loadClient()
+  const host = snapshotHost({ at: Date.now() - 1_000 })
+  const store = module.createRouterStore(host.call)
+  const snapshotMethods = ['provider.status', 'account.list', 'model.list', 'model.params', 'credits.balances']
+  try {
+    assert.equal(await store.load('raccoon'), true)
+    const reads = host.calls.filter(call => snapshotMethods.includes(call.method))
+    assert.ok(reads.length > 0, '首屏仍要读数据')
+    assert.ok(reads.every(call => call.payload?.snapshot === true), '账号 / 目录 / 参数 / 额度都必须走快照读取')
+    assert.equal(host.calls.filter(call => call.method === 'settings.refresh').length, 0, '快照已够用时不请宿主补采')
+    const state = store.getSnapshot()
+    assert.deepEqual(state.accounts.map(account => account.id).sort(), ['raccoon-a', 'raccoon-b'])
+    assert.ok(state.models.length >= 2, '目录同样来自快照')
+    assert.equal(state.loadFailed, false)
+  } finally { store.dispose() }
+})
+
+test('宿主尚未采集该资源时回落实时读取，并请它补采一次', async () => {
+  const { module } = loadClient()
+  const host = snapshotHost({ at: null })
+  const store = module.createRouterStore(host.call)
+  try {
+    assert.equal(await store.load('raccoon'), true)
+    const accountReads = host.calls.filter(call => call.method === 'account.list')
+    assert.ok(accountReads.some(call => call.payload?.snapshot === true), '先问快照')
+    assert.ok(accountReads.some(call => call.payload?.snapshot !== true), '快照为空时回落实时，界面不空转')
+    const refreshes = host.calls.filter(call => call.method === 'settings.refresh')
+    assert.ok(refreshes.some(call => call.payload?.provider === 'raccoon'), '请宿主补采该渠道，下次打开即由快照供给')
+    // 家族卡有免费 / 订阅两个模型面：每个面各补采一次，但同一个面不因为
+    // account.list / model.list / model.params / credits.balances 各问一遍而重复请求。
+    assert.deepEqual(refreshes.map(call => call.payload.provider).sort(), ['raccoon', 'raccoon-pro'],
+      '同一渠道只补采一次（账号 / 目录 / 参数各问一遍也不重复打扰宿主）')
+    assert.deepEqual(store.getSnapshot().accounts.map(account => account.id).sort(), ['raccoon-a', 'raccoon-b'])
+  } finally { store.dispose() }
+})
+
+test('宿主不认快照标记时（共用模式转发给原插件）按实时数据使用，不空转也不报错', async () => {
+  // 共用模式下 RPC 经 sharedTransport 转发给原 channel-pack 插件：它没有本插件的
+  // 「snapshot: true → 附带 snapshot.at」扩展，因此返回值里**没有 snapshot 标记**。
+  // 客户端必须把这种返回当作实时数据直接用（并照常展示），不能因为「没拿到 at」
+  // 就回退重读或当成读取失败 —— 否则共用模式首屏会多打一轮上游。
+  const { module } = loadClient()
+  const host = hostFixture()
+  const store = module.createRouterStore(host.call)
+  try {
+    assert.equal(await store.load('raccoon'), true)
+    // 家族卡有免费 / 订阅两个模型面：model.* 按面各读一次，其余每渠道一次。
+    const snapshotMethods = ['provider.status', 'account.list', 'model.list', 'model.params', 'credits.balances']
+    const perKey = {}
+    for (const call of host.calls.filter(entry => snapshotMethods.includes(entry.method))) {
+      const key = `${call.method}|${call.payload?.provider ?? ''}`
+      perKey[key] = (perKey[key] ?? 0) + 1
+    }
+    for (const [key, count] of Object.entries(perKey)) {
+      assert.equal(count, 1, `${key} 只读一次（先说快照、拿不到标记也不回退）`)
+    }
+    assert.deepEqual(Object.keys(perKey).sort(), [
+      'account.list|raccoon', 'credits.balances|raccoon',
+      'model.list|raccoon', 'model.list|raccoon-pro',
+      'model.params|raccoon', 'model.params|raccoon-pro',
+      'provider.status|',
+    ], '该读的资源一个不少、也没多读')
+    assert.equal(host.calls.filter(call => call.method === 'settings.refresh').length, 0,
+      '没拿到 at 不等于宿主没采集过，不该反过来请它补采')
+    const state = store.getSnapshot()
+    assert.deepEqual(state.accounts.map(account => account.id).sort(), ['raccoon-a', 'raccoon-b'])
+    assert.ok(state.models.length >= 2)
+    assert.equal(state.loadFailed, false, '不因缺少快照标记而判读取失败')
+  } finally { store.dispose() }
 })

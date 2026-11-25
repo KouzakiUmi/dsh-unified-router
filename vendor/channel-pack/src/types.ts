@@ -456,49 +456,6 @@ export interface RpcCreditsBalancesRequest {
 }
 
 /**
- * RPC: Loomy「锁定永久积分」开关的读写请求。
- *
- * ⚠️ 该开关是 **Loomy 全局**的（不分账号）：锁定后选号只允许消耗今日赠送额度，
- * 永久积分不参与 —— 只剩永久积分的账号在锁定期间等同于不可用。
- *
- * `locked` 省略表示**只读查询**；给出布尔值表示写入。
- */
-export interface RpcLoomyPermanentLockRequest {
-  locked?: boolean
-}
-
-/** RPC: Loomy「锁定永久积分」开关响应。 */
-export interface RpcLoomyPermanentLockResponse {
-  /** 当前是否已锁定。 */
-  locked: boolean
-}
-
-/**
- * RPC: 通用「锁定永久积分」开关的读写请求（**provider 维度**）。
- *
- * ## 为什么不是 Loomy 那个单字段开关的扩展
- *
- * 「锁定永久积分」这件事**三个 provider 都有**，但「什么算永久积分」各不相同：
- *
- * `locked` 省略表示**只读查询**；给出布尔值表示写入。
- */
-export interface RpcPermanentLockRequest {
-
-  provider: string
-  locked?: boolean
-}
-
-/** RPC: 通用「锁定永久积分」开关响应。 */
-export interface RpcPermanentLockResponse {
-  /** 回显请求的 provider（前端并发切换时据此对号）。 */
-  provider: string
-  /** 当前是否已锁定。 */
-  locked: boolean
-
-  windowDays?: number
-}
-
-/**
  * 单个账号的积分余额。
  *
  * 与签到状态的设计取舍不同：余额**带回每个包的明细**而不只是总数 ——
@@ -671,54 +628,11 @@ export interface RpcClineRequestLogResponse {
 
 /**
  * ========================================
- * 短信验证码登录（仅 Loomy）
+ * 一次性奖励（Raccoon 族登录奖励）
  * ========================================
  *
- * Loomy 是唯一**没有 loginUrl** 的 provider（短信登录），故不能复用
- * `login.poll` 那套轮询流程，需要两个专用端点。
- */
-
-/** RPC: 为某个待登录账号下发短信验证码（Loomy **备用**登录路径）。 */
-export interface RpcSendSmsRequest {
-  accountId: string
-  provider: string
-  /**
-   * 手机号。
-   *
-   * ⚠️ **由本请求自己携带**，不从 `account.create` 的中间态取 ——
-   * 主路径是**微信扫码**，`account.create` 不再收集手机号
-   * （那正是「新建账号失败：Loomy 短信登录需要手机号」那个**顺序死锁**
-   * 缺陷的成因：表单要等 `account.create` 返回才渲染，却要求它先有手机号）。
-   */
-  phone: string
-}
-/** RPC: 下发短信验证码的响应。 */
-export interface RpcSendSmsResponse {
-  /** 服务端返回的 msgid（服务端已缓存在占位条目上，前端只需知道已发出）。 */
-  msgid: string
-}
-
-/** RPC: 提交短信验证码完成登录。 */
-export interface RpcSubmitSmsRequest {
-  accountId: string
-  provider: string
-  code: string
-}
-/** RPC: 提交验证码的响应。 */
-export interface RpcSubmitSmsResponse {
-  /** 登录是否完成（凭据已写入）。 */
-  done: boolean
-  /** 失败原因（`done: false` 时给出）。 */
-  error?: string
-}
-
-/**
- * ========================================
- * 新手任务（仅 Loomy）
- * ========================================
- *
- * ⚠️ 与 `credits.*`（每日签到）**语义独立**：新手任务是**一次性**的
- * （每号只能领一次 10000 分），故有独立端点，不参与「一键签到」遍历。
+ * ⚠️ 与 `credits.*`（每日签到）**语义独立**：登录奖励是**一次性**的
+ * （每号只能领一次），故有独立端点，不参与「一键签到」遍历。
  */
 
 /** RPC: 查询某账号的新手任务状态。 */
@@ -1179,24 +1093,6 @@ export interface BackupPayload {
   accounts: ProviderAccountEntry[]
   /** 模型黑名单：provider id → 被关闭的模型 id → true。 */
   disabledModels: Record<string, Record<string, boolean>>
-  /**
-   * 各 provider 的「锁定永久积分」开关：provider id → 已锁定。
-   *
-   * ⚠️ **可选**：老备份文件里没有该字段，导入时保持当前值（不重置）。
-   * 导出时总写完整表（含空表），故新备份一律自包含。
-   */
-  permanentLocks?: Record<string, boolean>
-  /**
-   * Loomy「锁定永久积分」开关（**兼容字段**，权威值在 {@link permanentLocks}）。
-   *
-   * ⚠️ **可选**：老备份文件里没有该字段，导入时保持当前值（不重置），
-   * 因此不需要提升 {@link BACKUP_VERSION}。
-   *
-   * ⚠️ 导出时**继续双写**：老版本只读这一个字段，缺了它回退版本会看到
-   * 「锁定悄悄失效」——而锁定失效的后果是**真的把永久积分烧掉**，
-   * 属于不可逆损失，所以宁可留一个冗余字段。
-   */
-  loomyPermanentLocked?: boolean
 }
 
 /** RPC: 导出备份响应。 */

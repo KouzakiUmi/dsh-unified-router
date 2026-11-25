@@ -19,14 +19,14 @@ const modelData = (id, model, ...entries) => quotaPillData(id, quotaRoute(id).ty
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
 test('请求账号按会话和模型隔离，实际重试覆盖初选，关闭转为最近调用', async () => {
-  const accounts = createQuotaCallAccounts(new Set(['loomy']))
-  const first = { sessionId: 'session-a', provider: 'loomy', model: 'm' }
+  const accounts = createQuotaCallAccounts(new Set(['raccoon']))
+  const first = { sessionId: 'session-a', provider: 'raccoon', model: 'm' }
   const second = { ...first, sessionId: 'session-b' }
   const stream = (route, id) => accounts.track(route, async function* () {
     await tick()
-    accounts.note('loomy', id, 'm')
+    accounts.note('raccoon', id, 'm')
     yield 1
-    accounts.note('loomy', id + '-retry', 'm')
+    accounts.note('raccoon', id + '-retry', 'm')
     yield 2
   })
   const a = stream(first, 'account-a'), b = stream(second, 'account-b')
@@ -34,7 +34,7 @@ test('请求账号按会话和模型隔离，实际重试覆盖初选，关闭�
   assert.deepEqual(accounts.read(first), { accountId: 'account-a', live: true })
   assert.deepEqual(accounts.read(second), { accountId: 'account-b', live: true })
   assert.equal(accounts.read({ ...first, model: 'other' }), null)
-  accounts.note('loomy', 'background', 'm')
+  accounts.note('raccoon', 'background', 'm')
   await a.next()
   assert.deepEqual(accounts.read(first), { accountId: 'account-a-retry', live: true })
   await Promise.all([a.return(), b.return()])
@@ -44,10 +44,10 @@ test('请求账号按会话和模型隔离，实际重试覆盖初选，关闭�
   await background.next(); await background.return()
   assert.equal(accounts.read(first).accountId, 'account-a-retry')
   // 粘滞（缓存优先）记录：只记前台实际服务账号；后台用途与未知渠道不进记录。
-  assert.equal(accounts.lastFor('loomy', 'm'), 'account-a-retry')
-  assert.equal(accounts.lastFor('loomy', 'other'), null)
+  assert.equal(accounts.lastFor('raccoon', 'm'), 'account-a-retry')
+  assert.equal(accounts.lastFor('raccoon', 'other'), null)
   assert.equal(accounts.lastFor('unisound', 'm'), null)
-  assert.equal(accounts.lastFor('loomy', ''), null)
+  assert.equal(accounts.lastFor('raccoon', ''), null)
 })
 
 test('额度药丸用当前 provider，区分 0、未知和实际额度资源', () => {
@@ -163,11 +163,11 @@ test('同账号池共用轮询，仅请求已有宿主快照，失败保留上�
   } finally { release(); release2() }
 })
 
-test('账号池未选定账号时药丸显示总积分与临时永久分项，点开默认展示当前账号，AStudio 仅展示数字', () => {
+test('账号池未选定账号时药丸显示总积分与临时永久分项，点开默认展示当前账号', () => {
   const accounts = [
-    { id: 'l1', provider: 'loomy', nickname: '号一', enabled: true },
-    { id: 'l2', provider: 'loomy', nickname: '号二', enabled: true },
-    { id: 'l3', provider: 'loomy', nickname: '停用', enabled: false },
+    { id: 'l1', provider: 'qodercn', nickname: '号一', enabled: true },
+    { id: 'l2', provider: 'qodercn', nickname: '号二', enabled: true },
+    { id: 'l3', provider: 'qodercn', nickname: '停用', enabled: false },
   ]
   const balances = [
     { accountId: 'l1', updatedAt: 1000, balance: { total: 1200, packages: [
@@ -181,14 +181,14 @@ test('账号池未选定账号时药丸显示总积分与临时永久分项，�
     { accountId: 'l3', balance: { total: 99999, packages: [{ name: '永久积分', remaining: 99999, unit: '积分', active: true }] } },
   ]
   const packEntries = [{ value: { accounts } }, { value: { accounts: balances } }]
-  const unselected = quotaPillData('loomy', 'pack', { entries: packEntries }, null)
+  const unselected = quotaPillData('qodercn', 'pack', { entries: packEntries }, null)
   assert.equal(unselected.serving, null)
   assert.equal(unselected.summary, '1,500 积分')
   assert.equal(unselected.pool.total, 1500)
   assert.equal(unselected.pool.temporary, 300)
   assert.equal(unselected.pool.permanent, 1200)
   assert.equal(unselected.viewed.id, 'l1')
-  const selected = quotaPillData('loomy', 'pack', { entries: packEntries }, { accountId: 'l2', live: true })
+  const selected = quotaPillData('qodercn', 'pack', { entries: packEntries }, { accountId: 'l2', live: true })
   assert.equal(selected.serving.id, 'l2')
   assert.equal(selected.summary, '300 积分')
 })
@@ -302,8 +302,8 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
 
   const slotsMap = new Map()
   const accounts = [
-    { id: 'l1', provider: 'loomy', nickname: '号一', enabled: true },
-    { id: 'l2', provider: 'loomy', nickname: '号二', enabled: true },
+    { id: 'l1', provider: 'raccoon', nickname: '号一', enabled: true },
+    { id: 'l2', provider: 'raccoon', nickname: '号二', enabled: true },
   ]
   const balances = [
     { accountId: 'l1', updatedAt: 1000, balance: { total: 1200, packages: [
@@ -320,11 +320,14 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
     windows: [{ name: '活动赠送积分', balance: 1600, limit: 1600, used: 0, unit: '积分', expiresAt: '2030-01-01T00:00:00Z' }],
   }]
   const entries = {
-    'loomy/account.list': { at: 1, stale: false, value: { accounts } },
-    'loomy/credits.balances': { at: 1, stale: false, value: { accounts: balances } },
+    'raccoon/account.list': { at: 1, stale: false, value: { accounts } },
+    'raccoon/credits.balances': { at: 1, stale: false, value: { accounts: balances } },
+    // 小浣熊药丸额外读全局自动化资源（统一模型开关决定显示口径）；此处保持关闭，
+    // 药丸按默认口径展示账号池总积分。
+    'automation/automation.status': { at: 1, stale: false, value: { config: {} } },
     'astudio/managed.snapshot': { at: 1, stale: false, value: { enabled: true, registered: true, accounts: astudioAccounts } },
     'astudio/managed.models': { at: 1, stale: false, value: { models: [{ id: 'm', name: 'M', enabled: true }] } },
-    'provider.status': { at: 1, stale: false, value: { statuses: { loomy: { closed: false, accounts: { total: 2, enabled: 2 }, models: { total: 1 } } } } },
+    'provider.status': { at: 1, stale: false, value: { statuses: { raccoon: { closed: false, accounts: { total: 2, enabled: 2 }, models: { total: 1 } } } } },
   }
   const rpc = async (_p, _s, req) => {
     if (req.method === 'settings.snapshot' && req.payload?.resource) {
@@ -335,10 +338,10 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
     if (req.method === 'credits.balances') return { ok: true, value: { accounts: balances } }
     if (req.method === 'provider.status') return { ok: true, value: entries['provider.status'].value }
     if (req.method === 'model.list') return { ok: true, value: { source: 'remote', models: [] } }
-    if (req.method === 'model.params') return { ok: true, value: { provider: 'loomy', params: {} } }
+    if (req.method === 'model.params') return { ok: true, value: { provider: 'raccoon', params: {} } }
     return { ok: true, value: {} }
   }
-  let current = { provider: 'loomy', model: 'm' }
+  let current = { provider: 'raccoon', model: 'm' }
   const dirStore = { getSnapshot: () => ({ current }), subscribe: () => () => {} }
   let customPlugin
   const hooks = []; const unsubscribes = []; let cursor = 0
@@ -386,17 +389,17 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
       const secondPass = pillEntry.view(pillEntry.spec.inject('s1'))
       return expandTree(secondPass)
     }
-    const loomyTree = await renderPill()
-    const loomyTrigger = treeOf(loomyTree).find(n => n.props?.className === 'eac-quota-trigger')
-    assert.equal(textsOf(loomyTrigger).join(''), '1,500 积分')
-    assert.match(loomyTrigger.props['aria-label'], /^Loomy · 1,500 积分/)
-    assert.match(loomyTrigger.props['aria-label'], /临时 300 · 永久 1,200/)
-    const loomyPopText = textsOf(treeOf(loomyTree).find(n => n.props?.className === 'eac-quota-popover')).join('|')
-    assert.match(loomyPopText, /账号池总积分/)
-    assert.match(loomyPopText, /总积分\|1,500 积分/)
-    assert.match(loomyPopText, /临时额度\|300 积分/)
-    assert.match(loomyPopText, /永久额度\|1,200 积分/)
-    assert.match(loomyPopText, /号一\|当前账号 · 1,200 积分|号一\|当前账号/)
+    const raccoonTree = await renderPill()
+    const raccoonTrigger = treeOf(raccoonTree).find(n => n.props?.className === 'eac-quota-trigger')
+    assert.equal(textsOf(raccoonTrigger).join(''), '1,500 积分')
+    assert.match(raccoonTrigger.props['aria-label'], /^Raccoon · 1,500 积分/)
+    assert.match(raccoonTrigger.props['aria-label'], /临时 300 · 永久 1,200/)
+    const raccoonPopText = textsOf(treeOf(raccoonTree).find(n => n.props?.className === 'eac-quota-popover')).join('|')
+    assert.match(raccoonPopText, /账号池总积分/)
+    assert.match(raccoonPopText, /总积分\|1,500 积分/)
+    assert.match(raccoonPopText, /临时额度\|300 积分/)
+    assert.match(raccoonPopText, /永久额度\|1,200 积分/)
+    assert.match(raccoonPopText, /号一\|当前账号 · 1,200 积分|号一\|当前账号/)
 
     // AStudio 段已移除：该渠道已停用（`card: false`），药丸不再渲染它。
 

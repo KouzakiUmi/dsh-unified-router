@@ -37,7 +37,7 @@ test('推荐按发版批次和同渠道性能倍率筛选，保留能力有差�
     ['dmodel', { kind: 'value', alternative: 'dfmodel' }],
   ])
   assert.equal(modelRecommendationExclusions(qoder(0.12), 'qodercn').size, 0)
-  assert.equal(modelRecommendationExclusions(qoder(0.5), 'loomy').size, 0, 'Qoder 的别名不外溢')
+  assert.equal(modelRecommendationExclusions(qoder(0.5), 'raccoon').size, 0, 'Qoder 的别名不外溢')
 })
 
 test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型号标旧', () => {
@@ -75,7 +75,7 @@ test('新渠道按真实调用 ID 标注旧版，不把后继或不同用途型�
   assert.equal(modelRecommendationExclusions([{ id: 'agnes-2.5-pro' }, { id: 'agnes-3.0-flash' }], 'agnes').has('agnes-2.5-pro'), true)
 })
 
-test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 停用后整体跳过）', async t => {
+test('独立后端渠道的精选列表、启停恢复与持久化', async t => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-router-test-'))
   const kernel = new URL('./kernel.mjs', import.meta.url).href
   const hooks = registerHooks({ resolve(specifier, context, next) { return specifier.startsWith('@deepseek-ai/') ? { url: kernel, shortCircuit: true } : next(specifier, context) } })
@@ -107,18 +107,17 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
     const pool = mountBackend(ctx, call => { rpc = call }, {
       quotaAccountOrder: (provider, ids, context) => {
         orderContext = context
-        return provider === 'loomy' && prioritize ? ids.toReversed() : ids
+        return provider === 'trae' && prioritize ? ids.toReversed() : ids
       },
     })
     // raccoon 家族拆成免费版 / 订阅版两个 provider（各自独立的适配器与账号池）。
-    assert.deepEqual([...adapters.keys()].sort(), ['loomy', 'qodercn', 'raccoon', 'raccoon-pro', 'trae'])
+    assert.deepEqual([...adapters.keys()].sort(), ['qodercn', 'raccoon', 'raccoon-pro', 'trae'])
     assert.notEqual(ctx.traeAuth, undefined); assert.equal(ctx.qoderAuth, undefined)
     assert.equal(writes.length, 0); assert.equal(network, 0)
     assert.equal(typeof rpc, 'function')
-    await pool.addAccount({ id: 'loomy-fixture', provider: 'loomy', nickname: '离线测试', credentialRef: 'FIXTURE', enabled: true, refreshable: false, createdAt: 1 })
-    const list = await rpc('account.list', { provider: 'loomy' }); assert.equal(list.ok, true); assert.equal(list.value.accounts.length, 1)
-    const lock = await rpc('credits.permanentLock', { provider: 'loomy', locked: true }); assert.equal(lock.value.locked, true)
-    for (const provider of ['loomy', 'qodercn', 'raccoon', 'raccoon-pro', 'trae']) {
+    await pool.addAccount({ id: 'trae-fixture', provider: 'trae', nickname: '离线测试', credentialRef: 'FIXTURE', enabled: true, refreshable: false, createdAt: 1 })
+    const list = await rpc('account.list', { provider: 'trae' }); assert.equal(list.ok, true); assert.equal(list.value.accounts.length, 1)
+    for (const provider of ['qodercn', 'raccoon', 'raccoon-pro', 'trae']) {
       const catalog = await rpc('model.list', { provider }); assert.equal(catalog.ok, true)
       assert.ok(catalog.value.models.length > 0, provider)
       const modelId = catalog.value.models[0].id
@@ -126,74 +125,24 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
       const disabled = await rpc('model.list', { provider }); assert.equal(disabled.value.models.find(m => m.id === modelId).disabled, true)
       assert.equal((await rpc('model.setDisabled', { provider, modelId, disabled: false })).ok, true)
     }
-    await pool.addAccount({ id: 'loomy-second', provider: 'loomy', nickname: '第二账号', credentialRef: 'FIXTURE_TWO', enabled: true, refreshable: false, createdAt: 2 })
+    await pool.addAccount({ id: 'trae-second', provider: 'trae', nickname: '第二账号', credentialRef: 'FIXTURE_TWO', enabled: true, refreshable: false, createdAt: 2 })
     credentials.set('FIXTURE', { value: '{}' }); credentials.set('FIXTURE_TWO', { value: '{}' })
     await t.test('额度排序只重排现有候选，关掉恢复手动顺序；不影响目录选取', async () => {
-      for (const [enabled, first] of [[false, 'loomy-fixture'], [true, 'loomy-second'], [false, 'loomy-fixture']]) {
+      for (const [enabled, first] of [[false, 'trae-fixture'], [true, 'trae-second'], [false, 'trae-fixture']]) {
         prioritize = enabled
-        assert.equal((await pool.getAvailableAccount('loomy', 'spark-x2.6')).entry.id, first)
-        assert.equal((await pool.getAvailableAccount('loomy', '')).entry.id, 'loomy-fixture')
+        assert.equal((await pool.getAvailableAccount('trae', 'trae-offline-model')).entry.id, first)
+        assert.equal((await pool.getAvailableAccount('trae', '')).entry.id, 'trae-fixture')
       }
       prioritize = true
-      assert.equal((await pool.getAvailableAccount('loomy', 'spark-x2.6', new Set(['loomy-second']))).entry.id, 'loomy-fixture')
+      assert.equal((await pool.getAvailableAccount('trae', 'trae-offline-model', new Set(['trae-second']))).entry.id, 'trae-fixture')
       // 池路径把 modelId 传给重排器（粘滞按 provider+模型找最近服务账号）。
-      assert.deepEqual(orderContext, { modelId: 'spark-x2.6' })
+      assert.deepEqual(orderContext, { modelId: 'trae-offline-model' })
       prioritize = false
     })
-    await t.test('Loomy DeepSeek 明确跨模型族时取消流，不放行错误帧', async () => {
-      const Adapter = adapters.get('loomy').constructor
-      const encoder = new TextEncoder()
-      for (const [requested, model, blocked, bare] of [
-        ['DeepSeek-V4.1-Flash', 'spark-x2.6-low', true],
-        ['DeepSeek-V4.1-Flash', 'iflytek/spark-x2.6-low', true, true],
-        ['deepseek/DeepSeek-V4.1-Flash', 'iflytek/spark-x2.6-low', true],
-        ['DeepSeek-V4.1-Flash', 'glm-5.3', true],
-        ['DeepSeek-V4.1-Flash', 'deepseek-v4-flash-1017', false],
-        ['DeepSeek-V4.1-Flash', undefined, false],
-        ['DeepSeek-V4.1-Flash', 'unknown-gateway', false],
-        ['spark-x2.6', 'glm-5.3', false],
-      ]) {
-        let cancelled = false, sends = 0
-        const adapter = new Adapter({
-          resolveCredential: async () => ({ access_token: 'fixture' }),
-          refresh: async () => undefined,
-          nextAccount: () => assert.fail('跨模型族不能触发换号重试'),
-          fetchImpl: async () => {
-            sends++
-            return new Response(new ReadableStream({
-              start(controller) {
-                const choices = [{ delta: { content: 'fixture output', ...(blocked ? {
-                  tool_calls: [{ index: 0, id: 'bad', function: { name: 'blocked_tool', arguments: '{}' } }],
-                } : {}) } }]
-                if (bare) controller.enqueue(encoder.encode(`data: ${model}\r\n\r\n`))
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ model: bare ? undefined : model, choices })}\n\n`))
-                if (!blocked) controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-              },
-              cancel() { cancelled = true },
-            }), { headers: { 'content-type': 'text/event-stream' } })
-          },
-        })
-        const stream = adapter.stream({ model: requested, messages: [] })
-        if (blocked) await assert.rejects(stream[Symbol.asyncIterator]().next(), { code: 'INVALID_REQUEST' })
-        else assert.match(JSON.stringify(await Array.fromAsync(stream)), /fixture output/)
-        assert.equal(sends, 1)
-        assert.equal(cancelled, true)
-      }
-    })
-    const controller = new AbortController(); let claims = 0
-    ctx.loomyAuth.claimDailyQuota = async () => { claims++; controller.abort(); return { kind: 'claimed', credit: 1 } }
-    await assert.rejects(rpc('credits.claimAll', { provider: 'loomy' }, controller.signal))
-    assert.equal(claims, 1)
-    ctx.loomyAuth.claimDailyQuota = async () => { claims++; return { kind: 'claimed', credit: 1 } }
-    const targeted = await rpc('credits.claimAll', { provider: 'loomy', accountIds: ['loomy-second'] })
-    assert.equal(targeted.ok, true)
-    assert.deepEqual(targeted.value.results.map(row => row.accountId), ['loomy-second'])
-    assert.equal(claims, 2, '已签到的另一账号不会再次提交')
     const { publicResult } = await import('../lib/web-host.js')
-    const providers = ['loomy', 'raccoon', 'raccoon-pro', 'qodercn', 'trae']
+    const providers = ['raccoon', 'raccoon-pro', 'qodercn', 'trae']
     // 恢复推荐只更新开关，目录仍保留所有上游模型。
     const expected = {
-      loomy: { total: 7, off: ['DeepSeek-V4.1-Flash', 'mimo-v2.5'], legacy: [] },
       raccoon: { total: 7, off: ['sn-glm-5-3'], legacy: [] },
       'raccoon-pro': { total: 7, off: ['sn-glm-5-3-p'], legacy: [] },
       // 同族旧版：kmodel（K2.8-Preview）在 Kimi-K3.1-Pro 之后。
@@ -391,15 +340,6 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
           }
         }
       }
-      const adapter = adapters.get('loomy')
-      const originalRemote = adapter.remoteModels
-      adapter.remoteModels = [{ id: 'spark-x2.6', name: '远端', contextWindow: 1000000, efforts: ['low', 'high'], defaultEffort: 'low', supportsImage: true }]
-      try {
-        const model = (await catalog('loomy')).find(m => m.id === 'spark-x2.6')
-        // 远端声明 `low` 是默认档，但默认档策略不允许落到低档：
-        // 该模型支持 `high` → 默认取 `high`（Loomy 的 preferred 也是 high）。
-        assert.equal(model.defaultEffort, 'high')
-      } finally { adapter.remoteModels = originalRemote }
       const provider = 'raccoon', modelId = 'sn-sensenova-6-8-flash'
       await rpc('model.setParams', { provider, modelId, params: { supportsImage: false } })
       const model = (await catalog(provider)).find(m => m.id === modelId)
@@ -445,8 +385,8 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
     })
 
     await t.test('上下文覆盖进入宿主模型信息；设置目录保留原生窗口', async () => {
-      const provider = 'loomy'
-      const { id: modelId, contextWindow: reference } = (await catalog(provider)).find(row => row.contextWindow >= 128_000)
+      const provider = 'raccoon'
+      const { id: modelId, contextWindow: reference } = (await catalog(provider)).find(row => row.id === 'sn-kimi-k3-1-pro')
       const adapter = adapters.get(provider)
       const original = await adapter.resolveModel(provider, modelId)
       const contextWindow = reference - 1_000
@@ -470,52 +410,39 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
       assert.equal((await adapter.resolveModel(provider, modelId)).context?.contextWindow, original.context?.contextWindow)
     })
 
-    await t.test('Loomy 只发布低中高，目录的额外档位与重复别名不会进入选择器', async () => {
-      const provider = 'loomy', modelId = 'test-catalog-model'
-      const adapter = adapters.get(provider)
-      const original = adapter.remoteModels
-      adapter.remoteModels = [{ id: modelId, name: '测试模型', contextWindow: 262_144.5,
-        efforts: ['none', 'off', 'light', 'low', 'medium', 'high', 'extra_high', 'xhigh', 'constructor', ''], defaultEffort: 'extra_high' }]
-      try {
-        const resolved = (await adapter.prepareCall(provider, modelId)).model
-        assert.equal(resolved.context, undefined)
-        assert.deepEqual(resolved.reasoning.efforts.map(effort => effort.id), ['low', 'medium', 'high'])
-        assert.equal(resolved.reasoning.defaultEffort, 'high')
-      } finally { adapter.remoteModels = original }
-    })
-
     await t.test('思考默认档：设置页的档位进入解析结果，但不覆盖会话里的显式选择', async () => {
       // 设置页「思考深度」保存的是**该模型的默认档**（客户端按钮文案「默认（X）」）。
       // 它必须同时满足两件事：① 选择器的默认档就是它（resolveModel 投影）；
       // ② prepareCall 也要提供同一个默认档，宿主在调用前补缺。
-      const provider = 'loomy'
-      const modelId = 'spark-x2.6'
+      const provider = 'raccoon'
+      const modelId = 'sn-glm-5-3'
       const adapter = adapters.get(provider)
+      const baseline = (await adapter.resolveModel(provider, modelId)).reasoning.defaultEffort
       try {
         // 只有该模型真实声明的档位能写进来（写进去就会成为默认档、被直接发请求）。
         const rejected = await rpc('model.setParams', { provider, modelId, params: { reasoningEffort: 'ultra' } })
         assert.equal(rejected.ok, false, '不能写入模型不支持的思考档位')
         const broadcasts = () => events.filter(event => event === 'llm/adapters-updated').length
         const before = broadcasts()
-        assert.equal((await rpc('model.setParams', { provider, modelId, params: { reasoningEffort: 'low' } })).ok, true)
+        assert.equal((await rpc('model.setParams', { provider, modelId, params: { reasoningEffort: 'minimal' } })).ok, true)
         assert.equal(broadcasts(), before + 1, '思考默认档变化要广播模型目录刷新（选择器显示「默认（X）」）')
-        assert.equal((await rpc('model.setParams', { provider, modelId, params: { reasoningEffort: 'low' } })).ok, true)
+        assert.equal((await rpc('model.setParams', { provider, modelId, params: { reasoningEffort: 'minimal' } })).ok, true)
         assert.equal(broadcasts(), before + 1, '档位没变就不必重复广播')
         const resolved = await adapter.resolveModel(provider, modelId)
-        assert.equal(resolved.reasoning.defaultEffort, 'low', '设置值成为该模型的默认思考档')
-        assert.equal((await adapter.prepareCall(provider, modelId)).model.reasoning.defaultEffort, 'low')
+        assert.equal(resolved.reasoning.defaultEffort, 'minimal', '设置值成为该模型的默认思考档')
+        assert.equal((await adapter.prepareCall(provider, modelId)).model.reasoning.defaultEffort, 'minimal')
         // 模拟旧目录留下的覆盖：调用元数据不得注入失效档位。
         await pool.setModelParams(provider, modelId, { reasoningEffort: 'ultra' })
-        assert.equal((await adapter.resolveModel(provider, modelId)).reasoning.defaultEffort, 'high')
-        assert.equal((await adapter.prepareCall(provider, modelId)).model.reasoning.defaultEffort, 'high')
+        assert.equal((await adapter.resolveModel(provider, modelId)).reasoning.defaultEffort, baseline)
+        assert.equal((await adapter.prepareCall(provider, modelId)).model.reasoning.defaultEffort, baseline)
       } finally {
         await rpc('model.setParams', { provider, modelId, params: {} })
       }
-      assert.equal((await adapter.resolveModel(provider, modelId)).reasoning.defaultEffort, 'high', '清掉覆盖后回到适配器默认档')
+      assert.equal((await adapter.resolveModel(provider, modelId)).reasoning.defaultEffort, baseline, '清掉覆盖后回到适配器默认档')
     })
 
     await t.test('联网目录缓存保留实时价格和能力；未知模型默认启用', async () => {
-      for (const provider of ['loomy', 'raccoon', 'raccoon-pro']) {
+      for (const provider of ['raccoon', 'raccoon-pro']) {
         await rpc('model.setAllDisabled', { provider, disabled: false })
         const adapter = adapters.get(provider)
         const originalRemote = adapter.remoteModels
@@ -538,29 +465,31 @@ test.skip('独立后端渠道的精选列表、启停恢复与持久化（Loomy 
 
     await t.test('恢复推荐只重置本渠道显示偏好，保留参数和账号', async () => {
       const qoderBefore = pool.listDisabledModels('qodercn')
-      const accountCount = (await rpc('account.list', { provider: 'loomy' })).value.accounts.length
-      await rpc('model.setAllDisabled', { provider: 'loomy', disabled: false })
-      assert.equal((await visible('loomy')).length, 7)
-      assert.equal((await catalog('loomy')).filter(m => m.disabled).length, 0)
-      await rpc('model.resetDefaults', { provider: 'loomy' })
-      assert.equal((await visible('loomy')).length, 5)
-      assert.equal((await catalog('loomy')).filter(m => m.disabled).length, 2)
-      assert.deepEqual(pool.listDisabledModels('loomy'), {})
+      const accountCount = (await rpc('account.list', { provider: 'raccoon' })).value.accounts.length
+      await rpc('model.setAllDisabled', { provider: 'raccoon', disabled: false })
+      assert.equal((await visible('raccoon')).length, expected.raccoon.total)
+      assert.equal((await catalog('raccoon')).filter(m => m.disabled).length, 0)
+      await rpc('model.resetDefaults', { provider: 'raccoon' })
+      const defaultOff = expected.raccoon.off.length
+      assert.equal((await visible('raccoon')).length, expected.raccoon.total - defaultOff)
+      assert.equal((await catalog('raccoon')).filter(m => m.disabled).length, defaultOff)
+      assert.deepEqual(pool.listDisabledModels('raccoon'), {})
       assert.deepEqual(pool.listDisabledModels('qodercn'), qoderBefore)
-      // 参数是**用户数据**：目录重置显示偏好不能把它清掉（上一轮用例在这个模型上写过参数）。
-      const paramModel = expected.loomy.off[0]
-      assert.deepEqual(pool.modelParamsFor('loomy', paramModel), { contextWindow: 200000, supportsImage: false })
-      assert.equal((await rpc('account.list', { provider: 'loomy' })).value.accounts.length, accountCount)
+      // 参数是**用户数据**：目录重置显示偏好不能把它清掉（上一轮用例在 sn-glm-5-3 上写过参数）。
+      const paramModel = 'sn-glm-5-3'
+      assert.equal((await rpc('model.setParams', { provider: 'raccoon', modelId: paramModel, contextOnly: true, params: { contextWindow: 900_000 } })).ok, true)
+      const paramsBefore = pool.modelParamsFor('raccoon', paramModel)
+      assert.ok(paramsBefore && Object.keys(paramsBefore).length > 0, '参数仍是用户数据')
+      assert.equal((await rpc('account.list', { provider: 'raccoon' })).value.accounts.length, accountCount)
       const restored = new pool.constructor(ctx)
-      assert.deepEqual(restored.modelParamsFor('loomy', paramModel), { contextWindow: 200000, supportsImage: false })
+      assert.deepEqual(restored.modelParamsFor('raccoon', paramModel), paramsBefore)
     })
 
     assert.equal((await rpc('account.create', { provider: 'qoder' })).ok, false)
     // 白名单之外的 provider 必须被拒绝（trae 已接入后用 devin 代位）。
     assert.equal((await rpc('provider.status', { providers: ['devin'] })).ok, false)
     const disk = JSON.parse(fs.readFileSync(path.join(scratch, 'channel-pack/state.json'), 'utf8'))
-    assert.equal(disk.accounts[0].id, 'loomy-fixture')
-    assert.ok(fs.existsSync(path.join(scratch, 'channel-pack/permanent-locks.json')))
+    assert.equal(disk.accounts[0].id, 'trae-fixture')
   } finally {
     for (const stop of cleanup.reverse()) await stop()
     hooks.deregister(); globalThis.fetch = originalFetch
@@ -867,7 +796,7 @@ test('TRAE 远端目录：内部模型按 id 剔除、旧版默认关闭可手�
     assert.equal((await rows()).find(model => model.id === 'qwen-3.5')?.disabled, true)
     assert.equal((await publishedIds()).includes('qwen-3.5'), false, '恢复默认后应退出会话选择器')
 
-    // 「TRAE 专属规则不外溢」原以 Loomy 为对照渠道；Loomy 停用后其目录不再装配，
+    // 「TRAE 专属规则不外溢」用已装配的其它渠道作对照；
     // 该对照失去载体，故此处移除。
   } finally {
     for (const stop of cleanup.reverse()) await stop()

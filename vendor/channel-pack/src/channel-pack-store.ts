@@ -49,9 +49,6 @@ export const CHANNEL_PACK_NS = 'channel-pack'
  */
 export type ModelDisableMap = Record<string, Record<string, boolean>>
 
-/** 各 provider 的「锁定永久积分」开关：provider id → 已锁定。 */
-export type PermanentLockMap = Record<string, boolean>
-
 /**
  * 单个模型的生成参数覆盖。
  *
@@ -89,30 +86,10 @@ export interface ChannelPackState {
   disabledModels: ModelDisableMap
   modelParams?: ModelParamMap
   /**
-   * Loomy「锁定永久积分」开关 —— **镜像字段，不是权威**。
-   *
-   * 权威值在 `$DSH_HOME/channel-pack/permanent-locks.json`（见
-   * `src/permanent-lock-store.ts`）。本字段仍**继续同源写出**，理由有两条：
-   *
-   * 1. **同机多 profile**：`state.json` 是 dsh home 级共享文档，另一条工作区里
-   *    的**旧版本代码**只认这一个字段（它读它、也原样写回它）。镜像保持一致，
-   *    web / tui / headless 侧的 Loomy 锁定才不会与 desktop 侧脱节；
-   * 2. **升级前的磁盘状态只有本字段**：新文档不存在时要靠它把老用户的锁定
-   *    迁移进来（迁移判据见 `permanent-lock-store.ts` —— 只在**新文档不存在**时
-   *    生效，避免把已解除的锁定重新打开）。
-   *
-   * ⚠️ 反过来，**新字段绝不能只住在这里**：本文档是整体替换语义，旧代码全量
-   * 重写时不会携带它不认识的任何键 —— 把锁定表放这儿会被静默抹掉，而解锁的
-   * 后果是真把永久积分烧掉（不可撤回）。这正是把表拆到独立文档的原因。
-   */
-  loomyPermanentLocked?: boolean
-  /**
    * 本机 OpenAI 网关开关（`false` = 不启动网关）。
    *
-   * ⚠️ 与 `loomyPermanentLocked` 不同，这个字段**可以**住在这里、不需要独立
-   * 文档：老版本代码整体重写 `state.json` 时会丢掉本键，后果仅仅是**网关回到
-   * 默认启用**，用户再关一次即可 —— 没有任何不可逆后果（对照 `loomyPermanentLocked`
-   * 丢失会把「永久积分已锁定」静默变成「已解锁」，那才是灾难）。
+   * 老版本代码整体重写 `state.json` 时会丢掉本键，后果仅仅是**网关回到
+   * 默认启用**，用户再关一次即可 —— 没有任何不可逆后果。
    *
    * 缺键语义为**启用**：老用户升级后行为与升级前完全一致。
    */
@@ -122,8 +99,7 @@ export interface ChannelPackState {
    *
    * ⚠️ 与 `gatewayEnabled` 同级、**可以**住在这里：老版本代码整体重写
    * `state.json` 时丢掉本键的后果仅仅是**顺序回到声明顺序**——纯展示偏好，
-   * 可逆、重拖一次即恢复（对照 `loomyPermanentLocked` 的不可逆性，那才需要
-   * 独立文档）。缺键 / 空数组语义为「未自定义」。
+   * 可逆、重拖一次即恢复。缺键 / 空数组语义为「未自定义」。
    *
    * 数组含**全部**供应商 id：拖拽提交时 = 拖后的「已打开」序列 + 已关闭的
    * 按声明序缀尾。展示侧（`plugin-src/client/provider-toggle.js` 的
@@ -156,7 +132,6 @@ const channelPackSchema = Schema.object({
   accounts: Schema.array(Schema.any()).default([]),
   disabledModels: Schema.dict(Schema.any()).default({}),
   modelParams: Schema.dict(Schema.any()).default({}),
-  loomyPermanentLocked: Schema.boolean().default(false),
   gatewayEnabled: Schema.boolean().default(true),
   providerOrder: Schema.array(Schema.string()).default([]),
 })
@@ -164,7 +139,7 @@ const channelPackSchema = Schema.object({
 /**
  * 归一化「本机 OpenAI 网关」开关。
  *
- * 判据与 `sanitizePermanentLocks` 相反：**只有显式 `false` 才算停用**，
+ * 判据：**只有显式 `false` 才算停用**，
  * 其余（缺键 / `true` / 字符串 / 对象 / 数组）一律按启用处理。
  *
  * ⚠️ 方向不能反。文档缺失、被手工编辑成脏值、或老版本代码整体重写时丢了本键，
@@ -194,44 +169,6 @@ export function sanitizeProviderOrder(raw: unknown): string[] {
     result.push(id)
   }
   return result
-}
-
-/**
- * 归一化「锁定永久积分」开关表。
- *
- * 永久积分锁仅保留显式 `true`，其余值（`false` /
- * 字符串 / 对象）一律丢弃 —— 于是「缺键」与「值为 false」在语义上完全一致
- * （未锁定），文档也不会随开关操作累积噪音。
- * ⚠️ 单测专门覆盖「`{ loomy: 'yes' }` 不得判成已锁定」这一类脏数据。
- */
-export function sanitizePermanentLocks(raw: unknown): PermanentLockMap {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
-  const result: PermanentLockMap = {}
-  for (const [provider, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (value === true && provider.length > 0) result[provider] = true
-  }
-  return result
-}
-
-/**
- * 把**老的单字段**并进锁定表 —— 仅用于「独立文档尚不存在」的那一次迁移。
- *
- * 背景：锁定开关早于 `permanent-locks.json` 存在，住在 state.json 的
- * `loomyPermanentLocked` 里，老用户磁盘上只有它。不并进来的话，升级后 Loomy 的
- * 锁定会**静默消失**（用户看到的是「永久积分被烧掉了」且毫无提示）——
- * 那是最坏的一类回归。
- *
- * ⚠️ 调用方**只能在新文档不存在时**用它（`PermanentLockStore.load()` 的
- * `exists: false`）。新文档一旦存在就以它为准：否则用户在 desktop 里解锁 Loomy
- * 之后（表里没有 `loomy` 键 = 未锁定），只要镜像字段因为任何原因还留着
- * `true`，锁定就会被重新打开 —— 那种"解不掉"的开关比丢状态更难排查。
- */
-export function mergeLegacyLoomyLock(
-  locks: PermanentLockMap,
-  legacyLoomyLocked: unknown,
-): PermanentLockMap {
-  if (locks.loomy === undefined && legacyLoomyLocked === true) return { ...locks, loomy: true }
-  return locks
 }
 
 /**
@@ -319,7 +256,6 @@ class SettingsStore implements ChannelPackStore {
         accounts?: unknown
         disabledModels?: unknown
         modelParams?: unknown
-        loomyPermanentLocked?: unknown
         gatewayEnabled?: unknown
         providerOrder?: unknown
       }
@@ -329,8 +265,6 @@ class SettingsStore implements ChannelPackStore {
       accounts: sanitizeAccounts(value.accounts),
       disabledModels: sanitizeDisabledModels(value.disabledModels),
       modelParams: sanitizeModelParams(value.modelParams),
-      // 只是**镜像**（权威表在 permanent-locks.json）；老文档没这个键 → false。
-      loomyPermanentLocked: value.loomyPermanentLocked === true,
       // 老文档没这个键 → 启用，与升级前行为一致。
       gatewayEnabled: sanitizeGatewayEnabled(value.gatewayEnabled),
       // 老文档没这个键 → 空数组（未自定义），展示侧按声明顺序渲染。
@@ -343,9 +277,6 @@ class SettingsStore implements ChannelPackStore {
       accounts: state.accounts,
       disabledModels: state.disabledModels,
       modelParams: state.modelParams ?? {},
-      // 镜像字段由 AccountPool 与独立文档**同源写出**：同机上只认这个字段的
-      // 旧版本代码（其它 profile）读它、也会原样写回它，故两边不会脱节。
-      loomyPermanentLocked: state.loomyPermanentLocked === true,
       // 开关丢失只会让网关回到默认启用（可逆），故接受老版本重写时丢掉本键。
       gatewayEnabled: state.gatewayEnabled !== false,
       // 顺序丢失只会回到声明顺序（可逆，重拖一次即恢复），同理接受丢失。
@@ -395,31 +326,18 @@ class MemoryStore implements ChannelPackStore {
  * 派生用例不校验顺序（恢复顺序由 refs 文件决定），但两者对齐后便于逐项核对。
  */
 const REF_PREFIX_TO_PROVIDER: ReadonlyArray<readonly [string, string]> = [
-  ['LOBSTERAI', 'lobsterai'],
+  // ⚠️ 本表与「已实现渠道」一一对应：本仓库只接 qoder 家族 / qodercn / trae /
+  // raccoon 家族。国际渠道（lobsterai / cline / zcode / minimax / gemini /
+  // opencode）已于 2026-11-25 随「全部重写」整体移除 —— 它们的账号数据由
+  // `lib/retired-channels.js` 在独立模式启动时清扫。
+  //
+  // ⚠️ 顺序按前缀长度**降序**（`QODERCN` 必须排在 `QODER` 之前）：下面据此
+  // 生成凭据 ref 正则，顺序错了会让归属取决于引擎尝试顺序而非规则。
   ['QODER', 'qoder'],
   ['QODERCN', 'qodercn'],
   ['TRAE', 'trae'],
-  ['CLINE', 'cline'],
-  ['LOOMY', 'loomy'],
   ['RACCOON', 'raccoon'],
-  // Raccoon 订阅版（第 15 个 provider）：`raccoon-pro` 的凭据 ref 前缀是
-  // `RACCOONPRO`（连字符在 ref 里被剥离，见 channel-pack-rpc.ts 的 account.create）。
-  // ⚠️ 与上面 `raccoon` **必须是两个独立条目**：合并会让两池的账号在恢复时
-  // 串到同一个 provider（`RACCOON` 前缀短于 `RACCOONPRO`，正则按长度降序排列）。
   ['RACCOONPRO', 'raccoon-pro'],
-  // ⚠️ 第 12 个 provider（上游 2026-10-02 合并）—— 曾漏加，见上方注释 ②。
-  ['MINIMAX', 'minimax'],
-  ['ZCODE', 'zcode'],
-  // ⚠️ 第 13 个 provider（opencode，2026-10-01）—— 与上面 minimax 同款坑：
-  // 漏加会让「恢复备份」认不出 opencode 账号（见上方注释 ②）。
-  ['OPENCODE', 'opencode'],
-  // ⚠️ 第 14 个 provider（gemini，2026-10-03）—— 同款坑第 **三** 次。
-  // 漏加 = `GEMINI_ACCOUNT_*` 的账号在 `state.json` 缺失时静默消失
-  //（凭据还在 `.credentials.yaml` 里，只是索引建不出来，用户只能重新授权）。
-  // 本表与客户端 `PROVIDERS` 的一致性由
-  // `tests/unit/channel-pack-store.spec.ts` 的「恢复表覆盖客户端 PROVIDERS 的全部
-  // provider（从真实清单派生）」用例锁死 —— 合并新增 provider 前**先跑它**。
-  ['GEMINI', 'gemini'],
 ]
 
 /** 已实现渠道的统一判定，拒绝未知渠道且不依赖旧产品黑名单。 */
@@ -508,7 +426,6 @@ class FileStore implements ChannelPackStore {
         accounts?: unknown
         disabledModels?: unknown
         modelParams?: unknown
-        loomyPermanentLocked?: unknown
         gatewayEnabled?: unknown
         providerOrder?: unknown
       }
@@ -516,8 +433,6 @@ class FileStore implements ChannelPackStore {
         accounts: sanitizeAccounts(value.accounts),
         disabledModels: sanitizeDisabledModels(value.disabledModels),
         modelParams: sanitizeModelParams(value.modelParams),
-        // 只是镜像（权威表在 permanent-locks.json）；老文档没这个键 → false。
-        loomyPermanentLocked: value.loomyPermanentLocked === true,
         // 老文档没这个键 → 启用，与升级前行为一致。
         gatewayEnabled: sanitizeGatewayEnabled(value.gatewayEnabled),
         // 老文档没这个键 → 空数组（未自定义），展示侧按声明顺序渲染。
@@ -563,8 +478,6 @@ class FileStore implements ChannelPackStore {
       const state: ChannelPackState = {
         accounts,
         disabledModels: {},
-        // 凭据文件里没有任何锁定信息 → 镜像写 false（权威表另有其文档）。
-        loomyPermanentLocked: false,
         // 恢复出的文档本来就不含任何开关信息 → 启用（与全新安装一致）。
         gatewayEnabled: true,
         // 凭据文件里也没有顺序信息 → 空数组（未自定义，与全新安装一致）。
@@ -599,7 +512,7 @@ class FileStore implements ChannelPackStore {
  * 同一目录。PR !66 曾把它放宽成可选、并在 `dead-model-store` 里传 `undefined` ——
  * 那会**跳过优先级更高的 `profileContext.home`**，在 profile home 与 `$DSH_HOME`
  * 不相等时把失效表写到另一个目录，造成「账号池在 A、失效表在 B」的分裂，
- * 正是 `permanent-lock-store.ts:129-133` 明确警告过必须避免的情况。
+ * 是同机多 profile 共享 state.json 时必须避免的情况。
  */
 export function resolveChannelPackHome(ctx: Context): string | undefined {
   const override = process.env.DSH_CHANNEL_PACK_STATE_DIR

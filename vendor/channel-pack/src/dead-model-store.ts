@@ -43,7 +43,7 @@
  *
  * ## 为什么落独立文档，而不是并进 `state.json`
  *
- * 同 `permanent-lock-store.ts` 记录的那类风险：`state.json` 是 **dsh home 级、
+ * 同 `state.json` 的独立文档先例 记录的那类风险：`state.json` 是 **dsh home 级、
  * 全局共享**的（同机多个 profile 共用一份），而本插件的存储是**整体替换**语义 ——
  * 旧版本代码整体重写时会静默抹掉它不认识的字段。独立文档则无人争抢。
  */
@@ -352,12 +352,12 @@ let logger: { warn(message: string): void } | undefined
  * 注入的 ctx（由 {@link configureDeadModelStore} 注入）。
  *
  * ⚠️ **必须用它解析 home**（2026-10-06 复审 !66 实测）：全仓库其余 5 处
- * `resolveChannelPackHome` 调用（`channel-pack-store` / `permanent-lock-store` /
+ * `resolveChannelPackHome` 调用（`channel-pack-store` /
  * `badge-preferences` / `auto-checkin` / `gemini-sigstore`）**全部传真 ctx**，
  * 而 `resolveChannelPackHome` 的第二优先级是 `profileContext.home`、第三才是
  * `$DSH_HOME` ⇒ 传 `undefined` 会**跳过 profile home**，在 profile home 与
  * `$DSH_HOME` 不相等时把本文档写到**另一个目录**，造成
- * 「账号池在 A、失效表在 B」的分裂 —— 正是 `permanent-lock-store.ts:129-133`
+ * 「账号池在 A、失效表在 B」的分裂 —— 正是 `state.json` 的独立文档先例
  * 明确警告过、必须避免的那类问题。
  * ⚠️ 未注入时（只有单测会这样）退化用空对象：`resolveChannelPackHome` 的
  * `readService` 接受 `unknown`，读不到 `profileContext` 就自然落到

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { AccountPool } from './account-pool.js'
-import { pickSlot, type IdentitySlot } from './opencode-auth.js'
 import { ModelQueuedError, QUEUE_MAX_ATTEMPTS, QUEUE_MAX_DELAY_MS } from './model-queue.js'
 import { reportLedgerAccount } from './token-ledger.js'
 
@@ -11,7 +10,6 @@ interface QueueOptions {
   refresh?: (accountId?: string, reason?: 'auth') => Promise<unknown>
   currentAccountId?: () => string | undefined
   nextAccount?: (model: string, tried: ReadonlySet<string>) => Promise<{ accountId: string; credential: unknown } | undefined>
-  identitySlots?: (model?: string) => Promise<readonly IdentitySlot[]>
 }
 
 type Account = NonNullable<Awaited<ReturnType<AccountPool['getAvailableAccount']>>>
@@ -23,18 +21,9 @@ interface QueueRequest {
   credentialRefreshes: Set<string | undefined>
   authRefreshes: Set<string | undefined>
   account?: Account
-  slot?: IdentitySlot
 }
 
 const requests = new AsyncLocalStorage<QueueRequest>()
-
-/** OpenCode 的槽在适配器内部选择，按实际发送的槽回报，不能猜账号池默认值。 */
-export function reportQueueSlot(slot: IdentitySlot): void {
-  const request = requests.getStore()
-  if (request?.provider !== 'opencode') return
-  request.slot = slot
-  request.tried.add(slot.id)
-}
 
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted()
@@ -121,7 +110,8 @@ export function withQueueAccountRotation<O extends QueueOptions, A extends objec
         }
         const credential = await options.resolveCredential!(model)
         if (request !== undefined && credential !== null && typeof credential === 'object') {
-          const field = provider === 'zcode' ? 'zcode_jwt' : 'access_token'
+          // 凭据里的令牌字段名：本插件接入的渠道（qoder 家族 / trae / raccoon）一律是 access_token。
+          const field = 'access_token'
           const token = (credential as Record<string, unknown>)[field]
           if (typeof token === 'string' && token.length > 0) {
             const id = await pool.findAccountIdByIdentityField(provider, field, token).catch(() => '')
@@ -147,15 +137,6 @@ export function withQueueAccountRotation<O extends QueueOptions, A extends objec
         budget.add(id)
       }
       return options.refresh!(id, reason)
-    }
-  }
-  if (options.identitySlots !== undefined) {
-    scoped.identitySlots = async () => {
-      const request = active()
-      const slots = await options.identitySlots!(request?.model)
-      if (request?.slot === undefined) return slots
-      const current = slots.find(slot => slot.id === request.slot!.id)
-      return [...current === undefined ? [] : [current], ...slots.filter(slot => !request.tried.has(slot.id))]
     }
   }
   const adapter = create(scoped as O)
@@ -196,13 +177,6 @@ export function withQueueAccountRotation<O extends QueueOptions, A extends objec
             const next = await pool.getAvailableAccount(provider, model, request.tried)
             if (next !== null) {
               remember(request, next)
-              continue
-            }
-          } else if (options.identitySlots !== undefined && request.slot !== undefined) {
-            const next = pickSlot(await options.identitySlots(model), model, request.tried)
-            if (next !== undefined) {
-              request.slot = next
-              request.tried.add(next.id)
               continue
             }
           }

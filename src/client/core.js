@@ -4,26 +4,23 @@
 // （拼接机制下跨模块按名引用，注册表晚于本模块定义没关系——只在运行时取用。）
 
 export const MODEL_PAGE_SIZE = 15
-export const PLAN_METHODS = new Set(['plan.snapshot', 'plan.setEnabled', 'plan.setKey', 'plan.setModelEnabled', 'plan.setModelParams', 'plan.resetModels', 'plan.consoleLogin'])
-export const WORKBUDDY_METHODS = new Set(['workbuddy.snapshot', 'workbuddy.login', 'workbuddy.logout', 'workbuddy.checkin', 'workbuddy.setAccountEnabled', 'workbuddy.models', 'workbuddy.setModelEnabled', 'workbuddy.setModelParams', 'workbuddy.resetModels'])
-// API Key 渠道（Agnes、云知声）共用的宿主方法；渠道 id 在 payload.provider 里带。
-export const APIKEY_METHODS = new Set(['apikey.snapshot', 'apikey.setKey', 'apikey.setEnabled', 'apikey.setModelEnabled', 'apikey.setModelParams', 'apikey.resetModels', 'apikey.setToolsEnabled', 'apikey.setConsoleSession', 'apikey.consoleLogin', 'apikey.clearConsoleSession'])
-// 自管多账号渠道（AStudio / CodeArts）共用的宿主方法。
-export const MANAGED_METHODS = new Set([
-  'managed.snapshot', 'managed.models', 'managed.refreshModels',
-  'managed.login', 'managed.importLocal', 'managed.importCredential',
-  'managed.updateAccount', 'managed.logout', 'managed.setEnabled',
-  'managed.checkin', 'managed.claimRewards', 'managed.completeTasks',
-  'managed.setModelEnabled', 'managed.setModelParams', 'managed.resetModels',
-])
-export const AUTOMATION_METHODS = new Set(['automation.status', 'automation.setConfig', 'automation.run', 'automation.query'])
-export const LOOMY_ROUTE_METHODS = new Set(['loomy.routeStatus', 'loomy.checkRoute', 'loomy.clearRoute', 'loomy.setRouteConfig'])
-export const METHODS = new Set(['provider.status', 'account.list', 'model.list', 'credits.permanentLock',
-  'account.create', 'login.poll', 'account.update', 'account.delete', 'account.reorder', 'account.refresh',
-  'account.reset', 'account.retest', 'provider.setEnabled', 'model.setDisabled', 'model.clearDead',
-  'model.setAllDisabled', 'model.resetDefaults', 'model.refresh', 'model.params', 'model.setParams',
-  'credits.balances', 'credits.claimAll', 'onboarding.claim', 'settings.snapshot', 'settings.refresh',
-  ...PLAN_METHODS, ...AUTOMATION_METHODS, ...LOOMY_ROUTE_METHODS])
+// 方法集**全部由 `lib/channel-specs.js` 派生**（与宿主同一份规格表）：
+// 过去这里手写了六张表与宿主并行维护，漏改任一处的表现是「按钮点了报不支持此操作」。
+// 客户端白名单比宿主窄一档 —— `HOST_INTERNAL_METHODS`（签到 / 奖励的只读核实端点）
+// 只给宿主调度用，见规格表里的同名常量。
+const CLIENT_METHODS = clientMethodSets()
+/** 单 Key 订阅渠道（商汤 Token Plan）。 */
+export const PLAN_METHODS = CLIENT_METHODS.plan
+/** 自管单渠道（WorkBuddy）。 */
+export const WORKBUDDY_METHODS = CLIENT_METHODS.workbuddy
+/** API Key 渠道（Agnes、云知声）共用；渠道 id 在 `payload.provider` 里带。 */
+export const APIKEY_METHODS = CLIENT_METHODS.apikey
+/** 自管多账号渠道（AStudio / CodeArts）共用。 */
+export const MANAGED_METHODS = CLIENT_METHODS.managed
+/** 自动化调度（与渠道无关的全局方法）。 */
+export const AUTOMATION_METHODS = CLIENT_METHODS.automation
+/** 客户端可发起的全部方法（渠道池主路径 + 全局 + 单 Key 订阅）。 */
+export const METHODS = CLIENT_METHODS.all
 export const WORKBUDDY_ID = 'workbuddy'
 export const allowed = id => PROVIDERS.some(p => p.id === id)
 export const packAllowed = id => PACK_PROVIDERS.some(p => p.id === id)
@@ -32,8 +29,7 @@ export const number = value => typeof value === 'number' && Number.isFinite(valu
 export const initial = provider => ({ provider, accounts: [], models: [], balances: [], statuses: {}, selected: '', loadFailed: false,
   checkin: null,
   automation: null,
-  loomyRoute: { skipRouted: true, accounts: {} },
-  locked: false, login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
+  login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
   // WorkBuddy 是自管多账号快照：accounts 逐账号、models 全局、loginUrl 属登录窗口。
     workbuddy: { accounts: [], models: [], loginUrl: '' }, workbuddyReady: false, workbuddyStale: false, workbuddyError: false, workbuddyLoginUrl: null,
   // API Key 渠道快照按渠道 id 存放：{ [id]: 快照 + ready / stale / error }。
@@ -55,168 +51,12 @@ export function safeLoginUrl(value) {
   if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && local))) throw new Error('登录地址不可用')
   return url.href
 }
-const LOOMY_ROUTE_VERDICTS = new Set(['clean', 'routed', 'exhausted', 'expired', 'unknown'])
-const LOOMY_ROUTE_REASONS = new Set([
-  'ledger-deepseek', 'ledger-spark', 'ledger-other-family', 'catalog-missing-ds41',
-  'served-model-match', 'served-model-mismatch', 'no-quota', 'session-expired',
-  'account-disabled', 'no-ledger-records',
-])
-const LOOMY_ROUTE_REASON_LABELS = Object.freeze({
-  'ledger-deepseek': '积分账本',
-  'ledger-spark': '积分账本（Spark）',
-  'ledger-other-family': '积分账本（异族模型）',
-  'catalog-missing-ds41': '目录缺失 DS4.1',
-  'served-model-match': '响应模型匹配',
-  'served-model-mismatch': '响应模型不匹配',
-  'no-quota': '积分不足',
-  'session-expired': '登录已失效',
-  'account-disabled': '账号已停用',
-  'no-ledger-records': '尚无对话扣费记录',
-})
-export function loomyRouteEntryFrom(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  if (!LOOMY_ROUTE_VERDICTS.has(value.verdict)) return null
-  const reason = LOOMY_ROUTE_REASONS.has(value.reason) ? value.reason : ''
-  const servedModel = text(value.servedModel, 120)
-  const checkedAt = number(value.checkedAt)
-  return {
-    verdict: value.verdict,
-    ...(reason ? { reason } : {}),
-    ...(servedModel ? { servedModel } : {}),
-    ...(checkedAt !== null ? { checkedAt } : {}),
-  }
-}
-export function loomyRouteFrom(value) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
-  const raw = source.accounts && typeof source.accounts === 'object' && !Array.isArray(source.accounts) ? source.accounts : {}
-  const accounts = {}
-  for (const [id, entry] of Object.entries(raw)) {
-    if (typeof id !== 'string' || !id || ['__proto__', 'prototype', 'constructor'].includes(id)) continue
-    const clean = loomyRouteEntryFrom(entry)
-    if (clean) accounts[id] = clean
-  }
-  return { skipRouted: source.skipRouted !== false, accounts }
-}
-export function loomyRouteView(state, account) {
-  const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
-  if (!entry) {
-    return {
-      entry: null,
-      tag: ['路由未检测', undefined, '点击「检测路由」只读验证目录与账本（0 积分）'],
-      detail: {
-        statusLabel: '检测状态',
-        servedLabel: '未检测',
-        reasonLabel: '请点击「检测路由」只读验证目录与账本（0 积分）',
-        checkedAt: 0,
-      },
-    }
-  }
-  const reasonLabel = LOOMY_ROUTE_REASON_LABELS[entry.reason] || ''
-  const checkedText = entry.checkedAt > 0 ? `检测于 ${displayTime(entry.checkedAt)}` : ''
-  const title = [entry.servedModel ? `实际落地：${entry.servedModel}` : '', reasonLabel, checkedText].filter(Boolean).join(' · ')
-  let label = '暂无账本记录'
-  let tone
-  let statusLabel = '路由状态'
-  if (entry.verdict === 'clean') {
-    label = '路由正常'
-    tone = 'success'
-    statusLabel = '实测落地模型'
-  } else if (entry.verdict === 'routed') {
-    label = entry.reason === 'catalog-missing-ds41' ? '改路由 · 目录无 DS4.1'
-      : entry.servedModel ? `改路由 → ${entry.servedModel}` : '上游改路由'
-    tone = 'error'
-    statusLabel = entry.reason === 'catalog-missing-ds41' ? '目录可见模型' : '实际落地模型'
-  } else if (entry.verdict === 'exhausted') {
-    label = '路由待测 · 积分不足'
-    tone = 'warn'
-    statusLabel = '探测阻塞'
-  } else if (entry.verdict === 'expired') {
-    label = entry.reason === 'account-disabled' ? '账号已停用' : '凭据已失效'
-    tone = entry.reason === 'account-disabled' ? 'error' : 'warn'
-    statusLabel = '账号状态'
-  }
-  return {
-    entry,
-    tag: [label, tone, title || label],
-    detail: {
-      statusLabel,
-      servedLabel: entry.servedModel || label,
-      reasonLabel,
-      checkedAt: entry.checkedAt,
-    },
-  }
-}
-export function loomyRouteCounts(state) {
-  const accounts = state.accounts ?? []
-  const out = { total: accounts.length, clean: 0, routed: 0, expired: 0, exhausted: 0, unknown: 0, unchecked: 0 }
-  for (const account of accounts) {
-    const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
-    if (!entry) out.unchecked += 1
-    else if (entry.verdict === 'clean') out.clean += 1
-    else if (entry.verdict === 'routed') out.routed += 1
-    else if (entry.verdict === 'expired') out.expired += 1
-    else if (entry.verdict === 'exhausted') out.exhausted += 1
-    else out.unknown += 1
-  }
-  return out
-}
-export function loomyRouteSummaryText(state) {
-  const counts = loomyRouteCounts(state)
-  if (!counts.total) return ''
-  const parts = []
-  if (counts.clean) parts.push(`正常 ${counts.clean}`)
-  if (counts.routed) parts.push(`改路由 ${counts.routed}`)
-  if (counts.expired + counts.exhausted) parts.push(`异常 ${counts.expired + counts.exhausted}`)
-  if (counts.unknown) parts.push(`无账本 ${counts.unknown}`)
-  if (!parts.length) return `路由未检测 ${counts.unchecked}`
-  if (counts.unchecked) parts.push(`未检测 ${counts.unchecked}`)
-  return `路由 ${parts.join(' · ')}`
-}
-export function loomyRouteLatestAt(state) {
-  let latest = 0
-  for (const account of state.accounts ?? []) {
-    const entry = loomyRouteEntryFrom(state.loomyRoute?.accounts?.[account.id] ?? account?.route)
-    if (entry?.checkedAt > latest) latest = entry.checkedAt
-  }
-  for (const raw of Object.values(state.loomyRoute?.accounts ?? {})) {
-    const entry = loomyRouteEntryFrom(raw)
-    if (entry?.checkedAt > latest) latest = entry.checkedAt
-  }
-  return latest
-}
-export function loomyRouteMessage(value, singleAccount) {
-  if (singleAccount) {
-    const entry = loomyRouteEntryFrom(value?.accounts?.[singleAccount])
-    if (!entry) return '路由检测未获得结果，请稍后重试。'
-    if (entry.verdict === 'clean') return `路由检测完成：路由正常（${entry.servedModel || 'DeepSeek'}）。`
-    if (entry.verdict === 'routed') return `检测到上游改路由：实际落地 ${entry.servedModel || '非 DeepSeek 模型'}。`
-    if (entry.verdict === 'exhausted') return '当前账号积分不足，暂无法完成路由判定。'
-    if (entry.verdict === 'expired') return entry.reason === 'account-disabled' ? '检测到账号已被上游停用。' : '账号登录态已失效，请重新登录。'
-    return '暂未查到对话扣费记录，使用后可自动判定或再次检测。'
-  }
-  const s = value?.summary
-  if (!s || !s.tested) return '当前没有需要检测的 Loomy 账号。'
-  const parts = []
-  if (s.clean) parts.push(`${s.clean} 个正常`)
-  if (s.routed) parts.push(`${s.routed} 个改路由`)
-  if (s.expired + s.exhausted) parts.push(`${s.expired + s.exhausted} 个不可用`)
-  if (s.unknown) parts.push(`${s.unknown} 个无账本记录`)
-  if (s.error) parts.push(`${s.error} 个失败`)
-  return `路由检测完成（共 ${s.tested} 个）：${parts.join('，') || '无变化'}。`
-}
+// 账号行的字段与缺省值由契约层定义（`lib/channel-contract.js` 的 `accountView`）：
+// 宿主投影与客户端收编共用同一份白名单，改字段只改契约。
 export function accountsFrom(value, provider) {
-  return (Array.isArray(value?.accounts) ? value.accounts : []).filter(a => a && a.provider === provider && typeof a.id === 'string').map(a => {
-    const route = provider === 'loomy' ? loomyRouteEntryFrom(a.route) : null
-    return {
-      id: a.id, provider, nickname: text(a.nickname, 80) || '未命名账号', enabled: a.enabled !== false,
-      expiresAt: number(a.expiresAt),
-      // 套餐档位（Raccoon 家族按它分流：免费模型侧 / 订阅模型侧）。缺省不是错误：
-      // 老账号可能还没被探测打过标，界面按「未知」显示。
-      plan: a.plan === 'free' || a.plan === 'pro' || a.plan === 'unknown' ? a.plan : '',
-      ...(route ? { route } : {}),
-      modelRateLimits: Object.fromEntries(Object.entries(a.modelRateLimits ?? {}).filter(([, time]) => Number.isFinite(time) && time > Date.now())),
-    }
-  })
+  return (Array.isArray(value?.accounts) ? value.accounts : [])
+    .filter(a => a && a.provider === provider && typeof a.id === 'string')
+    .map(a => accountView(a, provider))
 }
 /**
  * 模型在界面状态里的**唯一键**：`provider:modelId`。
@@ -233,28 +73,11 @@ export const modelKey = (provider, id) => `${text(provider, 64)}:${text(id, 256)
  */
 export function modelsFrom(value, provider) {
   const owner = text(value?.provider, 64) || text(provider, 64)
-  return (Array.isArray(value?.models) ? value.models : []).filter(m => m && typeof m.id === 'string').map(m => ({
-    id: m.id, provider: owner, key: modelKey(owner, m.id),
-    name: text(m.name) || text(m.id), disabled: m.disabled === true, dead: m.dead === true, isFree: m.isFree === true,
-    subscriptionOnly: m.subscriptionOnly === true,
-    // 模型真实能力：缺省时界面不给对应控件（不猜它有什么能力）。
-    contextWindow: number(m.contextWindow),
-    maxTokens: number(m.maxTokens),
-    defaultMaxTokens: number(m.defaultMaxTokens),
-    efforts: Array.isArray(m.efforts) ? m.efforts.filter(x => typeof x === 'string').slice(0, 8) : [],
-    defaultEffort: typeof m.defaultEffort === 'string' ? m.defaultEffort : '',
-    supportsImage: typeof m.supportsImage === 'boolean' ? m.supportsImage : null,
-    stale: m.stale === true,
-    staleReason: text(m.staleReason, 240),
-    rate: modelRateFrom(m.rate),
-  }))
-}
-function modelRateFrom(value) {
-  return typeof value?.label === 'string' && (value.label === '免费' || /^(?:参考 )?x\d+(?:\.\d+)?$/.test(value.label))
-    && ['neutral', 'info', 'success', 'warning'].includes(value.tone) ? {
-      label: value.label, tone: value.tone,
-      ...(Number.isFinite(value.multiplier) && value.multiplier > 0 ? { multiplier: value.multiplier } : {}),
-    } : null
+  // 模型行的能力字段、倍率徽标与 `key` 组合键都由契约层定义（`modelView`）：
+  // wire 层缺席即未知，界面据此不给对应控件（不猜模型有什么能力）。
+  return (Array.isArray(value?.models) ? value.models : [])
+    .filter(m => m && typeof m.id === 'string')
+    .map(m => modelView({ ...m, provider: owner }, owner))
 }
 /**
  * 模型参数覆盖收编。键是 {@link modelKey}（`provider:modelId`），与
@@ -442,7 +265,7 @@ export function workbuddyModelsFrom(value) {
       context: number(m.context), output: number(m.output),
       attachment: typeof m.attachment === 'boolean' ? m.attachment : null, reasoning: m.reasoning === true,
       efforts: Array.isArray(m.efforts) ? m.efforts.filter(e => typeof e === 'string').slice(0, 8) : [],
-      free: m.free === true, enabled: m.enabled !== false, rate: modelRateFrom(m.rate),
+      free: m.free === true, enabled: m.enabled !== false, rate: viewRate(m.rate),
       ...planModelFields({ ...m, thinkingLevels: m.efforts }) }))
 }
 // 单账号快照收编：id 缺失或非对象直接丢弃（脏行不进界面）；窗口逐条白名单归一。
@@ -559,8 +382,6 @@ export function automationFrom(value) {
       if (typeof entry.autoClaimRewards === 'boolean') clean.autoClaimRewards = entry.autoClaimRewards
       if (typeof entry.autoCompleteTasks === 'boolean') clean.autoCompleteTasks = entry.autoCompleteTasks
       if (typeof entry.cotLoopGuard === 'boolean') clean.cotLoopGuard = entry.cotLoopGuard
-      // Loomy 请求体形态：true = 简化体。当前无界面入口，仅为配置往返保留。
-      if (typeof entry.loomyPlainBody === 'boolean') clean.loomyPlainBody = entry.loomyPlainBody
       // 分渠道默认输出上限：只在上游缺输出规格时生效。
       if (Number.isSafeInteger(entry.defaultMaxOutput) && entry.defaultMaxOutput > 0) clean.defaultMaxOutput = entry.defaultMaxOutput
       if (Object.keys(clean).length) providers[id] = clean
@@ -692,7 +513,7 @@ const CACHE_MODEL_SOURCES = new Set(['remote', 'cached', 'fallback'])
  * - balances：缓存形状 {accountId, nickname, total, packages}，适配回 wire 形状后
  *   复用 `balancesFrom`；
  * - params：只保留键命中收编后模型的条目，值按 paramsFrom 的字段口径挑；
- * - locked / modelSource / selected / at：白名单取值，非法值退回缺省。
+ * - modelSource / selected / at：白名单取值，非法值退回缺省。
  */
 export function sanitizeCacheEntry(entry, provider) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
@@ -727,7 +548,7 @@ export function sanitizeCacheEntry(entry, provider) {
     .filter(side => CACHE_MODEL_SOURCES.has(rawSource[side]))
     .map(side => [side, rawSource[side]]))
   const selected = typeof entry.selected === 'string' && accounts.some(a => a.id === entry.selected) ? entry.selected : ''
-  return { accounts, models, balances, params, locked: entry.locked === true, modelSource, selected, at: number(entry.at) ?? 0 }
+  return { accounts, models, balances, params, modelSource, selected, at: number(entry.at) ?? 0 }
 }
 /**
  * 读持久化缓存。storage 无效 / 读或解析失败 → null（调用方按「没有缓存」处理）。

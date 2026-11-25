@@ -5,13 +5,11 @@ import { AccountPool, allAccountsRateLimitedForModel } from '../vendor/channel-p
 import { configureDeadModelStore, withDeadModelPruning } from '../vendor/channel-pack/src/dead-model-store.js'
 import { attachTokenLedgerStore } from '../vendor/channel-pack/src/token-ledger.js'
 import { createTokenLedgerStore } from '../vendor/channel-pack/src/token-ledger-store.js'
-import { registerChannelPackRpc } from '../vendor/channel-pack/src/channel-pack-rpc.js'
+import { registerPackRpc } from './backend/pack-bridge.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageRequestTarget } from '../vendor/channel-pack/src/image-budget.js'
-import { mountQoderCN } from './backend/providers/qodercn.js'
-import { mountTrae } from './backend/providers/trae.js'
-import { mountLoomy, type LoomyRouteController } from './backend/providers/loomy.js'
-import { mountRaccoon, mergeUnifiedRaccoonCatalogs } from './backend/providers/raccoon.js'
+import { mergeUnifiedRaccoonCatalogs } from './backend/providers/raccoon.js'
+import { PACK_MOUNTS } from './backend/providers/pack-registry.js'
 import type { ProviderContext } from './backend/providers/context.js'
 import { join } from 'node:path'
 
@@ -85,7 +83,6 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
   routingMode?: () => string
   isRaccoonUnifiedModels?: () => boolean
   noteQuotaAccount?: (provider: string, accountId: string, model?: string) => void
-  loomyRoute?: LoomyRouteController
 } = {}) {
   const pool = new AccountPool(ctx, options.quotaAccountOrder, (provider, accountId, model) => {
     if (provider === 'trae' || provider === 'qodercn') options.noteQuotaAccount?.(provider, accountId, model)
@@ -245,23 +242,25 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
     readImage: makeReadImage(ctx), readImageRequest: makeReadImageRequest(ctx),
     catalogFile: provider => options.catalogDir && join(options.catalogDir, `${provider}-catalog.json`),
   }
-  const qoder = mountQoderCN(providerContext, options.qoderCatalogFile)
-  const trae = mountTrae(providerContext)
-  // Loomy 的专属余额选择器覆盖 free / expiring 两档（它本来就按「每日 → 永久」
-  // 分档）；manual / sticky 走池路径，粘滞由 quotaAccountOrder 在池内生效。
-  const loomy = mountLoomy(providerContext,
-    () => ['free', 'expiring'].includes(options.routingMode?.() ?? 'manual'), options.loomyRoute)
-  const raccoon = mountRaccoon(providerContext, options.isRaccoonUnifiedModels)
-  const providers = [loomy, raccoon, qoder, trae]
+  // 账号池渠道按**注册表**装配（`src/backend/providers/pack-registry.ts`）：
+  // 挂载、vendor 形参名、适配器与维护钩子都由那一条登记声明，这里不再手写渠道名。
+  const mounted = PACK_MOUNTS.map(entry => ({
+    entry,
+    result: entry.mount(providerContext, {
+      qoderCatalogFile: options.qoderCatalogFile,
+      isRaccoonUnifiedModels: options.isRaccoonUnifiedModels,
+    }),
+  }))
+  const providers = mounted.map(item => item.result)
   const modelAdapters = Object.fromEntries(providers.flatMap(provider => Object.entries(provider.adapters).map(([id, adapter]) =>
     [id, wrapImagePreference(withDeadModelPruning([id], patchAdapterContext(adapter)))])))
   const allowedProviders = Object.keys(modelAdapters)
-  registerChannelPackRpc(ctx, pool, undefined as any, undefined as any, qoder.auth,
-    trae.auth, undefined as any, loomy.auth, raccoon.auth, undefined as any,
-    undefined as any, undefined as any, modelAdapters, {
-      disableOpencode: true, nativeOnly: true, allowedProviders, onRpc,
-      raccoonPro: raccoon.subscriptionAuth,
-    })
+  const slots = Object.fromEntries(mounted.map(item => [item.entry.slot, item.result.auth]))
+  const subscriptionAuth = mounted.find(item => item.result.subscriptionAuth !== undefined)?.result.subscriptionAuth
+  registerPackRpc(ctx, pool, slots as Record<string, unknown>, modelAdapters, {
+    disableOpencode: true, nativeOnly: true, allowedProviders, onRpc,
+      ...(subscriptionAuth === undefined ? {} : { raccoonPro: subscriptionAuth }),
+  })
   // 模型选择器读取的是 llm.listModels（适配器注册时已定型）。在这里包一层的
   // 目的：关掉图片后，**模型选择器与宿主的能力判断**都不再看到 image，
   // 图片会走占位符路径而不是发一个注定失败的请求。
@@ -270,7 +269,7 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
     if (llm && typeof llm.listModels === 'function' && !(llm as any).__unifiedRouterImagePatched) {
       const baseListModels = llm.listModels.bind(llm)
       // ⚠️ llm 是全局服务：这个包装对**所有**渠道生效，包括别的插件注册的。
-      // 只处理本插件自己的渠道（loomy / raccoon / raccoon-pro / qodercn / trae），
+      // 只处理本插件自己的渠道（raccoon / raccoon-pro / qodercn / trae），
       // 其余原样透传——否则等于替别人改了模型能力。
       const managed = new Set(allowedProviders)
       llm.listModels = async (provider: string) => {

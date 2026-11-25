@@ -57,7 +57,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import { QODER_BILLING_UTC_OFFSET_MS } from './model-queue.js'
 import { resolveChannelPackHome } from './channel-pack-store.js'
 import { formatClaimGains } from './credits.js'
-import { ZCODE } from './zcode-product.js'
 import type { BadgeRpcResult } from './usage-badge.js'
 import type { RpcCreditsClaimAllResponse, RpcUsageAutoCheckinState } from './types.js'
 
@@ -328,8 +327,15 @@ export function isUnsupportedCheckin(message: string): boolean {
  * - 用户仍可在面板里**手动**点 zcode 的「一键领取积分」—— 那是有意行为，
  *   浏览器弹出来是用户自己能理解的交互。
  */
-export function isAutoCheckinExcluded(provider: string): boolean {
-  return provider === ZCODE.id
+/**
+ * 「领取过程需要用户在场 / 外部程序」的渠道排除表。
+ *
+ * 本插件当前**没有**这样的渠道：唯一需要现场产 captcha 的 zcode 已随渠道重写移除。
+ * 表函数保留是因为调用点（自动签到前的一道闸）要长期存在 —— 新增带 captcha /
+ * 外部浏览器的 provider 时，把它的 id 加进这里即可，不必再改调用方。
+ */
+export function isAutoCheckinExcluded(_provider: string): boolean {
+  return false
 }
 
 /** 把一轮结果拼成一句中文摘要（给状态灯提示与日志用）。 */
