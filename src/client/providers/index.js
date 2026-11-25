@@ -1,6 +1,15 @@
-const registeredProviders = [raccoon, raccoonPro, qodercn, trae, sensenova, workbuddy, agnes, unisound, qianfan, bailian, astudio, codearts]
+// 按类型排布：Agent（账号池 + 自管多账号）在前，API（单 Key / Token Plan）在后。
+const registeredProviders = [
+  raccoon, raccoonPro, qodercn, trae, workbuddy, astudio, codearts,
+  sensenova, agnes, unisound, qianfan, bailian, stepfun,
+]
 export const PROVIDERS = Object.freeze(registeredProviders.filter(provider => provider.card !== false)
   .map(provider => provider.pack ? packSettings(provider) : provider))
+const AGENT_KINDS = new Set(['pack', 'workbuddy', 'managed'])
+export const PROVIDER_GROUPS = Object.freeze([
+  { id: 'agent', title: 'Agent', providers: Object.freeze(PROVIDERS.filter(p => AGENT_KINDS.has(channelSpec(p.id)?.kind))) },
+  { id: 'api', title: 'API', providers: Object.freeze(PROVIDERS.filter(p => !AGENT_KINDS.has(channelSpec(p.id)?.kind))) },
+].filter(group => group.providers.length > 0))
 export const PACK_PROVIDERS = Object.freeze(registeredProviders.filter(provider => provider.pack))
 export const PLAN_PROVIDER_ID = sensenova.id
 export const RACCOON_FAMILY = Object.freeze(raccoon.family.map(side => side.id))

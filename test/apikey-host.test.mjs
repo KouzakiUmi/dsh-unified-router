@@ -110,7 +110,7 @@ function fixture({ autoCollect = false, snapshotFile, managers, providers = apiK
 const forbiddenCall = (f, method, payload) => f.call(method, payload, { origin: 'https://evil.example' })
 
 test('APIKEY 方法白名单与渠道 id 与规格表一致', () => {
-  assert.deepEqual([...APIKEY_PROVIDER_IDS], ['agnes', 'unisound', 'qianfan', 'bailian'])
+  assert.deepEqual([...APIKEY_PROVIDER_IDS], ['agnes', 'unisound', 'qianfan', 'bailian', 'stepfun'])
   assert.deepEqual([...APIKEY_METHODS].sort(), [
     'apikey.clearConsoleSession', 'apikey.consoleLogin', 'apikey.resetModels',
     'apikey.setConsoleSession', 'apikey.setEnabled', 'apikey.setKey',

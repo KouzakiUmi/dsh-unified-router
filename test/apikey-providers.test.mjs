@@ -111,13 +111,14 @@ const unisound = apikeyProvider('unisound')
 const AGNES_EFFORTS = ['off', 'low', 'medium', 'high']
 const UNISOUND_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
 
-test('注册表：四个渠道、id 顺序与冻结', () => {
-  assert.deepEqual(APIKEY_PROVIDER_IDS, ['agnes', 'unisound', 'qianfan', 'bailian'])
-  assert.deepEqual(Object.keys(APIKEY_PROVIDERS), ['agnes', 'unisound', 'qianfan', 'bailian'])
+test('注册表：五个渠道、id 顺序与冻结', () => {
+  assert.deepEqual(APIKEY_PROVIDER_IDS, ['agnes', 'unisound', 'qianfan', 'bailian', 'stepfun'])
+  assert.deepEqual(Object.keys(APIKEY_PROVIDERS), ['agnes', 'unisound', 'qianfan', 'bailian', 'stepfun'])
   assert.equal(apikeyProvider('agnes'), APIKEY_PROVIDERS.agnes)
   assert.equal(apikeyProvider('unisound'), APIKEY_PROVIDERS.unisound)
   assert.equal(apikeyProvider('qianfan'), APIKEY_PROVIDERS.qianfan)
   assert.equal(apikeyProvider('bailian'), APIKEY_PROVIDERS.bailian)
+  assert.equal(apikeyProvider('stepfun'), APIKEY_PROVIDERS.stepfun)
   assert.equal(Object.isFrozen(APIKEY_PROVIDERS), true)
   assert.throws(() => { APIKEY_PROVIDERS.x = 1 }, TypeError)
 })
@@ -621,4 +622,68 @@ test('阿里云百炼控制台额度：两步 SEC_TOKEN + 网关查询（不含 
     ? 'SEC_TOKEN: "t"'
     : { code: '200', data: { errorCode: 'BailianGateway.Login.NotLogined' } }, undefined, {}, 'cookie=expired')
   assert.equal(expiredGateway.status, 'expired')
+})
+
+/* --------------------- 阶跃星辰 Step Plan --------------------- */
+
+test('Step Plan：静态字段、非聊天模型过滤与三档 reasoning_effort 思考方言', () => {
+  const stepfun = apikeyProvider('stepfun')
+  assert.equal(stepfun.endpoint, 'https://api.stepfun.com')
+  assert.equal(stepfun.baseUrl, 'https://api.stepfun.com/step_plan/v1')
+  assert.equal(stepfun.chatPath, '/step_plan/v1/chat/completions')
+  assert.equal(stepfun.credentialRef, 'UNIFIED_ROUTER_STEPFUN_API_KEY')
+  assert.equal(stepfun.consoleCredentialRef, 'UNIFIED_ROUTER_STEPFUN_CONSOLE')
+  const parsed = stepfun.catalog.parse({
+    data: [
+      { id: 'step-5-preview' }, { id: 'step-3.7-flash' }, { id: 'step-router-v1' },
+      { id: 'stepaudio-2.5-asr' }, { id: 'step-tts-mini' }, { id: 'step-1x-medium' },
+    ],
+  })
+  assert.deepEqual(parsed.map(r => r.id), ['step-5-preview', 'step-3.7-flash', 'step-router-v1'])
+  assert.equal(parsed[0].attachment, true)
+  assert.equal(parsed[1].attachment, true)
+  assert.equal(parsed[2].attachment, false)
+  // 思考方言：low / medium / high 直发 reasoning_effort，无 off 档；step-router-v1 不发。
+  assert.deepEqual(stepfun.effortBody('medium', parsed[0]), { reasoning_effort: 'medium' })
+  assert.deepEqual(stepfun.effortBody('high', parsed[1]), { reasoning_effort: 'high' })
+  assert.equal(stepfun.effortBody('off', parsed[0]), undefined)
+  assert.equal(stepfun.effortBody('high', parsed[2]), undefined)
+})
+
+test('Step Plan 控制台额度：Connect-JSON 剩余比例解析、跳过 0+0 空窗口、支持 Cookie 与裸 Token', async () => {
+  const { readApiKeyQuota } = await import('../lib/apikey-quota.js')
+  const { projectApiKeyQuota } = await import('../lib/apikey-quota-projection.js')
+  const stepfun = apikeyProvider('stepfun')
+  const nowSec = Math.floor(Date.now() / 1000)
+  const quota = await readApiKeyQuota(stepfun, async req => {
+    assert.equal(req.method, 'POST')
+    assert.equal(req.url, 'https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit')
+    assert.equal(req.headers['oasis-token'], 'tok-abc')
+    assert.equal(req.headers['oasis-webid'], 'web-1')
+    return {
+      five_hour_usage_left_rate: 0.6,
+      five_hour_usage_reset_time: String(nowSec + 3600),
+      weekly_usage_left_rate: 0,
+      weekly_usage_reset_time: '0', // 无周窗口：0 + 0 跳过不显示成用尽
+      plan_credit_rate_limit: {
+        subscription_credit_left_rate: 0.875,
+        subscription_credit_reset_time: String(nowSec + 15 * 86400),
+      },
+    }
+  }, undefined, {}, 'Oasis-Token=tok-abc; Oasis-Webid=web-1')
+  assert.equal(quota.status, 'ready')
+  const projected = projectApiKeyQuota(quota)
+  assert.deepEqual(projected.windows.map(w => [w.id, w.used, w.limit, w.remaining]), [
+    ['window-percent', 40, 100, 60],
+    ['monthly-percent', 12.5, 100, 87.5],
+  ])
+  assert.ok(projected.windows[1].resetInMs > 14 * 86_400_000)
+  // 裸 Oasis-Token 同样可用，unauthenticated 判 expired
+  const expired = await readApiKeyQuota(stepfun, async req => {
+    assert.equal(req.headers['oasis-token'], 'bare-token')
+    return { code: 'unauthenticated' }
+  }, undefined, {}, 'bare-token')
+  assert.equal(expired.status, 'expired')
+  assert.equal(await stepfun.consoleLogin.verify('bare-token', async () => ({ plan_credit_rate_limit: {} })), true)
+  assert.equal(await stepfun.consoleLogin.verify('bad-token', async () => ({ code: 'unauthenticated' })), false)
 })

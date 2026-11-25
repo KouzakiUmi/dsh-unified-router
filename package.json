@@ -1,11 +1,11 @@
 {
   "name": "dsh-unified-router",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "main": "lib/web-host.js",
   "license": "MIT",
   "displayName": "Unified Router",
-  "description": "Raccoon、Qoder 中国版、TRAE、商汤 Token Plan、WorkBuddy、Agnes、云知声、千帆 Token Plan、阿里云百炼与 CodeArts 的模型、账号、额度与自动化管理：统一的 Web 设置页，仅 CN 版。",
+  "description": "Raccoon、Qoder 中国版、TRAE、WorkBuddy、AStudio、CodeArts、商汤 Token Plan、Agnes、云知声、千帆 Token Plan、阿里云百炼与 Step Plan 的模型、账号、额度与自动化管理：统一的 Web 设置页，仅 CN 版。",
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -20,6 +20,7 @@
     "unisound",
     "qianfan",
     "bailian",
+    "stepfun",
     "astudio",
     "codearts"
   ],

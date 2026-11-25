@@ -18,7 +18,8 @@ function tabKeys(event, index, ids, activate) {
   }[event.key]
   if (typeof next !== 'number') return
   event.preventDefault()
-  event.currentTarget.parentElement.querySelectorAll('[role="tab"]')[next]?.focus()
+  const list = event.currentTarget.closest?.('[role="tablist"]') ?? event.currentTarget.parentElement
+  list?.querySelectorAll('[role="tab"]')[next]?.focus()
   activate(ids[next])
 }
 
@@ -100,20 +101,25 @@ export function Settings({ ctx }) {
   const ui = { providerId: provider.id, invoke, act, disabled, isPending, loading: state.loading,
     failed: state.loadFailed || provider.snapshot?.failed(state), importOpen,
     query, setQuery, page, setPage, enabledFirst, setEnabledFirst, more, drafts, setDrafts, editParams, setPanel }
+  const providerIds = PROVIDERS.map(item => item.id)
   return h('div', { className: 'eac-settings' },
-    h('nav', { className: 'eac-providers', role: 'tablist', 'aria-label': '选择渠道' },
-      ...PROVIDERS.map((item, index) => {
-        const value = item.statusFrom(state)
-        const selected = state.provider === item.id
-        return h('button', { key: item.id, id: `eac-provider-${item.id}`, type: 'button', role: 'tab', className: 'eac-provider',
-          'aria-selected': selected, tabIndex: selected ? 0 : -1, 'aria-label': `切换到 ${item.title}`, 'aria-controls': 'eac-provider-workspace',
-          onClick: () => { if (!selected) selectProvider(item.id) },
-          onKeyDown: event => tabKeys(event, index, PROVIDERS.map(value => value.id), id => { if (id !== state.provider) selectProvider(id) }) },
-          h('span', { className: 'eac-provider-name' }, item.title),
-          h('span', { className: 'eac-provider-meta' },
-            h('span', { className: 'eac-provider-dot', 'data-tone': toneFor(value) }),
-            value ? value.cardMeta ?? (value.closed ? '已关闭' : `${value.totalAccounts ?? value.accounts ?? '—'} 账号 · ${value.models ?? '—'} 模型`) : '待读取'))
-      })),
+    h('nav', { className: 'eac-provider-groups', role: 'tablist', 'aria-label': '选择渠道' },
+      ...PROVIDER_GROUPS.map(group => h('div', { key: group.id, className: 'eac-provider-group', 'data-group': group.id },
+        h('div', { className: 'eac-provider-group-title', 'aria-hidden': true }, group.title),
+        h('div', { className: 'eac-providers' },
+          ...group.providers.map(item => {
+            const index = providerIds.indexOf(item.id)
+            const value = item.statusFrom(state)
+            const selected = state.provider === item.id
+            return h('button', { key: item.id, id: `eac-provider-${item.id}`, type: 'button', role: 'tab', className: 'eac-provider',
+              'aria-selected': selected, tabIndex: selected ? 0 : -1, 'aria-label': `切换到 ${item.title}`, 'aria-controls': 'eac-provider-workspace',
+              onClick: () => { if (!selected) selectProvider(item.id) },
+              onKeyDown: event => tabKeys(event, index, providerIds, id => { if (id !== state.provider) selectProvider(id) }) },
+              h('span', { className: 'eac-provider-name' }, item.title),
+              h('span', { className: 'eac-provider-meta' },
+                h('span', { className: 'eac-provider-dot', 'data-tone': toneFor(value) }),
+                value ? value.cardMeta ?? (value.closed ? '已关闭' : `${value.totalAccounts ?? value.accounts ?? '—'} 账号 · ${value.models ?? '—'} 模型`) : '待读取'))
+          }))))),
     h('div', { className: 'eac-workspace', 'data-panel': panel, role: 'tabpanel', id: 'eac-provider-workspace', 'aria-labelledby': `eac-provider-${state.provider}` },
       h('header', { className: 'eac-header' },
         h('h2', { className: 'eac-title' }, provider.title),

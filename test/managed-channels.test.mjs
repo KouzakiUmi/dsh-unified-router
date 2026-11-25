@@ -96,11 +96,9 @@ function memoryHost() {
   }
 }
 
-test('自管注册表只登记 CodeArts（AStudio 已停用）', () => {
-  // AStudio 于 2026-11-24 停用：上游无法回报正确积分（用尽后仍显示满值，
-  // 用户以为有额度却调不动）。实现文件保留，注册表只登记启用的渠道。
-  assert.deepEqual(MANAGED_PROVIDER_IDS, ['codearts'])
-  assert.equal(MANAGED_PROVIDERS.length, 1)
+test('自管注册表登记 AStudio 与 CodeArts', () => {
+  assert.deepEqual(MANAGED_PROVIDER_IDS, ['astudio', 'codearts'])
+  assert.equal(MANAGED_PROVIDERS.length, 2)
 })
 
 test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭据脱敏/compat 模型参数', async t => {

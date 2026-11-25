@@ -61,6 +61,9 @@ export const CLIENT_STYLES = `
 /* ---------- 渠道 tab ---------- */
 /* 渠道选择器：**小卡片网格**（自动换行），不用横向滚动条 —— 滚动条挡住了半个渠道，
    而且藏起来的渠道要用户去猜（用户报障「最上面是左右拖动的滚动条，很难看」）。 */
+.eac-provider-groups{display:flex;flex-direction:column;gap:var(--eac-s2)}
+.eac-provider-group{display:flex;flex-direction:column;gap:var(--eac-s1)}
+.eac-provider-group-title{font-size:var(--eac-fs-xs);font-weight:620;letter-spacing:.04em;color:var(--eac-faint);padding:0 2px}
 .eac-providers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--eac-s1);padding:0 0 var(--eac-s1)}
 .eac-provider{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;min-height:46px;padding:6px var(--eac-s3);border:1px solid var(--eac-border);border-radius:var(--eac-r);background:var(--eac-surface);color:var(--eac-muted);cursor:pointer;text-align:left;transition:background .14s ease,color .14s ease,border-color .14s ease}
 .eac-provider:hover{background:var(--eac-subtle);color:var(--eac-text)}

@@ -1,7 +1,7 @@
-# API Key 渠道（Agnes / 云知声 / 千帆 Token Plan / 阿里云百炼）
+# API Key 渠道（Agnes / 云知声 / 千帆 Token Plan / 阿里云百炼 / Step Plan）
 
 本文是 API Key 类渠道的接口契约：宿主侧管理器、模型设置、推理适配器、渠道规格与 RPC 投影。
-四家 API Key 渠道共用同一套实现，差异只在 `lib/apikey-providers.js` 的规格对象里。
+五家 API Key 渠道共用同一套实现，差异只在 `lib/apikey-providers.js` 的规格对象里。
 
 ## 1. 渠道事实（实测与官方文档）
 
@@ -88,6 +88,16 @@
 | 思考 | `enable_thinking: true \| false`；Qwen4/Qwen3.8/DeepSeek V4 系列同时支持 `reasoning_effort`（`low`/`high`/`xhigh`，实测 `off`/`high`/`xhigh` 均正常）；**`glm-5.3` 实测发 `enable_thinking: false` 回 HTTP 400（`restricted to True`），仅提供开启档**；`auto` 不下发思考参数 | 2026-11-26 真实 Key 逐模型实测 + [OpenAI 兼容 Chat 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions) |
 | 控制台额度 | 专属 `sk-sp-` Key 只授权推理；浏览器登录 `https://bailian.console.aliyun.com/cn-beijing?tab=plan`（或粘贴 Cookie，存 `UNIFIED_ROUTER_BAILIAN_CONSOLE`），两步取数：① GET 控制台页提取 `SEC_TOKEN`；② POST `BroadScopeAspnGateway` 调 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage`（**严禁硬编码 `switchAgent`**），按 `per5HourPercentage` / `per1WeekPercentage` / `per1MonthPercentage` 投影为百分比窗口（`window-percent` / `weekly-percent` / `monthly-percent`） | 控制台网关实测协议（参考 `can1357/oh-my-pi#12260`） |
 | 限流/耗尽 | `429 Requests rate limit exceeded` / `Throttling*` 记限速；`429 insufficient_quota` 为套餐额度耗尽不记短时限速 | [Token Plan FAQ](https://help.aliyun.com/zh/model-studio/token-plan-faq) |
+
+### 阶跃星辰 Step Plan（`stepfun`）
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 端点 | OpenAI 兼容 `https://api.stepfun.com/step_plan/v1`（`POST /step_plan/v1/chat/completions`），Step Plan API Key Bearer 鉴权 | [推理模型接入](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api)（2026-11-04） |
+| 目录 | `GET /step_plan/v1/models`（实测无 Key 返回 401，端点存在），过滤 `stepaudio*`/`step-tts*`/`step-asr*`/`step-1x*`/`step-video*`，空表回落官方兜底清单 | 2026-11-26 端点探针 + 官方文档 |
+| 模型 | `step-5-preview`（1M / 65536，多模态）、`step-3.7-flash`（256K，多模态）、`step-3.5-flash-2603`（256K）、`step-3.5-flash`（256K）、`step-router-v1` | [推理模型接入](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api) |
+| 思考 | OpenAI 协议三档 `reasoning_effort: 'low' \| 'medium' \| 'high'`（默认 `medium`，无 `off` 档）；`step-router-v1` 不下发 | [推理模型接入](https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api) |
+| 控制台额度 | 浏览器登录直达 `https://platform.stepfun.com/step-plan`（未登录自动跳账号中心并在回跳后刷新平台域 `Oasis-Token`）或粘贴 Cookie / 裸 `Oasis-Token`（存 `UNIFIED_ROUTER_STEPFUN_CONSOLE`），调 Connect-JSON `POST /api/step.openapi.devcenter.Dashboard/QueryStepPlanRateLimit`，按 `*_left_rate`（剩余比例，0+0 视为无窗口）投影为 `window-percent` / `weekly-percent` / `monthly-percent` | 控制台协议（参考 `yetone/magpie` `stepfun_plan.go` 与 `dsh-musage-card`） |
 
 ### 控制台额度与限速提醒
 

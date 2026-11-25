@@ -243,8 +243,12 @@ test('CodeArts 使用当前模型积分池，重置与到期字段不混用', ()
     { name: '活动赠送积分', balance: 1, limit: 100, expiresAt: when },
     { name: '会员积分', balance: 179, limit: 200, resetsAt: when },
   ] }]
-  // AStudio 段已移除：该渠道停用后 `modelData('astudio', …)` 不再有路由，
-  // 它特有的「积分包到期与更新时间不混用」渲染随之失去保证对象。
+  // AStudio 已恢复：验证其 `noFraction` + `windowsAsCredits` 能力声明下积分包与到期时间渲染不混用。
+  const astudio = modelData('astudio', 'spark-x2.6', { value: { accounts } })
+  assert.equal(astudio.summary, '180 积分')
+  assert.equal(astudio.viewed.details[0].expires, when)
+  assert.equal(astudio.viewed.details[0].reset, '')
+  assert.equal(astudio.viewed.details[0].meter, false)
   const code = { value: { accounts: [{ ...accounts[0], windows: [
     { name: '总积分包', balance: 49, limit: 50, resetsAt: when },
     { name: '赠送积分包', balance: 0, limit: 10 },
