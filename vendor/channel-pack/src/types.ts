@@ -51,32 +51,6 @@ export interface ProviderAccountEntry {
    */
   traeCheckinDeviceGeneration?: number
   /**
-   * **opencode** 账号的出口代理（空/缺省 = 直连）。
-   *
-   * ⚠️ 代理是**账号维度**的：一个 NAT 后的多台 PC 共享同一出口 IP，而
-   * OpenCode Zen 的匿名通道按**出口 IP** 限流、认证通道按**账号**限流，
-   * 故「让各账号真正分开」只能给各账号各配一条出口。
-   *
-   * 空串是合法值（= 用户显式清除了代理，回到「与其它无代理账号共享本机
-   * 出口」），**不可**用 falsy 判据把它与「未设置」混为一谈 ——
-   * 那会让面板上的「清除代理」点了没反应。
-   */
-  opencodeProxy?: string
-  /**
-   * **opencode** 账号的指纹代次（见 `src/opencode.ts` 的 `deriveProjectId`）。
-   *
-   * 只存**整数代次**而非指纹本体：project id 由 `(api_key, generation)`
-   * 唯一决定，用户点「轮换」时 +1 即可整体换一份新 project id，
-   * 无需让调用方拼哈希（与 `traeCheckinDeviceGeneration` 同款取舍）。
-   *
-   * ⚠️ 接线层必须**以本字段为权威**重新派生 project id（`max(本字段,
-   * 凭据内代次)`），不能直接透传凭据里的 `fingerprint` ——
-   * 否则代次涨了而 project id 不变，且不报错，是最难排查的一类静默失效。
-   *
-   * 缺省/0 = 用凭据里派生的初始指纹。
-   */
-  opencodeFingerprintGeneration?: number
-  /**
    * **Raccoon 家族**账号的套餐档位（仅 `raccoon` 池使用）。
    *
    * 免费版（`raccoon`）与订阅版（`raccoon-pro`）是同一上游账号体系的两个
@@ -510,34 +484,22 @@ export interface RpcCreditsBalancesResponse {
 
 /**
  * ========================================
- * Cline 订阅额度与请求记录
+ * 订阅额度窗口（供用量徽标 `usage.badge` 复用）
  * ========================================
  *
- * 与 `credits.balances`（余额）**语义不同，两个端点不能互相替代**：
- *
- * | | 余额 | 订阅额度 | 请求记录 |
- * |---|---|---|---|
- * | 回答的问题 | 还剩多少钱 | 各时间窗用掉百分之几 | 每一笔请求花了多少 |
- * | 端点 | `/users/{id}/balance` | `/users/me/plan/usage-limits` | `/users/{id}/usages` |
- *
- * 参考实现：`github.com/codeOct/dsh-cline-pass` 的额度管理与请求记录部分
- * （见 `src/cline-quota.ts` 的模块头注释）。
+ * 与 `credits.balances`（余额）语义不同：余额回答「还剩多少积分」，
+ * 窗口读数回答「各时间窗用掉百分之几」。
  */
 
-/** RPC: 查询某 provider 的**订阅额度窗口**（当前只有 Cline 支持）。 */
-export interface RpcClineQuotaRequest {
-  provider: string
-}
-
 /**
- * 单个账号的订阅额度读数。
+ * 单个账号的订阅额度窗口读数。
  *
  * ⚠️ **`ok:false` 与「窗口为 0 个」是两件不同的事**：前者是查询失败
  * （凭据失效、网关报错），后者是「账号确实没有任何额度窗口」。
  * 面板对两者的文案必须不同 —— 把失败显示成「无额度」会让用户
  * 以为额度没了（与本仓库「查不到不显示成 0」的一贯约定同源）。
  */
-export interface RpcClineQuotaAccount {
+export interface RpcQuotaWindowAccount {
   accountId: string
   nickname: string
   ok: boolean
@@ -546,84 +508,9 @@ export interface RpcClineQuotaAccount {
   error?: string
 }
 
-/** RPC: 订阅额度响应。 */
-export interface RpcClineQuotaResponse {
-  accounts: RpcClineQuotaAccount[]
-}
-
-/**
- * RPC: 查询**请求记录**（本插件自己发出的推理请求流水，按时间倒序）。
- *
- * ⚠️ **不是**网关的 `/users/{id}/usages`（那是该账号在官方所有渠道的
- * 消费账单：没有延迟/首块时间，表格字段也对不齐参考实现）。见
- * `src/cline-request-log.ts`。
- *
- * `accountId` 必传：面板用**同一个**翻页索引同时切「额度窗口」与
- * 「请求记录」，两个区域必须看同一个账号。
- */
-export interface RpcClineRequestLogRequest {
-  provider: string
-  accountId: string
-  /** 最多返回多少条（省略用上限）。 */
-  limit?: number
-}
-
-/** 请求记录的一行。 */
-export interface RpcClineRequestLogRow {
-  /** 请求**发起**时刻（毫秒时间戳）。 */
-  ts: number
-  /** 模型 id（wire 上的 `model`）。 */
-  model: string
-  /**
-   * 真正服务这笔请求的**上游渠道**（网关下发的路由元数据，如 `alibaba`）。
-   *
-   * ⚠️ 与「模型命名空间」（`cline-pass` / `cline-free`）**不是一回事**：
-   * 后者是订阅通道，甚至可能是厂商名（`deepseek/…`）。网关本次没报路由时
-   * 这里回落到命名空间 —— 取值顺序见 `src/cline-routing.ts` 与 RPC 侧注释。
-   */
-  upstream: string
-  /**
-   * 是否收到过 usage 帧。
-   *
-   * ⚠️ 与「token 为 0」不是一回事：网关没发 usage 时（abort / 上游提前断开）
-   * 必须显示 `—`，给 0 会被读成「瞬间完成、没花 token」（参考实现同约定）。
-   */
-  usageReported: boolean
-  /** 输入 token（未命中缓存的部分）。 */
-  inputTokens: number
-  /** 输出 token。 */
-  outputTokens: number
-  /** 缓存命中的输入 token（表格的 ⚡ 那一项；缺失时省略）。 */
-  cacheReadTokens?: number
-  /** 思考 token（表格的 🧠 那一项；缺失时省略）。 */
-  reasoningTokens?: number
-  /**
-   * 本次请求的**推理强度**（DSH 注入的 `options.reasoningEffort`）。
-   *
-   * ⚠️ 空串 = 本次没指定，展示层据此**整行不渲染**（参考实现同约定）；
-   * 不要改成 `'auto'` —— 那会被读成「确实选了自动这一档」。
-   */
-  effort: string
-  /** 首个内容块耗时（毫秒）—— 解释「为什么等了这么久才出字」。 */
-  ttftMs: number
-  /**
-   * 首个**正文**块耗时（毫秒；0 = 本次没有任何正文/工具调用块）。
-   *
-   * ⚠️ 「输出速率」必须让分子分母落在**正文阶段**：分子 =
-   * `outputTokens − reasoningTokens`（思考 token 计入 `completion_tokens`，
-   * 且产生于 `ttftMs` 之前），分母 = `totalMs − ttfcMs`。缺这个字段，
-   * 速率会把思考 token 除进正文窗口 → 虚高到物理不可能的值（用户报障）。
-   */
-  ttfcMs: number
-  /** 全程耗时（毫秒）。 */
-  totalMs: number
-  /** 失败原因；成功行省略。 */
-  error?: string
-}
-
-/** RPC: 请求记录响应（最新在前）。 */
-export interface RpcClineRequestLogResponse {
-  rows: RpcClineRequestLogRow[]
+/** RPC: 订阅额度窗口响应。 */
+export interface RpcQuotaWindowsResponse {
+  accounts: RpcQuotaWindowAccount[]
 }
 
 /**
@@ -1253,7 +1140,7 @@ export interface RpcUsageBadgePlanAccount {
 }
 
 export type RpcUsageBadgeSubscription =
-  | { kind: 'windows'; accounts: RpcClineQuotaAccount[] }
+  | { kind: 'windows'; accounts: RpcQuotaWindowAccount[] }
   | { kind: 'plan'; accounts: RpcUsageBadgePlanAccount[] }
 
 /** RPC: 用量徽标读数响应。 */

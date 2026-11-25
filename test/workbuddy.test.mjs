@@ -733,6 +733,9 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
   const catalog = [
     { id: 'glm-5.3', name: 'GLM 5.3', enabled: true, api: { npm: '@ai-sdk/openai-compatible' }, limit: { context: 128_000, output: 64_000 } },
   ]
+  // 动态构造未来 1 小时的 UTC+8 重置时刻，避免硬编码墙钟时间戳过期。
+  const resetAtMs = Math.floor((Date.now() + 3_600_000) / 1000) * 1000
+  const resetAtCst = new Date(resetAtMs + 8 * 3_600_000).toISOString().slice(0, 19).replace('T', ' ')
   const ctx = context(creds, { llm: { registerAdapter() { return () => {} } } })
   const deps = {
     plugin: {
@@ -751,7 +754,7 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
               // 主号额度耗尽：上游回 429；备号正常。
               return auth.accountId === a.uid
                 // 上游真实文案：429 会在文案里给出重置时刻（浏览器面板靠它显示「已满」）。
-                ? new Response('429 usage exceeds frequency limit, but don\'t worry, your usage will reset at 2026-11-25 19:47:41 UTC+8, alternatively, you can switch to the other models to continue using it.', { status: 429 })
+                ? new Response(`429 usage exceeds frequency limit, but don't worry, your usage will reset at ${resetAtCst} UTC+8, alternatively, you can switch to the other models to continue using it.`, { status: 429 })
                 : new Response('{"ok":true}', { status: 200 })
             },
           }
@@ -775,7 +778,7 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
     assert.deepEqual(hits, [a.uid, c.uid], '先试主号，再跳过停用账号直接用备号')
     // 429 的「重置时刻」必须记下来（换号成功会吞掉 429，所以记账发生在换号之前）。
     const limits = JSON.parse((await import('node:fs')).readFileSync(join(dir, 'workbuddy-limits.json'), 'utf8'))
-    assert.equal(limits[a.id], Date.parse('2026-11-25T19:47:41+08:00'), '应按上游文案记下重置时刻')
+    assert.equal(limits[a.id], resetAtMs, '应按上游文案记下重置时刻')
     assert.equal(limits[c.id], undefined, '成功的账号不记账')
     // 快照要如实多出一条「已满」窗口：credits 窗口无法回答「这个号还能不能继续用」。
     const snapshot = await manager.call('workbuddy.snapshot', { provider })
@@ -784,7 +787,7 @@ test('推理 429：自动切到下一个启用账号，跳过已停用账号', a
     assert.ok(limitedWindow, '撞过 429 的账号应显示该窗口')
     assert.equal(limitedWindow.balance, 0)
     assert.equal(limitedWindow.estimate, true, '这是基于被拒信号的估算，不是精确 token 统计')
-    assert.equal(limitedWindow.resetsAt, new Date(Date.parse('2026-11-25T19:47:41+08:00')).toISOString())
+    assert.equal(limitedWindow.resetsAt, new Date(resetAtMs).toISOString())
   } finally {
     manager.dispose()
     await rm(dir, { recursive: true, force: true })

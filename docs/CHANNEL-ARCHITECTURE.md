@@ -261,7 +261,7 @@ Cookie）、鉴权头（XSRF 只给云知声）、成功码（`code:'200'` vs `e
 另有一条反向校验用例（防止正则失配导致守护永远通过），以及一条「债务清单只能收缩」用例
 （登记项在代码里已不存在就应删掉，否则清单会变成谎言）。
 
-宿主侧（`lib/web-host.js` 的签到分派等）尚未纳入，下一步同一思路处理。
+宿主 `lib/web-host.js` 的签到分派与 `onChange` 写后失效也已收敛：由 `lib/settings-providers.js` 的 `settingsCheckinAdapters` 在适配器上声明 `claimMethod` / `claimShape` / `writeMethod`，宿主只查表分派，不再按渠道名或具体签到方法名写分支。
 
 ### 验收
 

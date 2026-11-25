@@ -24,7 +24,7 @@ import type {
   ProviderAccountEntry,
   RpcCreditsBalanceAccount,
   RpcCreditsBalancesResponse,
-  RpcClineQuotaResponse,
+  RpcQuotaWindowsResponse,
   RpcUsageAutoCheckinState,
   RpcUsageBadgePlanAccount,
   RpcUsageBadgeResponse,
@@ -102,14 +102,14 @@ export interface UsageBadgeDeps {
   collectBalances(provider: string): Promise<BadgeRpcResult<RpcCreditsBalancesResponse>>
   /**
    * 取某渠道的**订阅窗口**读数；返回 `undefined` 表示「该渠道没有窗口式订阅」
-   * （目前只有 Cline 有，由装配层判渠道，本模块不认识任何具体渠道）。
+   * （由装配层判渠道，本模块不认识任何具体渠道）。
    *
    * 允许**同步**返回 `undefined`（装配层判渠道时就是这么写的），本模块统一
    * `await` 一次，故两种写法都吃。
    */
   collectQuota?(
     provider: string,
-  ): BadgeRpcResult<RpcClineQuotaResponse> | undefined | Promise<BadgeRpcResult<RpcClineQuotaResponse> | undefined>
+  ): BadgeRpcResult<RpcQuotaWindowsResponse> | undefined | Promise<BadgeRpcResult<RpcQuotaWindowsResponse> | undefined>
   /** 该渠道的账号池条目（**同步**读内存副本；`enabled !== false` 视为启用）。 */
   listAccounts(provider: string): readonly ProviderAccountEntry[]
   /** 读当前生效的显示偏好。 */

@@ -258,7 +258,7 @@ export function mountBackend(ctx: Context, onRpc: (call: Function) => void, opti
   const slots = Object.fromEntries(mounted.map(item => [item.entry.slot, item.result.auth]))
   const subscriptionAuth = mounted.find(item => item.result.subscriptionAuth !== undefined)?.result.subscriptionAuth
   registerPackRpc(ctx, pool, slots as Record<string, unknown>, modelAdapters, {
-    disableOpencode: true, nativeOnly: true, allowedProviders, onRpc,
+    nativeOnly: true, allowedProviders, onRpc,
       ...(subscriptionAuth === undefined ? {} : { raccoonPro: subscriptionAuth }),
   })
   // 模型选择器读取的是 llm.listModels（适配器注册时已定型）。在这里包一层的
