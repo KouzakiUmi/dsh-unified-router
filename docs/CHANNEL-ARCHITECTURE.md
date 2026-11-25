@@ -186,6 +186,61 @@ wireJson(value)       // 深度净化：丢弃 undefined / NaN / ±Infinity，-0
 （ctx / pool / config / 家族判定 / 各 auth 实例），属于可做、但收益仅是**可读性**的重构。
 本文档的口径是「先保证行为与产物正确，再谈文件切分」，因此排在裁剪与静态核验之后。
 
+## 4.1 共享层不再认识渠道名
+
+模块化最容易退化成「文件分开了，但加渠道还是得改共享层」。这一轮把**渠道专属行为**
+从共享层搬进渠道自己的声明里，判据是「加一个新渠道要不要改共享文件」。
+
+### 数据面（已清零）
+
+`lib/apikey-quota.js` 原本是一串 `provider === 'agnes' ? … : …`：凭据形态（Bearer vs
+Cookie）、鉴权头（XSRF 只给云知声）、成功码（`code:'200'` vs `errorCode:'0'`）、五个额度
+窗口的解析，全都要么走 agnes 分支要么走 else 分支。现在这些全在规格里：
+
+| 规格字段 | 承载什么 |
+|---|---|
+| `consoleQuota.consoleUrl` / `baseUrl` / `credentialEnv` / `headers(session)` | 控制台页面地址、API 基址、会话凭据来源与鉴权头形态 |
+| `consoleQuota.paths` / `pick(json)` / `read(jsons)` / `expiredCodes` / `expiredPattern` | 取哪些路径、成功判据、窗口归一化、会话过期判据 |
+| `rateLimit.scanOnOk` / `codes` | 2xx 是否也扫、业务码 → `rpm` / `tpm` 映射 |
+
+执行器（`lib/apikey-quota.js`）只剩「取凭据 → 并发请求 → 归一化状态」，**零渠道名判断**。
+控制台页面地址也不再在客户端存一份映射表：规格 → 快照的 `consoleQuotaUrl` → 客户端。
+
+### 渲染面（apikey 已清零，其余登记待收敛）
+
+`id === 'agnes'` 原本散在 `core.js` / `providers/apikey.js` / `store/quota.js`，现在换成
+渠道视图上的能力声明：
+
+| 能力位 | 语义 | 现持有者 |
+|---|---|---|
+| `freeTier` | 该渠道有「免费额度面」：额度恒为 0 是正常态，有 API Key 余额时余额优先显示 | Agnes |
+| `preferCreditsWindows` | 同时下发 credits 与 requests 两类窗口时，credits 是主口径 | Agnes |
+
+`isAgnesFreeQuota` 相应改名为 `isFreeTierIdle`（纯数据判据，与渠道名无关）。
+
+### 存量债务（显式登记，只能减不能增）
+
+`test/client-channel-agnostic.test.mjs` 扫 `src/client/` 下**除 `providers/` 之外**的所有
+文件，禁止 `=== '某个渠道'` 形式的分派，并把剩余债务按「文件 → 渠道 id」登记在 `KNOWN_DEBT`：
+
+| 文件 | 渠道 | 待收敛的语义 |
+|---|---|---|
+| `core.js` | qodercn / codearts / raccoon / raccoon-pro | 签到文案与结果提示的渠道差异 |
+| `store/index.js` | qodercn | 目录问题提示、刷新结果聚合 |
+| `store/quota.js` | raccoon / raccoon-pro / codearts / workbuddy / astudio | 额度药丸的窗口语义与积分单位差异 |
+
+用例两侧都卡：新代码往共享层加渠道名分派 → 红；收敛了一处却没删登记 → 也红（清单必须忠实
+反映现状）。宿主侧（`lib/web-host.js` 的签到分派等）尚未纳入，下一步同一思路处理。
+
+### 验收
+
+| 项 | 结果 |
+|---|---|
+| 接入新 API Key 渠道 | ✅ 只写规格数据；`test/apikey-new-channel.test.mjs` 用虚构渠道 `fixture-key` 走通全链路，共享层零改动 |
+| 数据面渠道名判断 | 12 → **0** |
+| 渲染面渠道名判断（apikey） | 6 → **0** |
+| 测试总数 | 414 → **423** |
+
 ## 6. 明确不做
 
 - 不搬 vendor 里的渠道实现（认证/适配器由 vendored MIT 源码提供）。

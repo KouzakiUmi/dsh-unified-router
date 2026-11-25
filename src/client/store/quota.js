@@ -158,7 +158,9 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
   } else if (type === 'api') {
     const quota = projectApiKeyQuota(first?.value?.quota)
     const balance = apikeyBalanceFrom(first?.value?.balance)
-    if (id === 'agnes' && isAgnesFreeQuota(quota, balance)) {
+    // 能力声明来自渠道视图（`apiKeyChannel`），共享层不写渠道名。
+    const caps = providerById(id)
+    if (caps?.freeTier && isFreeTierIdle(quota, balance)) {
       rows = [{
         id, label: '账户状态', plan: '免费用户', amount: null,
         at: quota?.updatedAt ?? balance?.updatedAt ?? first?.value?.updatedAt ?? null,
@@ -169,12 +171,12 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
         details: [
           ...quota.windows.map(row => ({ label: apiQuotaLabels[row.id], fraction: remainingFraction(row.remaining, row.limit),
               note: apiQuotaResetHint(row, quota.updatedAt),
-              primary: id !== 'agnes' || !row.id.endsWith('-requests') || !quota.windows.some(item => item.id.endsWith('-credits') && item.limit > 0),
+              primary: !caps?.preferCreditsWindows || !row.id.endsWith('-requests') || !quota.windows.some(item => item.id.endsWith('-credits') && item.limit > 0),
               value: row.remaining === null ? `已用 ${displayNumber(row.used)}` : `${displayNumber(row.remaining)}${row.limit > 0 ? ` / ${displayNumber(row.limit)}` : ''}` })),
           ...(quota.gifts ?? []).filter(row => row.modelId === model).map(row => ({ label: '模型赠送额度', primary: false,
             value: row.remaining === null ? `已用 ${quotaValue(row.used, row.unit)}` : quotaValue(row.remaining, row.unit) })),
         ] }]
-    } else if (id === 'agnes' && balance && !balance.error) {
+    } else if (caps?.freeTier && balance && !balance.error) {
       const fraction = Number.isFinite(balance.limit) && balance.limit > 0 && Number.isFinite(balance.used)
         ? remainingFraction(Math.max(0, balance.limit - balance.used), balance.limit) : null
       rows = [{

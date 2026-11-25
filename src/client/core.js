@@ -600,7 +600,16 @@ export const percentMetric = fraction => typeof fraction === 'number' && Number.
   ? { value: Math.round(fraction * 100), unit: '% 剩余', fraction }
   : undefined
 
-export function isAgnesFreeQuota(quota, balance) {
+/**
+ * 「免费额度面」渠道的空额度识别。
+ *
+ * 有的渠道给免费用户一个额度恒为 0 的账户面（Agnes）：这既不是读取失败，也不能
+ * 当成「没额度」显示 —— 界面要说「免费用户（额度读取为 0）」，否则用户会以为出了问题。
+ *
+ * 判据只看数据形状，**与渠道名无关**。是否启用由渠道视图的能力声明 `freeTier` 决定
+ * （见 `providers/apikey.js` 的 `apiKeyChannel`），共享层不写 `id === 'agnes'`。
+ */
+export function isFreeTierIdle(quota, balance) {
   if (quota?.status === 'ready') {
     const bal = typeof quota.balance === 'number' && Number.isFinite(quota.balance) ? quota.balance : 0
     const windows = Array.isArray(quota.windows) ? quota.windows : []

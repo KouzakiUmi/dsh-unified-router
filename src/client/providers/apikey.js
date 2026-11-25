@@ -25,8 +25,8 @@ function apiQuotaResetHint(row, at, now = Date.now()) {
   return duration ? `约 ${duration}后重置` : ''
 }
 
-function apiQuotaRows(quota, consoleUrl, providerId, balance) {
-  if (providerId === 'agnes' && isAgnesFreeQuota(quota, balance)) {
+function apiQuotaRows(quota, consoleUrl, capabilities, balance) {
+  if (capabilities.freeTier && isFreeTierIdle(quota, balance)) {
     return [{
       id: 'console-quota', name: '账户额度', href: consoleUrl,
       meta: '免费用户（额度读取为 0）',
@@ -34,7 +34,8 @@ function apiQuotaRows(quota, consoleUrl, providerId, balance) {
     }]
   }
   if (!quota) return []
-  if (quota.status === 'needs-console' && providerId === 'agnes' && balance && !balance.error) return []
+  // 有免费额度面的渠道只要有 API Key 余额，「未配置控制台会话」就不是需要提示的事。
+  if (quota.status === 'needs-console' && capabilities.freeTier && balance && !balance.error) return []
   if (quota.status !== 'ready') return [{ id: 'console-quota', name: '控制台额度', href: consoleUrl,
     meta: { 'needs-console': '未配置控制台会话', unavailable: '暂无额度数据', expired: '控制台会话已过期', error: '读取失败' }[quota.status] }]
   return [
@@ -64,11 +65,32 @@ function ApiKeyCooldown({ limit }) {
   return h('span', { role: 'timer' }, `${label} · ${limit.estimated ? '预计' : '剩余'} ${seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ` : ''}${seconds % 60} 秒`)
 }
 
-export function apiKeyChannel({ id, title, host, toolsLabel = '多模态能力工具', toolsMeta = '语音转写 · 语音合成 · 声音克隆 · 文档解析 · 信息抽取' }) {
+/**
+ * 生成一个 API Key 渠道的设置页视图。
+ *
+ * `freeTier` / `preferCreditsWindows` 是**渠道能力声明**，让共享渲染层不必写
+ * `id === 'agnes'`：
+ * - `freeTier`：该渠道有「免费额度面」（额度恒为 0 是正常态，有 API Key 余额时
+ *   余额优先显示），界面据此说「免费用户」而不是「读取失败」。
+ * - `preferCreditsWindows`：该渠道同时下发 credits 与 requests 两类窗口时，
+ *   以 credits 为主口径，requests 窗口不占主位。
+ */
+export function apiKeyChannel({
+  id, title, host,
+  toolsLabel = '多模态能力工具',
+  toolsMeta = '语音转写 · 语音合成 · 声音克隆 · 文档解析 · 信息抽取',
+  freeTier = false,
+  preferCreditsWindows = false,
+}) {
   const entry = state => state.apikeys?.[id]
+  // 能力声明打包一次：共享渲染层只看这两个布尔，不认识渠道名。
+  const capabilities = Object.freeze({ freeTier, preferCreditsWindows })
   const withEntry = (state, next) => ({ apikeys: { ...state.apikeys, [id]: next } })
   const provider = {
     id, title,
+    // 能力声明同时挂到 provider 上：额度药丸（store/quota.js）经 providerById
+    // 读它，不必知道具体渠道名。
+    freeTier, preferCreditsWindows,
     panelIds: ['models', 'advanced'],
     rpcMethods: APIKEY_METHODS,
     createActions: context => createApiKeyActions(provider, context),
@@ -168,8 +190,8 @@ export function apiKeyChannel({ id, title, host, toolsLabel = '多模态能力�
         }] : []),
         ...(current?.rateLimit?.until > Date.now() ? [{ id: 'rate-limit', name: '限速提醒',
           meta: h(ApiKeyCooldown, { key: current.rateLimit.until, limit: current.rateLimit }) }] : []),
-        ...apiQuotaRows(current?.quota, current?.consoleQuotaUrl, id, usage),
-        ...(usage && current?.quota?.status !== 'ready' && !(id === 'agnes' && isAgnesFreeQuota(current?.quota, usage)) ? [{ id: 'usage', name: '账户用量',
+        ...apiQuotaRows(current?.quota, current?.consoleQuotaUrl, capabilities, usage),
+        ...(usage && current?.quota?.status !== 'ready' && !(capabilities.freeTier && isFreeTierIdle(current?.quota, usage)) ? [{ id: 'usage', name: '账户用量',
           meta: usage.error ? undefined : `已用 ${apikeyMoney(usage.used, usage.unit)}${usage.limit !== null ? ` / ${apikeyMoney(usage.limit, usage.unit)}` : ''}`,
           metric: !usage.error && Number.isFinite(usage.limit) && usage.limit > 0 && Number.isFinite(usage.used)
             ? percentMetric(remainingFraction(Math.max(0, usage.limit - usage.used), usage.limit)) : undefined,
