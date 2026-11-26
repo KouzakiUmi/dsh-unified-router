@@ -125,8 +125,8 @@
 ### 渠道规格（`lib/apikey-providers.js`）
 
 ```js
-export const APIKEY_PROVIDERS   // { agnes: spec, unisound: spec }，Object.freeze
-export const APIKEY_PROVIDER_IDS // ['agnes', 'unisound']
+export const APIKEY_PROVIDERS    // { agnes, unisound, qianfan, bailian, stepfun }，Object.freeze
+export const APIKEY_PROVIDER_IDS // ['agnes', 'unisound', 'qianfan', 'bailian', 'stepfun']
 export function apikeyProvider(id) // 未知 id 返回 undefined
 
 spec = {
@@ -251,4 +251,4 @@ createApiKeyManager(ctx, spec, deps = {}) -> { call(method, payload, signal), co
 | `lib/apikey-quota.js` | 控制台额度与限流识别的**通用执行器**（按规格配方取数；凭据会话优先于 env；不含渠道名判断） |
 | `lib/browser-login.js` | 独立临时 Profile 浏览器登录 + CDP Cookie 收割（云知声控制台会话复用） |
 | `lib/rpc.js`、`lib/web-host.js`、`lib/settings-providers.js` | 方法白名单、管理器装配、公开投影、设置快照资源 |
-| `src/client/providers/apikey.js`、`agnes.js`、`unisound.js` | 设置页视图 |
+| `src/client/providers/apikey.js` 及 `agnes.js` / `unisound.js` / `qianfan.js` / `bailian.js` / `stepfun.js` | 设置页视图 |

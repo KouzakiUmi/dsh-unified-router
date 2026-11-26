@@ -1,8 +1,8 @@
 # 自管多账号渠道契约与实测边界
 
-> 覆盖 CodeArts（华为云码道），共用 `lib/managed-channel.js` / `lib/managed-models.js` / `lib/managed-llm.js` 与 `src/client/providers/managed.js`。
+> 覆盖 AStudio 与 CodeArts（华为云码道），共用 `lib/managed-channel.js` / `lib/managed-models.js` / `lib/managed-llm.js` 与 `src/client/providers/managed.js`。
 >
-> ⚠️ **AStudio 已停用**（2026-11-24）：上游无法回报正确积分——积分用尽后仍显示满值，用户据此以为还有额度却调不动，几乎无法正常使用。渠道已从 `MANAGED_PROVIDERS` 移除、客户端 `card: false`；下表与 `lib/managed-providers/astudio.js` 一并保留，作为恢复时的实现依据。
+> 历史说明：AStudio 曾于 2026-11-24 因上游积分回报异常短暂停用，现已恢复；其积分读取限制（只认 `ssoSessionId`）见下表。
 
 ## 1. 四层模块化结构
 
@@ -19,7 +19,7 @@
 
 | 渠道 | 登录方式 | 模型目录与推理 | 额度与自动化 | 已知限制 |
 |---|---|---|---|---|
-| **AStudio** (`astudio`，**已停用**) | 本机导入（读取 `astron-session.json` / `config.toml`）、微信扫码 SSO、粘贴 JWT/JSON | 目录 `GET .../api/v1/model-manager/models`（自动补位 `xdeepseek-flash-in`）；推理走 `POST .../model-gateway/v1/responses`（`store:false`，关闭思考发 `reasoning.effort:"none"`） | 余额 `points/balance` + `membership/me`（字段 `totalBalance` / `activityTotal+activityBalance` / `memberTotal+memberBalance` / `buyTotal+buyBalance` / `sparkTotalBalance`，实测口径 `totalBalance` = 各分项余额之和）；每日签到（先查北京时间 `points/details` GRANT 流水零写判重，无则 `init-app` + 关闭 `DAILY_REWARD_DIALOG`）；`claimRewards` 领取新人弹窗 | **积分只认 `ssoSessionId`**：实测 `points/balance` 单独带 `account_id`、单独带 `token`、或两者同带都回 `code 80000`，只有 `ssoSessionId` 能通。故仅粘贴 `modelBearerToken` 的账号读不到积分，报 `no_web_session`（界面显示「仅推理 Token · 不读积分」），不再显示「额度待更新」或误判登录失效 |
+| **AStudio** (`astudio`) | 本机导入（读取 `astron-session.json` / `config.toml`）、微信扫码 SSO、粘贴 JWT/JSON | 目录 `GET .../api/v1/model-manager/models`（自动补位 `xdeepseek-flash-in`）；推理走 `POST .../model-gateway/v1/responses`（`store:false`，关闭思考发 `reasoning.effort:"none"`） | 余额 `points/balance` + `membership/me`（字段 `totalBalance` / `activityTotal+activityBalance` / `memberTotal+memberBalance` / `buyTotal+buyBalance` / `sparkTotalBalance`，实测口径 `totalBalance` = 各分项余额之和）；每日签到（先查北京时间 `points/details` GRANT 流水零写判重，无则 `init-app` + 关闭 `DAILY_REWARD_DIALOG`）；`claimRewards` 领取新人弹窗 | **积分只认 `ssoSessionId`**：实测 `points/balance` 单独带 `account_id`、单独带 `token`、或两者同带都回 `code 80000`，只有 `ssoSessionId` 能通。故仅粘贴 `modelBearerToken` 的账号读不到积分，报 `no_web_session`（界面显示「仅推理 Token · 不读积分」），不再显示「额度待更新」或误判登录失效 |
 | **CodeArts** (`codearts`) | 本机导入（Windows 同用户 DPAPI + AES-256-GCM 解密 `%APPDATA%\codearts\secretStorage`，兼容 JSON 字符串形态的 DPoP JWK；导入与推理按账号单飞自动刷新）、浏览器 OAuth（PKCE 128-hex + ES256 DPoP，`127.0.0.1:>=10000/oauth/callback`，同时兼容 `code` 与 `secret` ticket 回调）、粘贴 JSON 凭据 | `GET /v1/model/builtin` + 免费权益 `opengw.../gateway/config`（`SDK-HMAC-SHA256` 签名）；推理走 `/api/v2/chat/completions`（输出上限按 v2 `RANGE_VALIDATOR` 夹取 `65536`、合并相邻同角色消息、免费模型带 `maas_type:benefit`，遇 `APIG.0602` 令牌过期自动刷新重签重试一次） | `snap-manager/v1/statistics/plugin` + 免费日池 `user/tokens/balance`；每日签到（`events/trigger user.login` + `ops/delivery?channel=DESKTOP` + `claim` + `confirm`）；`claimRewards` 领取可领活动福利 | `refresh_token` 为一次性轮换，与本机桌面端共用同一会话刷新会导致对端需要重新登录；本机导入账号在刷新失败或缺失 DPoP 密钥时回退重读本机 `secretStorage` 自愈 |
 
 ### 推理响应兼容

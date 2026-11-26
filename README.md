@@ -2,7 +2,7 @@
 
 # Unified Router
 
-**十一个国内渠道的模型、账号与额度，收在同一个设置页里。**
+**十二个国内渠道的模型、账号与额度，收在同一个设置页里。**
 
 [![license](https://img.shields.io/badge/license-MIT-64748b)](#来源与许可证)
 [![DSH Core](https://img.shields.io/badge/DSH_Core-0.2.x-64748b)](#兼容性)
@@ -12,7 +12,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/overview-dark.png">
-  <img src="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/overview-light.png" width="560" alt="Unified Router 设置页：八个渠道卡片与 Agnes 的模型目录">
+  <img src="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/overview-light.png" width="560" alt="Unified Router 设置页：渠道卡片网格与 Agnes 的模型目录">
 </picture>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/KouzakiUmi/dsh-unified-router/main/assets/preview/channel-dark.png">
@@ -22,8 +22,6 @@
 <sub>真实组件 · 虚构数据 · 离线渲染，由 <code>scripts/render-preview.mjs</code> 生成</sub>
 
 </div>
-
-> **0.4.0**：在既有的六个渠道之外，新增 **Agnes** 与 **云知声**两个 API Key 渠道。两者共用同一套 Key 管理、模型目录与模型参数设置，与账号池渠道共用同一套设置页骨架。
 
 ## 快速开始
 
@@ -36,38 +34,44 @@ dsh plugin --profile <profile> add <路径>
 1. **重载插件**：让 Host 与 Client 一起生效。只刷新页面不保证宿主侧代码已升级。
 2. **打开设置页**：进入 **设置 → 能力 → Unified Router**，在渠道卡片网格里选择要配置的渠道。
 3. **账号池渠道**（Raccoon、Qoder 中国版、TRAE）：点「添加账号」准备授权地址，再点「打开登录页面」链接，在浏览器完成授权后回到设置页点「检查登录」，列表自动刷新，不需要再手动刷新。[凭据怎么拿](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md)
-4. **API Key 渠道**（商汤 Token Plan、Agnes、云知声）：进入该渠道的「渠道」分区，在 API Key 输入框填入 Key 并保存。Agnes 与云知声在保存 Key 时，若模型提供方仍是关闭状态，插件会顺手把它启用。
-5. **核对结果**：打开「模型」分区查看上游目录与模型开关，打开「账号与额度」查看套餐、剩余额度与更新时间。
+4. **自管账号渠道**（WorkBuddy、AStudio、CodeArts）：点「添加账号」，按渠道选择浏览器登录、扫码、本机导入或粘贴凭据。
+5. **API Key 渠道**（商汤 Token Plan、Agnes、云知声、千帆 Token Plan、阿里云百炼、Step Plan）：进入该渠道的「渠道」分区，在 API Key 输入框填入 Key 并保存。保存 Key 时，若模型提供方仍是关闭状态，插件会顺手把它启用。
+6. **核对结果**：打开「模型」分区查看上游目录与模型开关，打开「账号与额度」查看订阅类型、剩余额度与更新时间。
 
 ## 功能
 
 - **统一设置页**：账号池渠道与自管账号渠道用「模型」「账号与额度」「渠道」，API Key 渠道用「模型」「渠道」。各渠道的账号、模型与设置使用同一套操作入口。
-- **账号池渠道的多账号轮换与每日签到**：Raccoon、Qoder 中国版、TRAE 各自使用账号池，多账号按顺序轮换，提供方开关、额度与模型目录分渠道管理。Qoder 中国版、TRAE、WorkBuddy 支持每日签到，自动签到与手动签到共用同一份记录。
+- **账号池渠道的多账号轮换与每日签到**：Raccoon、Qoder 中国版、TRAE 各自使用账号池，多账号按顺序轮换，提供方开关、额度与模型目录分渠道管理。Qoder 中国版、TRAE、WorkBuddy、AStudio、CodeArts、Raccoon 支持每日签到，自动签到与手动签到共用同一份记录。
+- **账号订阅类型**：账号行与额度药丸展示每个账号的订阅类型（TRAE 的 `Free` / `Pro` / `Pro+` / `Ultra` / `Express`，WorkBuddy 与自管渠道的上游套餐文案，Raccoon 的体验版/订阅）。无数据源的渠道不显示，不编造。
+- **付费专用模型标注**：仅付费订阅可用的模型挂「订阅限定」徽标，与倍率/免费徽标并存。TRAE 的 Qwen4、GLM-5.4、Kimi-K3.1 系列已核实为付费专用。
 - **小浣熊统一免费与订阅模型**：渠道分区提供开关。开启后免费与订阅模型合并为一组，同名模型只出现一次，优先使用免费账号，免费额度用尽自动改用订阅账号；关闭时两组独立。
 - **智能选号与默认输出上限**：渠道分区可切换手动顺序、免费额度优先、临期额度优先、缓存优先四种选号方式，并为每个渠道设定缺规格模型的默认输出上限（默认 / 64K / 128K / 256K）。
-- **API Key 渠道的 Key 管理、模型目录、思考档位与参数**：Agnes 与云知声共用一套实现，设置页填 Key、开关模型、调整上下文与最大输出等参数，并按上游支持的档位配置思考深度。
-- **图像生成与编辑**：Agnes 可在「渠道」分区打开图像工具，商汤 Token Plan 在配置 Key 并开启提供方后可用。生成和编辑结果会作为对话图片，可继续用作参考。
+- **API Key 渠道的 Key 管理、模型目录、思考档位与参数**：六家 API Key 渠道共用一套实现，设置页填 Key、开关模型、调整上下文与最大输出等参数，并按上游支持的档位配置思考深度。
+- **图像生成与编辑**：Agnes、商汤 Token Plan 与阿里云百炼可在「渠道」分区打开图像工具。生成和编辑结果会作为对话图片，可继续用作参考；`image_read` 工具把参考图句柄印进结果，供改图使用。
 - **模型启停与「恢复推荐」**：模型目录只认上游，本地开关只做显隐标记。模型分区提供「刷新目录」「恢复推荐」，「恢复推荐」清除本地开关覆盖，按[设计规范 §3](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/DESIGN-STANDARDS.md#3-模型目录与命名)重置推荐列表。
 - **首屏恢复与后台静默刷新**：打开设置页先恢复上次查看的渠道与最近一次结果，页面可见时每 5 秒读取一次宿主快照，页头「刷新」触发后台采集，界面随下一次快照读取更新。
 - **凭据与上游原文不进界面**：账号与额度快照走公开字段投影，凭据只以引用名保存，上游响应原文不回显；退出或移除账号需二次确认。
 
 ## 支持清单
 
+顶部 **Agent** 组与 **API** 组各六张卡片。
+
 | 渠道 | 类型 | 登录或鉴权方式 | 额度或用量 | 签到 | 模型目录来源 |
 |---|---|---|---|---|---|
-| Raccoon（小浣熊） | 账号池 | 浏览器授权登录（登录后按套餐分流） | 账号积分与额度包 | 无（每日积分由上游发放） | 上游 `GET /api/web/llm/v2/model_catalog`，免费面与订阅面各用本侧账号凭据 |
+| Raccoon（小浣熊） | 账号池 | 浏览器授权登录（登录后按套餐分流） | 账号积分与额度包 | 每日积分由上游发放 | 上游 `GET /api/web/llm/v2/model_catalog`，免费面与订阅面各用本侧账号凭据 |
 | Qoder 中国版 | 账号池 | 浏览器授权登录（HTTPS 授权页）；拉目录需本机官方 CLI 登录 | 账号积分 | 有（每日 10:00 UTC+8 进入新周期） | 官方 CLI `qoderclicn --list-models`；CLI 不可用时回落策展表 |
-| TRAE | 账号池 | 浏览器 OAuth 登录（本机回调） | 积分与余额 | 有 | 上游 `POST /api/ide/v1/batch_get_detail_param`（`solo_agent` 通道） |
-| 商汤 Token Plan | API Key | 渠道页填 API Key | 配置控制台令牌后显示积分池、5 小时 / 7 天窗口与赠送额度 | 无 | 上游 `GET /v1/models`（`token.sensenova.cn`） |
+| TRAE | 账号池 | 浏览器 OAuth 登录（本机回调） | 积分与余额；订阅类型读自付费状态接口 | 有 | 上游 `POST /api/ide/v1/batch_get_detail_param`（`solo_agent` 通道） |
 | WorkBuddy | 自管账号 | 官方浏览器授权（主机轮询授权结果，最长约 5 分钟） | 套餐与积分窗口（Credits / Extra credits） | 有 | 上游 `GET /v3/config` 的 `agents[cli].models` |
-| Agnes | API Key | 渠道页填 API Key | 读取 New API 账单接口（`hard_limit_usd` / `total_usage`），实测返回无限额度 | 无 | 上游 `GET /v1/models` |
-| 云知声 | API Key | 渠道页填 API Key | 通过控制台会话读取 U Plan 积分和窗口重置倒计时 | 无 | 上游 `GET /anthropic/v1/models`（Anthropic 兼容模型列表） |
 | AStudio | 自管账号 | 本机导入、扫码登录或粘贴凭据 | 会员与积分 | 有 | 上游模型目录 |
 | CodeArts | 自管账号 | 本机导入、浏览器授权或粘贴凭据 | 用量与免费日池 | 有 | 上游内置模型与免费权益目录 |
+| 商汤 Token Plan | API Key | 渠道页填 API Key；控制台额度用浏览器授权 | 配置控制台令牌后显示积分池、5 小时 / 7 天窗口与赠送额度 | 无 | 上游 `GET /v1/models`（`token.sensenova.cn`） |
+| Agnes | API Key | 渠道页填 API Key | New API 账单接口（`hard_limit_usd` / `total_usage`），实测返回无限额度 | 无 | 上游 `GET /v1/models` |
+| 云知声 | API Key | 渠道页填 API Key；控制台会话读 U Plan 额度 | U Plan 积分和窗口重置倒计时 | 无 | 上游 `GET /anthropic/v1/models`（Anthropic 兼容模型列表） |
+| 千帆 Token Plan | API Key | 渠道页填 API Key；控制台会话读额度 | 控制台按月度积分 / Token 制展示 | 无 | 上游 `GET /v2/tokenplan/personal/models`（OpenAI 兼容） |
+| 阿里云百炼 | API Key | 渠道页填 API Key；控制台会话读额度 | 5 小时 / 周 / 月度百分比窗口 | 无 | 上游 `GET /compatible-mode/v1/models`（OpenAI 兼容） |
+| Step Plan | API Key | 渠道页填 API Key；控制台会话读额度 | 周 / 月度百分比窗口 | 无 | 上游 `GET /step_plan/v1/models`（OpenAI 兼容） |
 
-只做 CN 版：WorkBuddy AI、Trae Global、Qoder 国际版不接入。各渠道的目录来源、思考档位方言、模型参数与限制见 [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md)。
-
-商汤的控制台令牌使用 DSH 凭据引用 `UNIFIED_ROUTER_SENSENOVA_CONSOLE_TOKEN`，填同一账号的 OAuth access token。该令牌只用于读积分池；过期后需更新此凭据，推理仍使用原 API Key。
+只做 CN 版：WorkBuddy AI、Trae Global、Qoder 国际版、Step Plan 海外版不接入。各渠道的目录来源、思考档位方言、模型参数与限制见 [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md)。
 
 ## 安装
 
@@ -97,8 +101,8 @@ dsh plugin --profile <profile> remove dsh-unified-router
 
 后端模式在安装配置中选择。
 
-- **`shared`（共用）**：复用已运行的 Our Free Model 账号池。Web API 只操作本插件接入的 channel-pack 渠道，不重复启动适配器，不另开账号数据库。共用模式下账号池的签到由原 Channel Pack 后端调度，Unified Router 调度 WorkBuddy。
-- **`standalone`（独立）**：本包独立后端注册 `raccoon`、`raccoon-pro`、`qodercn`、`trae` 四个 channel-pack 提供方，商汤 Token Plan 由内置控制器管理，WorkBuddy 的用量面板与模型服务由独立控制器管理。先停用原 Our Free Model，再在安装补丁的 `backend` 中选 `standalone`；检测到原账号池仍在时会拒绝启动，避免两个实例覆盖同一状态。
+- **`shared`（共用）**：复用同宿主中已在运行的 channel-pack 兼容插件的账号池。Web API 只操作本插件接入的 channel-pack 渠道，不重复启动适配器，不另开账号数据库；账号池签到由原后端调度，Unified Router 调度 WorkBuddy。
+- **`standalone`（独立）**：本包独立后端注册 `raccoon` / `raccoon-pro` / `qodercn` / `trae` 四个 channel-pack 提供方，商汤 Token Plan 由内置控制器管理，WorkBuddy、AStudio、CodeArts 与 API Key 渠道由各自的独立控制器管理。检测到原账号池仍在运行时会拒绝启动，避免两个实例覆盖同一状态。
 
 ## 配置
 
@@ -106,7 +110,7 @@ dsh plugin --profile <profile> remove dsh-unified-router
 
 **各渠道怎么配**：每个渠道的凭据获取位置、设置页填写位置与凭据引用名见 [凭据获取指引](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md)；各渠道的目录、档位、参数与额度语义见 [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md)。
 
-**自动签到开关**：宿主配置项 `autoCheckin: false` 关闭 Unified Router 的自动签到，手动签到仍使用同一份记录。独立模式下，自动签到包含 Qoder 中国版、TRAE、WorkBuddy 和 Raccoon；账号行显示「已签到」「签到失败」「签到待确认」等实际状态。
+**自动签到开关**：宿主配置项 `autoCheckin: false` 关闭 Unified Router 的自动签到，手动签到仍使用同一份记录。独立模式下，自动签到包含 Raccoon、Qoder 中国版、TRAE、WorkBuddy、AStudio 和 CodeArts；账号行显示「已签到」「签到失败」「签到待确认」等实际状态。
 
 **状态与凭据的存放**：
 
@@ -135,7 +139,9 @@ dsh plugin --profile <profile> remove dsh-unified-router
 | 文档 | 内容 |
 |---|---|
 | [设计规范](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/DESIGN-STANDARDS.md) | 设置页信息架构、数据加载、模型目录与命名、文案与视觉的完整规则 |
-| [API Key 渠道契约](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/APIKEY-CHANNELS.md) | Agnes 与云知声的接口契约、实测与官方文档事实、管理器与 RPC 投影 |
+| [渠道接入架构](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/CHANNEL-ARCHITECTURE.md) | 声明式规格、统一契约与持久化中间层 |
+| [API Key 渠道契约](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/APIKEY-CHANNELS.md) | 商汤、Agnes、云知声、千帆、百炼、Step Plan 的接口契约、实测与官方文档事实、管理器与 RPC 投影 |
+| [自管多账号渠道契约](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/MANAGED-CHANNELS.md) | WorkBuddy、AStudio、CodeArts 的多账号框架与实测边界 |
 | [提供商清单](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/providers.md) | 各渠道的目录来源、思考档位方言、模型参数、额度 / 用量与限制 |
 | [凭据获取指引](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/credentials.md) | 各渠道凭据的获取位置、设置页填写位置与引用名 |
 | [架构](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/architecture.md) | 模块分层、RPC 与数据流 |
@@ -144,25 +150,12 @@ dsh plugin --profile <profile> remove dsh-unified-router
 | [更新记录](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/changelog.md) | 版本变更记录 |
 | [目录审计](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/CATALOG-AUDIT.md) | 硬编码目录与上游真实目录的逐条核对记录 |
 | [Qoder CLI 接入](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/QODER-CLI.md) | Qoder 中国版借官方 CLI 拉目录的方案、降级链与风险 |
+| [图像能力](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/IMAGE-CAPABILITIES.md) | 读图句柄、聊天模型图片输入与生图/编辑工具 |
+| [模型规格](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/docs/MODEL-SPECS.md) | 官方模型规格与参数档位表 |
+| [目录策展原则](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/MODEL-CURATION.md) | 模型目录来源与展示原则 |
 
 ## 来源与许可证
 
 MIT，见 [`package.json`](package.json) 的 `license` 字段。
 
-上游：[Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)，版本 2.8.0，提交 `999e9f784ea3ea7a11cae383b142697b1ff2c42f`。渠道原始作者 Jet（iJetLi），MIT。根许可证及 `vendor/channel-pack/LICENSE`、`vendor/channel-pack/NOTICE.md` 均保留。WorkBuddy 用量原语来自 `@magpie-community/opencode-workbuddy-auth` 0.2.35（MIT，见 `vendor/workbuddy/NOTICE.md`）。SenseNova Token Plan 的认证、用量与 Pi-AI 适配器来自 [eghrhegpe/dsh-connect-sensenova-token-plan](https://github.com/eghrhegpe/dsh-connect-sensenova-token-plan) 0.8.5（MIT）。完整第三方组件、版本与许可证清单见 [NOTICE.md](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/NOTICE.md)。
-
-本地变更：从上游入口提取 Raccoon、Qoder 中国版的认证服务与适配器；**vendor 已按实际接入范围裁剪**（2026-11-25）：只保留本插件接入的 Qoder 国际版 / Qoder 中国版 / TRAE / Raccoon 家族实现及其共用骨架，LobsterAI、Cline、Loomy、MiniMax Code、ZCode、Gemini、OpenCode 的实现与接线全部移除（vendor 源文件 137 → 59，独立后端产物 2.08 MB → 0.65 MB）。加入 TRAE 接线（channel-pack 现成实现的浏览器 OAuth + 每日签到 + 余额）、独立商汤 Token Plan 控制器、WorkBuddy 用量控制器、受鉴权的 `/api/unified-router` 服务、公开字段投影与独立 Web 设置客户端；新增 Agnes 与云知声两个 API Key 渠道，共用一套 Key 管理、目录与参数实现。
-
-## 从旧版本迁移
-
-项目由 `dsh-eac-router` 改名为 `dsh-unified-router`：包名与插件 id、RPC 服务名与 `/api/unified-router` 路由、设置命名空间 `dsh-unified-router`、商汤状态目录与凭据命名空间、凭据引用 `UNIFIED_ROUTER_*` 全部同步更新。
-
-**旧名称与旧目录会被读取并迁移**：
-
-- 改名前的凭据引用（`EAC_SENSENOVA_*`）、商汤凭据命名空间（`dsh-eac-router-sensenova` 及其更早的 `-legacy`）与旧状态目录保留回退读取。
-- 旧单账号引用 `UNIFIED_ROUTER_WORKBUDDY_AUTH` 在账号索引缺失或为空时，被采纳为第一个账号，随后清除。
-- 旧状态目录在新目录不存在时整体搬迁一次；搬迁失败时本次运行继续读写旧目录，下一轮启动再尝试搬迁。
-
-**新值只写入新名字**。旧名字下只发生两类写动作，都用于让旧数据退出而不是复活：登录令牌 / 密码 / Key 被采纳到新命名空间后删除旧记录；退出登录、忘记 Key、重设密码时连旧名残留一并清除。
-
-宿主 profile 里指向旧包名或旧路径的安装条目需要在安装侧同步更新，否则插件不会被加载。Devin 已拆分为独立插件 `dsh-devin-provider`，本插件不再读写其凭据。界面样式变量（`--eac-*`）与 DOM 测试钩子沿用既有命名，未随改名调整。
+本仓库包含来自第三方 MIT 项目的 vendored 实现（channel-pack 账号池、商汤 Token Plan 认证与适配器、WorkBuddy 登录与用量原语等）。完整第三方组件、上游来源、版本与许可证清单见 [NOTICE.md](https://github.com/KouzakiUmi/dsh-unified-router/blob/main/NOTICE.md) 及 `vendor/*/NOTICE.md`、`vendor/*/THIRD_PARTY_NOTICES.md`。
