@@ -12,7 +12,8 @@ jobs:
   release:
     environment: npm
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 发布后要等 registry 可见（见末尾的可见性轮询），留足余量。
+    timeout-minutes: 30
     permissions:
       contents: write
       id-token: write
@@ -122,17 +123,26 @@ jobs:
             if (!duplicate) throw new Error(`npm publish failed (${error?.code || `exit ${published.status ?? 'unknown'}`}); check npm Trusted Publisher workflow, environment and direct publish permission.`);
             console.log('Registry reports this version already published; verifying visibility instead of republishing.');
           }
-          for (let attempt = 0; attempt < 31; attempt++) {
-            if (attempt) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000);
-            const verified = lookup();
-            let version;
-            try { version = JSON.parse(verified.stdout); } catch { /* 核对失败不能报告发布成功 */ }
-            if (verified.status === 0 && version === pkg.version) {
+          // 可见性核对直接查 registry 的 packument（带 cache-busting），不用
+          // `npm view` —— 后者有本地缓存，且发布瞬间的 E404 与网络抖动混在
+          // 一起无法区分。上一版 31 次 × 10s 仍超时（v0.8.0 / v0.8.1 都是
+          // 包已发布、校验误报失败），故放宽到 60 次 × 10s。
+          const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+          const visible = async () => {
+            try {
+              const res = await fetch(`${registry}${pkg.name}?cachebust=${Date.now()}`, { headers: { accept: 'application/json' } });
+              if (!res.ok) return false;
+              const doc = await res.json();
+              return doc?.versions?.[pkg.version] !== undefined;
+            } catch { return false; }
+          };
+          for (let attempt = 0; attempt < 60; attempt++) {
+            if (attempt) sleep(10000);
+            if (await visible()) {
               console.log(`Published and verified ${spec}.`);
               process.exit(0);
             }
-            if (version?.error?.code !== 'E404') break;
-            if (attempt + 1 < 31) console.log(`Waiting for registry visibility (${attempt + 1}/31); retrying in 10s.`);
+            if (attempt + 1 < 60) console.log(`Waiting for registry visibility (${attempt + 1}/60); retrying in 10s.`);
           }
-          throw new Error(`Publication verification failed for ${spec}; check registry before retrying.`);
+          throw new Error(`Publication verification failed for ${spec}; the tarball may still be propagating — check the registry before retrying.`);
           NODE
