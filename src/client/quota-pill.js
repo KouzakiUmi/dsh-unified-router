@@ -41,7 +41,10 @@ function QuotaAccountList({ rows, accountMetrics, activeId, viewedId, onView }) 
       return h('button', { key: row.id, type: 'button', className: 'eac-quota-account-row', 'aria-pressed': pressed,
         'data-tone': row.stale ? 'neutral' : quotaTone(tone ?? tight), title: [row.label, windowSummary].filter(Boolean).join(' · '),
         onClick: () => onView(row.id === viewedId ? '' : row.id) },
-        h('span', null, row.label), h('strong', null, summary || '暂无额度'))
+        // 账号身份信息（名称 + 订阅类型）必须可见：它解释「哪些账号能调用订阅限定模型」。
+        h('span', null, row.label,
+          row.plan ? h('span', { className: 'eac-quota-plan', style: { marginLeft: '6px' } }, row.plan) : null),
+        h('strong', null, summary || '暂无额度'))
     }))
 }
 

@@ -827,3 +827,79 @@ test('TRAE 远端目录：内部模型按 id 剔除、旧版默认关闭可手�
     fs.rmSync(scratch, { recursive: true, force: true })
   }
 })
+
+/**
+ * TRAE 账号订阅类型（`ide_user_pay_status` → `user_pay_identity_str`）：
+ *
+ * - 每个启用账号在 `account.list` 时附上 `planLabel`（设置页与额度药丸共用）；
+ * - 停用账号不查询；
+ * - 上游失败时静默跳过，账号列表本身不受影响；
+ * - 凭据不可解析时同样静默跳过。
+ */
+test('TRAE 账号列表附带订阅类型，失败静默且不影响账号', async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-router-test-'))
+  const kernel = new URL('./kernel.mjs', import.meta.url).href
+  const hooks = registerHooks({ resolve(specifier, context, next) { return specifier.startsWith('@deepseek-ai/') ? { url: kernel, shortCircuit: true } : next(specifier) } })
+  const originalHome = process.env.DSH_HOME; const stateDir = process.env.DSH_CHANNEL_PACK_STATE_DIR; const originalFetch = globalThis.fetch
+  process.env.DSH_HOME = scratch; process.env.DSH_CHANNEL_PACK_STATE_DIR = scratch
+  const requests = []
+  globalThis.fetch = async (url, options = {}) => {
+    const auth = String(options.headers?.Authorization ?? '')
+    requests.push({ url: String(url), auth })
+    if (String(url).endsWith('/trae/api/v2/pay/ide_user_pay_status')) {
+      if (auth.includes('tok-trae-fail')) return new Response('boom', { status: 500 })
+      return new Response(JSON.stringify({ user_pay_identity_str: 'Pro' }), { status: 200 })
+    }
+    return new Response('{}', { status: 200 })
+  }
+  const cleanup = []; const credentials = new Map()
+  const services = {
+    profileContext: { home: scratch },
+    credentials: {
+      resolve: async ref => credentials.get(ref),
+      set: async (ref, value) => { credentials.set(ref, { value }) },
+      unset: async ref => credentials.delete(ref),
+    },
+    llm: { registerAdapter() {}, listProviders: () => [], listModels: async () => [] },
+    connection: { fetch: { register() { throw new Error('native-only must not mount HTTP RPC') } } },
+  }
+  const ctx = { ...services, logger: { info() {}, warn() {}, error() {}, debug() {} }, get: key => services[key],
+    on() {}, provide(key, value) { this[key] = services[key] = value },
+    effect(fn) { const stop = fn(); if (typeof stop === 'function') cleanup.push(stop) },
+    inject(deps, fn) { if (deps.every(d => services[d])) fn(this) }, emit() {} }
+  try {
+    let rpc
+    const { mountBackend } = await import('../lib/backend.js')
+    const pool = mountBackend(ctx, call => { rpc = call })
+    const add = async (id, uid, enabled = true) => {
+      credentials.set(`REF_${id.toUpperCase()}`, { value: JSON.stringify({ access_token: `tok-${id}`, uid, machine_id: '', device_id: '' }) })
+      await pool.addAccount({ id, provider: 'trae', nickname: id, enabled, credentialRef: `REF_${id.toUpperCase()}`, refreshable: false, createdAt: 1 })
+    }
+    await add('trae-pro', 'pay-ok')
+    await add('trae-fail', 'pay-bad')
+    await add('trae-off', 'pay-off', false)
+    // 凭据损坏的账号：解析失败 → 静默跳过。
+    credentials.set('REF_TRAE_BROKEN', { value: 'not-json' })
+    await pool.addAccount({ id: 'trae-broken', provider: 'trae', nickname: 'broken', enabled: true, credentialRef: 'REF_TRAE_BROKEN', refreshable: false, createdAt: 1 })
+
+    const reply = await rpc('account.list', { provider: 'trae' })
+    assert.equal(reply.ok, true)
+    const byId = new Map(reply.value.accounts.map(account => [account.id, account]))
+    assert.equal(byId.get('trae-pro').planLabel, 'Pro')
+    assert.equal('planLabel' in byId.get('trae-fail'), false, '付费状态失败时不得编造订阅类型')
+    assert.equal('planLabel' in byId.get('trae-off'), false, '停用账号不查询订阅状态')
+    assert.equal('planLabel' in byId.get('trae-broken'), false, '凭据解析失败静默跳过')
+    // 停用账号与凭据损坏账号都不产生 pay_status 请求（只有 pro / fail 各一次）。
+    assert.equal(requests.filter(r => r.url.endsWith('/trae/api/v2/pay/ide_user_pay_status')).length, 2)
+    // 宿主公共投影会带上 planLabel。
+    const projected = (await import('../lib/web-host.js')).publicResult('account.list', { accounts: reply.value.accounts })
+    assert.equal(projected.accounts.find(account => account.id === 'trae-pro').planLabel, 'Pro')
+    assert.equal('planLabel' in projected.accounts.find(account => account.id === 'trae-fail'), false)
+  } finally {
+    for (const stop of cleanup.reverse()) await stop()
+    hooks.deregister(); globalThis.fetch = originalFetch
+    if (originalHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = originalHome
+    if (stateDir === undefined) delete process.env.DSH_CHANNEL_PACK_STATE_DIR; else process.env.DSH_CHANNEL_PACK_STATE_DIR = stateDir
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+})

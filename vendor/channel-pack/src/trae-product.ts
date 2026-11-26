@@ -229,6 +229,24 @@ export const TRAE_CONSOLE_HOST = 'https://www.trae.cn'
  * ⚠️ 输出上限（`model_detail_list[__dev].max_tokens`）实测全部为 32000，
  * 由产品级 `fallbackMaxOutputTokens` 表达，不逐条重复。
  */
+/**
+ * **订阅限定（付费专用）模型 id 集合**（2026-11-26 用户核实）。
+ *
+ * 依据：Qwen4（`qwen4-max`）、GLM-5.4（`glm-5.4`）、Kimi-K3.1 系列
+ * （`kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed`）只有付费订阅账号（会员/速通权益）
+ * 能调用，免费账号调用会被上游拒绝。
+ *
+ * ⚠️ 远端目录**不下发**订阅标志，因此只能按 id 策展；`glm-5.4` 不在兜底模型表里
+ * （它是后来上架的远端条目），所以不能用「兜底表条目上的 `subscriptionOnly`」这一条路，
+ * 否则它会漏标。集合只放**已核实的 id**，不要按倍率或猜测扩充。
+ */
+export const TRAE_SUBSCRIPTION_ONLY_MODELS: ReadonlySet<string> = new Set([
+  'qwen4-max',
+  'glm-5.4',
+  'kimi-k3.1-pro',
+  'kimi-k3.1-pro-highspeed',
+])
+
 const TRAE_EFFORTS_2 = Object.freeze({ options: ['light', 'high'], defaultLevel: 'high', supportThinking: true })
 const TRAE_EFFORTS_3_HIGH = Object.freeze({ options: ['light', 'high', 'extra_high'], defaultLevel: 'high', supportThinking: true })
 const TRAE_EFFORTS_3_XHIGH = Object.freeze({ options: ['light', 'high', 'extra_high'], defaultLevel: 'extra_high', supportThinking: true })
@@ -236,8 +254,8 @@ const TRAE_EFFORTS_3_XHIGH = Object.freeze({ options: ['light', 'high', 'extra_h
 const TRAE_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   { id: 'Doubao-Seed-2.1-Turbo', name: 'Seed-2.1-Turbo', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
   { id: 'Doubao-Seed-2.1-Pro', name: 'Seed-2.1-Pro-0915', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
-  // 官方内置模型文档：Seed-Evolving 仅限会员 Pro / Pro+ / Ultra / Express 使用。
-  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000, multimodal: true, subscriptionOnly: true },
+  // Seed-Evolving 曾为会员限定，2026-11-26 用户核实已不再限定（普通账号可调用）。
+  { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', contextWindow: 256_000, multimodal: true },
   // 远端目录已由同用途的 Seed-2.0-Code 接替（兜底表不收该 id，只能靠策展标记
   // 表达「旧版默认关」；远端真拉时由 model-catalog 的 TRAE 命名后继规则表达）。
   { id: 'Doubao-Seed-Code', name: 'Seed-Code', contextWindow: 256_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2, stale: true, staleReason: '上游目录已有同用途后继 Seed-2.0-Code。' },
@@ -246,8 +264,10 @@ const TRAE_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 200_000, multimodal: false, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
   { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
   { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro', contextWindow: 200_000, multimodal: false, reasoningConfig: TRAE_EFFORTS_3_HIGH },
-  { id: 'kimi-k3.1-pro-highspeed', name: 'Kimi-K3.1-Pro-Highspeed', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
-  { id: 'kimi-k3.1-pro', name: 'Kimi-K3.1-Pro', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH },
+  // 订阅限定：Qwen4 / GLM-5.4 / Kimi-K3.1 系列仅付费订阅账号可调用（见
+  // TRAE_SUBSCRIPTION_ONLY_MODELS；远端目录不下发该标志）。
+  { id: 'kimi-k3.1-pro-highspeed', name: 'Kimi-K3.1-Pro-Highspeed', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH, subscriptionOnly: true },
+  { id: 'kimi-k3.1-pro', name: 'Kimi-K3.1-Pro', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH, subscriptionOnly: true },
   // 同族已有更新一代（kimi-k3.1-pro / -highspeed）在同一目录里，故默认不选。
   { id: 'kimi-k3', name: 'Kimi-K3', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_XHIGH, stale: true, staleReason: '同目录已有 Kimi-K3.1-Pro。' },
   { id: 'mimo-v2.6-flash', name: 'MiMo-V2.6-Flash', contextWindow: 200_000, multimodal: true },
@@ -256,7 +276,7 @@ const TRAE_FALLBACK_MODELS: readonly TraeFallbackModel[] = [
   // 同族已有 MiniMax-M3.1-Flash。
   { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 200_000, multimodal: true, stale: true, staleReason: '同目录已有 MiniMax-M3.1-Flash。' },
   { id: 'step-5-preview', name: 'Step-5-Preview', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_2 },
-  { id: 'qwen4-max', name: 'Qwen4-Max', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
+  { id: 'qwen4-max', name: 'Qwen4-Max', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH, subscriptionOnly: true },
   { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
   { id: 'qwen3.8-max', name: 'Qwen3.8-Max', contextWindow: 200_000, multimodal: true, reasoningConfig: TRAE_EFFORTS_3_HIGH },
 ]

@@ -62,6 +62,7 @@ import {
   claimTraeDailyCheckin,
   fetchTraeCheckinStatus,
   fetchTraeCreditBalance,
+  fetchTraePayStatus,
 } from './trae-credits.js'
 import {
   pickTestModel,
@@ -981,6 +982,23 @@ function registerChannelPackEndpoints(
       case 'account.list': {
         const req = payload as RpcListAccountsRequest
         const accounts = await pool.listAccounts(req.provider)
+        // TRAE：为每个启用中的账号附上订阅类型（`Free` / `Pro` / `Pro+` / `Ultra` /
+        // `Express`）。只读 + 60s 缓存 + 失败静默，绝不让账号列表整体失败。
+        if (req.provider === TRAE.id) {
+          for (const account of accounts) {
+            if (account.enabled === false) continue
+            try {
+              // `resolveCredentialForAccount` 返回**已解析的凭据对象**（非 { value } 包装）。
+              const resolved = await pool.resolveCredentialForAccount(account.id)
+              const credential = resolved as TraeCredential | undefined
+              if (credential === undefined || typeof credential.access_token !== 'string' || credential.access_token.length === 0) continue
+              const payStatus = await fetchTraePayStatus(credential, TRAE)
+              if (payStatus !== null) account.planLabel = payStatus.identity
+            } catch {
+              // 付费状态只是展示信息：拿不到就不显示，不阻塞账号列表。
+            }
+          }
+        }
         if (config.nativeOnly && (payload as { forCheckin?: boolean }).forCheckin === true) {
           const ready = await Promise.all(accounts.map(async account =>
             (account.expiresAt == null || account.expiresAt > Date.now()) &&

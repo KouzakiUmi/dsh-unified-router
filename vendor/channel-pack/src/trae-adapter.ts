@@ -42,7 +42,7 @@ import {
   type TraeReasoningConfig,
   type TraeRemoteModel,
 } from './trae.js'
-import { TRAE, TRAE_REFERENCE_RATES, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
+import { TRAE, TRAE_REFERENCE_RATES, TRAE_SUBSCRIPTION_ONLY_MODELS, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
 import { classifyTraeError, recordsTraeRateLimit, shouldRotateTraeAccount } from './trae-errors.js'
 import { normalizeHarnessMessages } from './message-shape.js'
 import { createBlankReasoningSuppressor, createReasoningLoopDetector, hasUsableToolName, isProseTruncatedByStopString, isReasoningLoopGuardEnabled, isTruncatedArguments, normalizeToolArguments, readWithIdleTimeout, reasoningLoopFailure, resolveEmptyResponseReason, resolveToolPairing, splitThinkTaggedContent, stripBareThinkCloseTagIfEnabled, stripCourseLeakFromHistoryContent, stripCourseLeakIfEnabled } from './sse.js'
@@ -940,8 +940,10 @@ export class TraeAdapter extends LlmAdapter {
           efforts: reasoning.efforts.map(effort => effort.id),
         } : {}),
         ...(reasoning?.defaultEffort !== undefined ? { defaultEffort: reasoning.defaultEffort } : {}),
-        // 订阅限定来自策展表的官方会员门槛声明（远端目录不下发该标志）。
-        ...curated?.subscriptionOnly === true ? { subscriptionOnly: true } : {},
+        // 订阅限定来自策展表的官方会员门槛声明 + 付费专用 id 集合（远端目录不下发该标志；
+        // glm-5.4 等不在兜底表里的远端条目只能靠集合标注）。
+        ...curated?.subscriptionOnly === true || TRAE_SUBSCRIPTION_ONLY_MODELS.has(model.id)
+          ? { subscriptionOnly: true } : {},
         ...curated?.stale === true ? { stale: true } : {},
         ...curated?.staleReason === undefined ? {} : { staleReason: curated.staleReason },
       }

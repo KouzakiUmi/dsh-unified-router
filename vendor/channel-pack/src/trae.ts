@@ -13,6 +13,7 @@ import { throwIfModelQueued } from './model-queue.js'
  * | 签到状态 | POST | `/trae/api/v2/ug/checkin_credits/status` | api.trae.cn | Cloud-IDE-JWT |
  * | 签到领取 | POST | `/trae/api/v2/ug/checkin_credits/claim` | (同上) | Cloud-IDE-JWT |
  * | 积分余额 | POST | `/trae/api/v2/pay/ide_user_ent_usage` | (同上) | Cloud-IDE-JWT |
+ * | 付费状态 | POST | `/trae/api/v2/pay/ide_user_pay_status` | (同上) | Cloud-IDE-JWT |
  *
  * 注意：chat 端点返回**自定义 SSE 事件格式**（非 OpenAI 标准），
  * 需要独立解析并转换为 OpenAI SSE。详见 `parseTraeSSELine` / `traeStreamToOpenAI`。
@@ -55,6 +56,13 @@ export const TRAE_CHECKIN_STATUS_PATH = '/trae/api/v2/ug/checkin_credits/status'
 export const TRAE_CHECKIN_CLAIM_PATH = '/trae/api/v2/ug/checkin_credits/claim'
 /** 积分余额。 */
 export const TRAE_ENT_USAGE_PATH = '/trae/api/v2/pay/ide_user_ent_usage'
+/**
+ * 付费/订阅状态（账号的 `user_pay_identity_str`：`Free` / `Pro` / …）。
+ *
+ * body：`{ trae_client: 'IDE', device_id }`，`device_id` 与签到头 `X-Device-Id`
+ * 同源（基于 uid 确定性派生）。
+ */
+export const TRAE_PAY_STATUS_PATH = '/trae/api/v2/pay/ide_user_pay_status'
 /** 登录回调路径（对齐 Go 端 `authorizeCallback` 与 TRAE 登录页强制回传）。 */
 export const TRAE_CALLBACK_PATH = '/authorize'
 
@@ -314,6 +322,15 @@ export function traeCheckinHeaders(
  */
 function deriveDeviceId15(userId: string): string {
   return seededDigits(15, userId, 'devid')
+}
+
+/**
+ * 付费状态接口 body 所需的设备号（与 `traeCheckinHeaders` 的 `X-Device-Id` 同源）。
+ *
+ * 只在 `trae-credits.ts` 的 `fetchTraePayStatus` 里使用，不需要在别处复用。
+ */
+export function traePayStatusDeviceId(userId: string): string {
+  return deriveDeviceId15(userId)
 }
 
 /**

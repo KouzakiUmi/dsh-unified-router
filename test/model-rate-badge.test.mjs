@@ -151,11 +151,16 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
 
     const offlineTrae = await rpc('model.list', { provider: 'trae' })
     assert.deepEqual(offlineTrae.value.models.find(model => model.id === 'deepseek-v4.1-flash').rateBadge, reference('0.12'))
-    // 订阅限定（官方会员门槛）：Seed-Evolving 仅 Pro 及以上可用，独立于倍率徽标。
-    assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-Evolving').subscriptionOnly, true)
+    // Seed-Evolving 曾为会员限定，2026-11-26 核实已开放给普通账号。
+    assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-Evolving').subscriptionOnly, undefined)
+    // 订阅限定（付费专用，2026-11-26 核实）：Qwen4 / Kimi-K3.1 系列。独立于倍率徽标。
+    for (const id of ['qwen4-max', 'kimi-k3.1-pro', 'kimi-k3.1-pro-highspeed']) {
+      assert.equal(offlineTrae.value.models.find(model => model.id === id)?.subscriptionOnly, true, `${id} 应标订阅限定`)
+    }
     // 非订阅限定模型不挂该标志（缺失即不编造 false）。
     assert.equal(offlineTrae.value.models.find(model => model.id === 'deepseek-v4.1-flash').subscriptionOnly, undefined)
     assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-2.1-Turbo').subscriptionOnly, undefined)
+    assert.equal(offlineTrae.value.models.find(model => model.id === 'Doubao-Seed-2.1-Pro').subscriptionOnly, undefined)
     const consumption = rate => ({ enable: true, data: { rate } })
     const detail = (id, name, contact) => ({ config_name: id, usage: 'chat_completion',
       display_config: { display_name: name }, ...contact })
@@ -165,6 +170,8 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
       config_info_list: [
         detail('trae-free', 'Trae Free', { display_contact_config: JSON.stringify({ consumption_rate: consumption(0) }) }),
         detail('trae-paid', 'Trae Paid', { display_contact_config: { consumption_rate: consumption(0.08) } }),
+        // 不在兜底表里的订阅限定远端模型：必须靠 id 集合标注（glm-5.4）。
+        detail('glm-5.4', 'GLM-5.4'),
         detail('trae-promo', 'Trae Promo', { display_contact_config: {
           consumption_rate: consumption(0.8),
           activity_discount: { enable: true, data: { current: {
@@ -182,6 +189,10 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     assert.deepEqual(trae.badgeOf('trae-paid'), rate('0.08'))
     assert.deepEqual(trae.badgeOf('trae-promo'), promo('0.08'))
     assert.deepEqual((await rpc('model.list', { provider: 'trae' })).value.models.find(model => model.id === 'trae-promo').rateBadge, promo('0.08'))
+    // 远端目录不下发订阅标志：不在兜底表的订阅限定模型也通过 id 集合挂上。
+    const traeListed = (await rpc('model.list', { provider: 'trae' })).value.models
+    assert.equal(traeListed.find(model => model.id === 'glm-5.4')?.subscriptionOnly, true, 'glm-5.4 应标订阅限定')
+    assert.equal(traeListed.find(model => model.id === 'trae-free')?.subscriptionOnly, undefined, '普通远端模型不标订阅限定')
     assert.equal(trae.badgeOf('trae-unknown'), undefined)
     // name 仍是 `· 免费` / `· x0.08` / `· x0.8→x0.08`（未因徽标而改）。
     // trae 的展示名本来就来自上游 name（无倍率文本）；倍率只走 badge。

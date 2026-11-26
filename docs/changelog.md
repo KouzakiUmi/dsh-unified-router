@@ -2,6 +2,11 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.8.0（2026-11-27）
+
+- **TRAE 付费专用模型标注**：`qwen4-max`（Qwen4）、`glm-5.4`（GLM-5.4）、`kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed`（K3.1 系列）只有付费订阅账号可调用，免费账号调用会被上游拒绝。这四个 id 挂「订阅限定」info 徽标（独立于倍率/免费徽标）。由于远端目录不下发订阅标志、`glm-5.4` 又不在离线兜底表里，新增 `TRAE_SUBSCRIPTION_ONLY_MODELS` id 集合在 `listAllModels()` 里统一标注。`Doubao-Seed-Evolving` 已开放普通账号，不再挂标。回归 `test/model-rate-badge.test.mjs`。
+- **账号订阅类型（`planLabel`）在设置页与额度药丸可见**：TRAE 从只读端点 `POST /trae/api/v2/pay/ide_user_pay_status` 读取 `user_pay_identity_str`（`Free` / `Pro` / `Pro+` / `Ultra` / `Express`），`account.list` 时为启用账号附加 `planLabel`（按 uid 缓存 60 秒、并发去重、失败或凭据不可解析静默跳过，绝不影响账号列表）。新增 wire 契约字段 `planLabel`，设置页账号行（pack 卡）与额度药丸的账号行/详情都优先显示订阅类型；Raccoon 继续用 `plan` 枚举映射（体验版/订阅/未知），WorkBuddy 与自管渠道展示上游 `plan` 文案，Qoder 上游不下发订阅身份、不显示不编造。回归 `test/backend.test.mjs`、`test/quota-pill.test.mjs`、`test/web-client.test.mjs`、`test/channel-contract.test.mjs`。
+
 ## 0.7.0（2026-11-25）
 
 - **移除 Loomy 渠道**。上游把全部账号标记为受限，请求一律被静默降级到 `spark-x2.6-low`（响应体仍谎报模型名，只有积分账本能看出），1:1 复制官方客户端请求同样被降级。本次删除：vendor 的 12 个 `loomy-*` 实现文件、后端挂载模块、`lib/loomy-route.js`（上游路由检测整条能力，含 4 个 RPC）、客户端卡片模块与 Loomy 专属 UI（路由概览 callout、永久积分锁定开关、完成新手任务按钮）、`automation.json` 的 `loomyPlainBody` 字段、短信登录 RPC（`login.sendSms`/`login.submitSms`）。用户磁盘上的 Loomy 账号、路由状态与目录缓存已一并清理（清理前备份在 `<dsh home>/backups/loomy-removal-*`）。清理可用 `node scripts/cleanup-loomy.mjs` 重复执行（幂等、先备份）；**须在插件重新加载之后运行** —— 旧版插件进程仍在内存里持有这些数据，清理后它会写回。

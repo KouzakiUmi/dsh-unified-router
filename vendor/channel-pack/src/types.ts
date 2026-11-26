@@ -65,6 +65,15 @@ export interface ProviderAccountEntry {
    * 由登录后的套餐探测（`RaccoonAuth.fetchPlan`）自动打标，不参与选号顺序。
    */
   plan?: 'free' | 'pro' | 'unknown'
+  /**
+   * 账号**订阅类型文案**（展示用）：TRAE 的 `Free` / `Pro` / `Pro+` / `Ultra` /
+   * `Express`，WorkBuddy 的 `Free plan`、自管渠道的 `体验版` 等。
+   *
+   * 与 {@link plan} 的分工：`plan` 是 Raccoon 家族**选号分流**用的枚举（免费面/订阅面），
+   * 而 `planLabel` 只用于界面展示订阅信息，不参与任何选号逻辑。Raccoon 不设此字段
+   * （走 `plan` 的既有映射）；TRAE 由 `account.list` 现查付费状态动态附加。
+   */
+  planLabel?: string
 }
 
 /** 账号详细状态（返回给 Client 展示） */

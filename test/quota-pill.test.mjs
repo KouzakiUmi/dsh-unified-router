@@ -180,10 +180,13 @@ test('账号池未选定账号时药丸显示总积分与临时永久分项，�
     ] } },
     { accountId: 'l3', balance: { total: 99999, packages: [{ name: '永久积分', remaining: 99999, unit: '积分', active: true }] } },
   ]
-  const packEntries = [{ value: { accounts } }, { value: { accounts: balances } }]
+  const packEntries = [{ value: { accounts: accounts.map(account => ({ ...account, planLabel: account.id === 'l1' ? 'Pro' : 'Free' })) } }, { value: { accounts: balances } }]
   const unselected = quotaPillData('qodercn', 'pack', { entries: packEntries }, null)
   assert.equal(unselected.serving, null)
   assert.equal(unselected.summary, '1,500 积分')
+  // 订阅类型文案直接进入药丸账号行（数据源是 TRAE 的 ide_user_pay_status）。
+  assert.equal(unselected.viewed.plan, 'Pro')
+  assert.equal(unselected.rows.find(row => row.id === 'l2').plan, 'Free')
   assert.equal(unselected.pool.total, 1500)
   assert.equal(unselected.pool.temporary, 300)
   assert.equal(unselected.pool.permanent, 1200)
@@ -306,8 +309,8 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
 
   const slotsMap = new Map()
   const accounts = [
-    { id: 'l1', provider: 'raccoon', nickname: '号一', enabled: true },
-    { id: 'l2', provider: 'raccoon', nickname: '号二', enabled: true },
+    { id: 'l1', provider: 'raccoon', nickname: '号一', enabled: true, planLabel: 'Pro' },
+    { id: 'l2', provider: 'raccoon', nickname: '号二', enabled: true, planLabel: 'Free' },
   ]
   const balances = [
     { accountId: 'l1', updatedAt: 1000, balance: { total: 1200, packages: [
@@ -404,6 +407,8 @@ test('药丸渲染与设置页共用总积分与数字展示契约（去渠道�
     assert.match(raccoonPopText, /临时额度\|300 积分/)
     assert.match(raccoonPopText, /永久额度\|1,200 积分/)
     assert.match(raccoonPopText, /号一\|当前账号 · 1,200 积分|号一\|当前账号/)
+    // 账号身份信息（订阅类型）在药丸里可见。
+    assert.match(raccoonPopText, /Pro/)
 
     // AStudio 段已移除：该渠道已停用（`card: false`），药丸不再渲染它。
 

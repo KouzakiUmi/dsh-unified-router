@@ -41,8 +41,10 @@ import {
   TRAE_CHECKIN_CLAIM_PATH,
   TRAE_CHECKIN_STATUS_PATH,
   TRAE_ENT_USAGE_PATH,
+  TRAE_PAY_STATUS_PATH,
   TRAE_REQUEST_TIMEOUT_MS,
   traeCheckinHeaders,
+  traePayStatusDeviceId,
   type TraeCredential,
 } from './trae.js'
 import type { TraeProduct } from './trae-product.js'
@@ -378,6 +380,80 @@ export async function fetchTraeCreditBalance(
   }
 
   return { total, packages, expiredTotal }
+}
+
+// ── 付费/订阅状态查询 ──
+
+/**
+ * 账号订阅类型（`ide_user_pay_status` 的关键结果）。
+ */
+export interface TraePayStatus {
+  /** 官方身份文案：`Free` / `Pro` / `Pro+` / `Ultra` / `Express`。 */
+  identity: string
+  /** 最近一次 Pro 权益到期时间（毫秒），缺失/0 时不设置。 */
+  proEntitlementExpiresAt?: number
+}
+
+const PAY_STATUS_CACHE_TTL_MS = 60_000
+const payStatusCache = new Map<string, { at: number; value: TraePayStatus | null }>()
+const payStatusInFlight = new Map<string, Promise<TraePayStatus | null>>()
+
+/**
+ * 查询账号付费/订阅状态（只读）。
+ *
+ * `user_pay_identity_str` 是设置页「账号与额度」和会话药丸显示订阅类型的**唯一来源**：
+ * GetUserInfo 不下发套餐，积分接口对免费账号也不含身份字段。
+ *
+ * 结果按 uid 缓存 60 秒（订阅状态变更不频繁；账号列表是轻量高频端点，不能每次都打上游），
+ * 并用 in-flight Map 去重并发。查询失败返回 `null`，**绝不抛错** —— 订阅类型只是展示信息，
+ * 不能让账号列表整条失败。
+ */
+export async function fetchTraePayStatus(
+  credential: TraeCredential,
+  _product: TraeProduct,
+  fetcher: typeof fetch = fetch,
+): Promise<TraePayStatus | null> {
+  const cached = payStatusCache.get(credential.uid)
+  if (cached !== undefined && Date.now() - cached.at < PAY_STATUS_CACHE_TTL_MS) {
+    return cached.value
+  }
+  const inFlight = payStatusInFlight.get(credential.uid)
+  if (inFlight !== undefined) return inFlight
+
+  const request = (async () => {
+    try {
+      const result = await postJson(
+        TRAE_PAY_STATUS_PATH,
+        credential,
+        JSON.stringify({ trae_client: 'IDE', device_id: traePayStatusDeviceId(credential.uid) }),
+        fetcher,
+        credential.uid,
+      )
+      if (!result.ok) return null
+      const identity = readString(result.body, 'user_pay_identity_str')
+      if (identity.length === 0) return null
+      const expiresAt = readNumber(result.body, 'last_pro_entitlement_expire_time')
+      const value: TraePayStatus = {
+        identity,
+        ...(expiresAt !== undefined && expiresAt > 0 ? { proEntitlementExpiresAt: expiresAt } : {}),
+      }
+      return value
+    } catch {
+      return null
+    } finally {
+      payStatusInFlight.delete(credential.uid)
+    }
+  })()
+  payStatusInFlight.set(credential.uid, request)
+  const value = await request
+  payStatusCache.set(credential.uid, { at: Date.now(), value })
+  return value
+}
+
+/** 测试用：清空付费状态缓存。 */
+export function clearTraePayStatusCache(): void {
+  payStatusCache.clear()
+  payStatusInFlight.clear()
 }
 
 // ── 处理器工厂（与 `channel-pack-rpc.ts` 协作）──

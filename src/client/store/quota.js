@@ -157,7 +157,8 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
         const packages = bal?.packages ?? []
         const shownPackages = displayCreditPackages(packages)
         return { id: account.id, label: account.nickname, at: bal?.updatedAt, stale: bal?.stale,
-          plan: unified ? '' : (account.plan === 'free' ? '体验版' : account.plan === 'pro' ? '订阅' : ''),
+          // 订阅类型文案优先（TRAE 的 Free/Pro/…）；Raccoon 家族回落到 plan 枚举映射。
+          plan: unified ? '' : (account.planLabel || (account.plan === 'free' ? '体验版' : account.plan === 'pro' ? '订阅' : '')),
           amount: bal?.total ?? null, unit: '积分', packages, details: shownPackages.map(pkg => ({
             label: pkg.name || '额度包', value: pkg.remaining === null ? '' : quotaValue(pkg.remaining, pkg.unit),
             expires: pkg.active === false ? null : pkg.expiresAt, note: pkg.active === false ? '已失效' : '',
@@ -228,7 +229,7 @@ function quotaPillData(id, type, snapshot, selection, viewedId, model) {
       }
       const pkgBalances = windows.map(windowRemainingAmount).filter(value => Number.isFinite(value))
       const derivedAmount = wbCredits?.amount ?? account.balance ?? (windowsAsCredits && pkgBalances.length ? pkgBalances.reduce((a, b) => a + b, 0) : null)
-      return { id: account.id, label: account.name, plan: account.plan,
+      return { id: account.id, label: account.name, plan: account.planLabel || account.plan,
         amount: modelUnknown || gatedModel?.free ? null : derivedAmount,
         toneFraction: wbCredits?.fraction ?? null,
         packages: windowsAsCredits ? windows : (wbCredits?.packages ?? []),

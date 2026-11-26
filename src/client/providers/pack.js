@@ -44,7 +44,7 @@ export function packSettings(provider) {
         ],
         login: state.login && { url: state.login.url, canCheck: true },
         rows: state.accounts.map(account => {
-          const { id: accountId, nickname, enabled, plan } = account
+          const { id: accountId, nickname, enabled, plan, planLabel } = account
           const limited = Object.values(account.modelRateLimits).filter(expires => expires > Date.now()).length
           const balance = balances.get(accountId)
           const onboarding = caps.onboarding ? taskEntry(state, id, 'claimRewards', accountId) : null
@@ -59,9 +59,12 @@ export function packSettings(provider) {
             id: accountId, name: nickname, enabled,
             toggle: ['save', accountId, nickname, !enabled],
             tags: [
+              // 订阅类型文案（TRAE 的 Free/Pro/Pro+/Ultra/Express 等）优先展示；
+              // Raccoon 家族没有 planLabel，继续走 plan 枚举映射。
+              planLabel && [planLabel, 'info'],
               // 统一模型开关打开后不再区分体验/订阅：合并的意义就是「一个模型面」，
               // 再挂套餐标签会让人以为还要按套餐挑账号。关闭时照旧按套餐标注。
-              caps.accountPlan && !unifiedModelsOn(state)
+              !planLabel && caps.accountPlan && !unifiedModelsOn(state)
                 && (plan === 'pro' ? ['订阅', 'info'] : plan === 'free' ? ['体验版', 'success'] : ['套餐未知', 'warn']),
               !enabled && ['已停用'],
               account.expiresAt > 0 && account.expiresAt <= Date.now() && ['凭据过期', 'warn'],

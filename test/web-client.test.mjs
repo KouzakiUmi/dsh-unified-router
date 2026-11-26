@@ -1062,6 +1062,38 @@ test('Raccoon 家族卡界面：套餐徽标、合并状态、两个模型分区
   react.dispose()
 })
 
+// ===== TRAE：账号订阅类型（planLabel）在设置卡与客户端状态里都可见 =====
+
+test('TRAE 卡账号行显示订阅类型，快照状态携带 planLabel', async () => {
+  const { module, react } = loadClient(reactHarness(), { localStorage: { getItem: () => 'trae' } })
+  const host = hostFixture(); let Settings
+  host.overrides.set('provider.status', async () => ({ ok: true, value: { statuses: { trae: { closed: false, accounts: { enabled: 2 }, models: { total: 0 } } } } }))
+  host.overrides.set('account.list', async () => ({ ok: true, value: { accounts: [
+    { id: 'trae-a', provider: 'trae', nickname: '付费账号', enabled: true, planLabel: 'Pro' },
+    { id: 'trae-b', provider: 'trae', nickname: '免费账号', enabled: true, planLabel: 'Free' },
+  ] } }))
+  host.overrides.set('model.list', async () => ({ ok: true, value: { models: [] } }))
+  host.overrides.set('model.params', async () => ({ ok: true, value: { provider: 'trae', params: {} } }))
+  host.overrides.set('model.refresh', async () => ({ ok: true, value: { count: 0, source: 'remote' } }))
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  render(); await tick()
+  treeNodes(render()).find(n => n.props.id === 'eac-tab-accounts').props.onClick()
+  const tree = render()
+  // 订阅类型徽标：Pro / Free 均为 info 色调（与 Raccoon 的套餐映射不同的数据来源，同一展示位）。
+  const badges = treeNodes(tree).filter(n => n.props.className === 'eac-tag' && ['Pro', 'Free'].includes(n.children[0]))
+    .map(n => [n.children[0], n.props['data-tone']])
+  assert.deepEqual(badges, [['Pro', 'info'], ['Free', 'info']])
+  // planLabel 也进入客户端状态，额度药丸直接消费同一份。
+  const store = module.createRouterStore(host.call)
+  try {
+    await store.load('trae')
+    assert.deepEqual(Array.from(store.getSnapshot().accounts, account => account.planLabel), ['Pro', 'Free'])
+  } finally { store.dispose() }
+  react.dispose()
+})
+
 // ===== 模型目录：真正拉取上游（model.refresh）+ 来源标识 =====
 
 test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互相覆盖', async () => {
