@@ -1,16 +1,30 @@
 // 设置页和输入栏共用档位逻辑，外观与键盘交互沿用 OpenDesign CoRouter。
+// **默认**上下文档位（渠道没有自己声明时用这张表）。
+// 渠道差异不写进这张表：各渠道有自己的档位口径，经 `caps.contextTiers` 声明，
+// 见 `contextWindowTiers` 的第二个参数。
 const CONTEXT_WINDOWS = Object.freeze([
   { label: '256K', tokens: 256_000, nativeMax: 262_144 },
   { label: '500K', tokens: 500_000, nativeMax: 524_288 },
   { label: '1M', tokens: 1_000_000, nativeMax: 1_048_576 },
 ])
 
-function contextWindowTiers(capacity) {
+/**
+ * 上下文窗口档位。
+ *
+ * @param capacity 渠道给的当前生效窗口。
+ * @param declared 渠道自己声明的档位（`caps.contextTiers`），如 Qoder 的
+ *   `200K/400K/1M`。**没声明就用默认表** —— 全局表不该被某个渠道的口径改写。
+ */
+function contextWindowTiers(capacity, declared) {
   const known = modelTokenValue(capacity)
-  const native = known && CONTEXT_WINDOWS.find(tier => capacity >= tier.tokens && capacity <= tier.nativeMax)
+  const table = Array.isArray(declared) && declared.length > 0
+    ? declared.slice().sort((a, b) => a.tokens - b.tokens)
+    : CONTEXT_WINDOWS
+  const native = known && table.find(tier => capacity === tier.tokens
+    || (capacity >= tier.tokens && capacity <= (tier.nativeMax ?? tier.tokens)))
   // 最后一段永远是恢复渠道原值。原值处在标准档位时合并，避免「默认 1M / 1M」。
   return [
-    ...CONTEXT_WINDOWS.slice(0, -1).filter(tier => known && capacity > tier.nativeMax),
+    ...table.slice(0, -1).filter(tier => known && capacity > (tier.nativeMax ?? tier.tokens)),
     { label: native?.label ?? '默认', tokens: known ? capacity : null, restore: true },
   ]
 }
@@ -27,8 +41,8 @@ function moveContextFocus(event) {
   buttons[next].focus()
 }
 
-function ContextSegments({ capacity, override, reserve, disabled, busy, onChange }) {
-  const tiers = contextWindowTiers(capacity)
+function ContextSegments({ capacity, override, reserve, disabled, busy, tiers: declared, onChange }) {
+  const tiers = contextWindowTiers(capacity, declared)
   const custom = isCustomContext(override, tiers)
   const limitNote = modelTokenValue(reserve) && tiers.some(tier => modelTokenValue(tier.tokens) && tier.tokens <= reserve)
     ? `输出预留 ${formatTokens(reserve)}，部分档位需要更大的窗口` : undefined

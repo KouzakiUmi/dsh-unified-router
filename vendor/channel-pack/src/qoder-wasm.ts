@@ -228,15 +228,39 @@ export interface QoderInferAsk {
 }
 
 /**
+ * 思考档位 → 上游 `reasoning_budget_tokens`。
+ *
+ * 取值是官方 `effortFromBudget()` 的**逆函数**（Qoder CN 0.4.x CLI worker
+ * `qoder-worker-runtime.obf.mjs`）：
+ * ```
+ * A <= 0 → none | <=1024 → low | <=8192 → medium
+ * <=24576 → high | <=49152 → xhigh | else → max
+ * ```
+ * 故各档取该区间上界（`max` 取 65536），回读时仍落在同一档。
+ * 未知档位返回 `undefined`（不发预算，交给上游默认）。
+ */
+export function reasoningBudgetFor(effort: string): number | undefined {
+  switch (effort) {
+    case 'minimal':
+    case 'low': return 1024
+    case 'medium': return 8192
+    case 'high': return 24_576
+    case 'xhigh': return 49_152
+    case 'max': return 65_536
+    default: return undefined
+  }
+}
+
+/**
  * 构造加密端点 `agent_chat_generation` 的**明文请求体**。
  *
  * 抽成纯函数有两个理由：
  * 1. **可测**：加密端点的请求体经 WASM 加密后本地不可解（朴素 `JSON.parse`
- *    会抛），把 payload 构造独立出来才能直接断言 `tools` / `messages`；
+ *    会抛），把 payload 构造独立出来才能直接断言 `tools` / `messages` / `parameters`；
  * 2. **单一来源**：`prepareInfer` 只负责「拿它去加密」，不再内联一份结构。
  *
- * ⚠️ 结构逐项复刻官方 `G4A()`，改动前请先读
- * `docs/qoder-encryption-notes.md` 的 §3 与 §6：
+ * ⚠️ 结构逐项复刻官方 CLI worker 的 `bTr()`（`chat_task` / `chat_context` /
+ * `messages` / `tools` / `parameters` / `model_config` / `business`）；
  * `chat_context` 不能传空对象、`business` 缺失会被路由到故障节点。
  *
  * @param ask - 上层适配器给出的请求参数。
@@ -252,8 +276,17 @@ export function buildQoderInferPayload(
   const parameters: Record<string, unknown> = {}
   if (ask.maxTokens !== undefined) parameters.max_tokens = ask.maxTokens
   if (ask.reasoningEffort !== undefined) {
-    parameters.reasoning_effort = ask.reasoningEffort
-    parameters.enable_thinking = ask.reasoningEffort !== 'none'
+    // ⚠️ 官方 `lma()`（加密端点的 `parameters` 构造函数）只认 `none` 表示关闭，
+    // 从不发 `off`。DSH 规范名是 `off`，漏翻译会让上游收到未知值 → 既不报错
+    // 也不思考（用户报障「qoder 思考设置无效」）。
+    const effort = ask.reasoningEffort === 'off' ? 'none' : ask.reasoningEffort
+    parameters.reasoning_effort = effort
+    // ⚠️ **必须同时给思考预算**：官方在同一分支（`thinking.type === 'enabled'`）里
+    // 还发 `reasoning_budget_tokens`。只发 `reasoning_effort` + `enable_thinking`
+    // 而缺预算时，上游按「没有预算」处理，回包不含 `reasoning_content`
+    // —— 这就是「档位能选、但模型从不思考」的真实原因。
+    if (effort !== 'none') parameters.reasoning_budget_tokens = reasoningBudgetFor(effort)
+    parameters.enable_thinking = effort !== 'none'
   }
   if (ask.contextWindow !== undefined) parameters.context_length = ask.contextWindow
 
@@ -319,6 +352,20 @@ export function buildQoderInferPayload(
     // 用户报障「qwen3.8-flash 执行任务出现任务调用 xml 泄露任务终止」。
     // 无工具时是**空数组**而非缺字段（与客户端一致）。
     tools: ask.tools ?? [],
+    // ⚠️ **顶层 `reasoningEffort` 是官方客户端的第二个写入点**（用户报障
+    // 「Qoder 思考设置无效」的真实原因）：反编译 Qoder 桌面端 agent SDK 可见
+    // 请求体为
+    // ```
+    // {..., reasoningEffort:"none", parameters:{...A.parameters, reasoning_effort:"none"}}
+    // ```
+    // 即**顶层 `reasoningEffort` 与 `parameters.reasoning_effort` 双写**。
+    // 只写 `parameters` 时上游照常回正文，但从不产出 `reasoning_content`
+    // —— 实测：日志显示 parameters 正确（`reasoning_effort:"xhigh"` +
+    // `enable_thinking:true` + 预算），而响应帧只有 `content`/`tool_calls`。
+    // 证据：`@dmh2002/dsh-connect-qoder` CHANGELOG 的同一条反编译结论。
+    ...(ask.reasoningEffort === undefined ? {} : {
+      reasoningEffort: ask.reasoningEffort === 'off' ? 'none' : ask.reasoningEffort,
+    }),
     parameters,
     // `business` 决定服务端路由（`sec_scan` → 安全池，其余 → 默认池）。
     ...(ask.business === undefined ? {} : { business: ask.business }),
@@ -597,13 +644,22 @@ export async function decryptModelCatalog(encrypted: string, machineId: string):
  * 加密推理请求。实例**不是**线程安全的；一个账号一个实例即可。
  */
 export class QoderEncryptedInfer {
-  private constructor(
-    private readonly g: Glue,
-    private readonly context: number,
-    private readonly metadata: QoderClientMetadata,
-    /** 加密端点所在 host（`agent_chat_generation`）。 */
-    private readonly host: string,
-  ) {}
+  // ⚠️ 用显式字段赋值而不是构造函数参数属性（`constructor(private g: Glue)`）：
+  // 参数属性是 TypeScript 独有语法，Node 的 strip-only 类型剥离**不支持**
+  // （`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`），会让 `buildQoderInferPayload`
+  // 这类纯函数无法被测试直接 import。行为等价。
+  private readonly g: Glue
+  private readonly context: number
+  private readonly metadata: QoderClientMetadata
+  /** 加密端点所在 host（`agent_chat_generation`）。 */
+  private readonly host: string
+
+  private constructor(g: Glue, context: number, metadata: QoderClientMetadata, host: string) {
+    this.g = g
+    this.context = context
+    this.metadata = metadata
+    this.host = host
+  }
 
   /** 创建客户端（会调 WASM 构造 `QoderContext`）。 */
   static async create(options: {

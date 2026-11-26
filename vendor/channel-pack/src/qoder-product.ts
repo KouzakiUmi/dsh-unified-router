@@ -388,33 +388,106 @@ export const QODER: QoderProduct = {
  * 默认选型与来源见根目录 MODEL-CURATION.md；标为备选不代表上游不可用。
  */
 const QODER_CN_FALLBACK_MODELS: readonly QoderFallbackModel[] = [
-  { id: 'auto', name: 'Auto', contextWindow: 200_000, supportsImage: true, supportsThinking: true, priceFactor: 0.5 },
-  { id: 'fast', name: 'Fast', contextWindow: 200_000, supportsImage: true, supportsThinking: false, priceFactor: 0.8 },
-  // 2026-11-19 --list-models lists these titles without publishing their backend keys or capabilities.
-  { id: 'Qwen4-Max', name: 'Qwen4-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.4, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true },
+  // ⚠️ **本表按上游目录接口逐项对齐**（`GET /algo/api/v2/model/list` 的 `chat`
+  // 分组，2026-11-26 实测）。`id` 是**真实调用 key**，不是显示名 —— 两者常常
+  // 不同（Qwen4-Max=`qmodel_latest`、GLM-5.4=`gmodel_latest`、
+  // Step-5-Preview=`jmodel`）；拿显示名当 `model` 发请求会回落默认模型且
+  // 不产出 `reasoning_content`（用户报障「Qoder 思考设置无效」）。
+  //
+  // `--list-models` 只作接口不可用时的回退，它对这些条目只给显示名。
+  // 倍率 `0` 是合法值（免费），不能当缺失。
+  { id: 'auto', name: 'Auto', contextWindow: 200_000, priceFactor: 0.3, supportsImage: true, supportsThinking: true },
   {
-    id: 'qmodel_38max', name: 'Qwen3.8-Max', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true,
-    isFree: true, priceFactor: 0.5, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true,
+    id: 'qmodel_latest', name: 'Qwen4-Max', contextWindow: 1_000_000, priceFactor: 0.4,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['xhigh', 'high', 'low'], defaultEffort: 'high', supportsDisable: true,
+  },
+  {
+    id: 'qmodel_38max', name: 'Qwen3.8-Max', contextWindow: 200_000, priceFactor: 0.5,
+    supportsImage: true, supportsThinking: true, isFree: true,
+    efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true,
     promotion: { active: true, discountFactor: 0.4, beforePromotionPriceFactor: 0.5, windowStart: '22:00', windowEnd: '08:00', badgeZh: '错峰 4 折' },
   },
   {
-    id: 'qfmodel', name: 'Qwen3.8-Flash', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true,
-    isFree: true, priceFactor: 0.1, efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true,
+    id: 'qfmodel', name: 'Qwen3.8-Flash', contextWindow: 200_000, priceFactor: 0.1,
+    supportsImage: true, supportsThinking: true, isFree: true,
+    efforts: ['xhigh', 'low', 'medium'], defaultEffort: 'medium', supportsDisable: true,
   },
-  { id: 'dmodel', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.5, efforts: ['low', 'high', 'max'], defaultEffort: 'max', supportsDisable: true },
-  // 滚动别名按渠道原名保留，不凭别名推断具体快照版本。
-  { id: 'dfmodel', name: 'DeepSeek-Flash', contextWindow: 1_000_000, maxTokens: 393_216, supportsImage: true, priceFactor: 0.1, efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsDisable: true },
-  // 2026-11-26 实跑 --list-models 新增 GLM-5.4（CLI 不下发能力字段）；规格取智谱官方文档（1M/128K、原生视觉、三档思考），倍率未知不编造。
-  { id: 'GLM-5.4', name: 'GLM-5.4', contextWindow: 1_000_000, maxTokens: 131_072, supportsImage: true, supportsThinking: true, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
-  { id: 'gmodel', name: 'GLM-5.3', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.8, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
-  { id: 'gfmodel', name: 'GLM-5.3-Flash', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.1, efforts: ['high', 'max'], defaultEffort: 'max' },
-  { id: 'kmodel_latest', name: 'Kimi-K3.1-Pro', contextWindow: 1_000_000, supportsImage: true, priceFactor: 1.0, efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+  {
+    id: 'dmodel', name: 'DeepSeek-V4-Pro', contextWindow: 200_000, priceFactor: 0.5,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'max'], defaultEffort: 'max', supportsDisable: true,
+  },
+  // 上游 `is_reasoning:false` 但目录给了三档，实测有思考帧 —— 以档位为准。
+  {
+    id: 'dfmodel', name: 'DeepSeek-Flash', contextWindow: 200_000, maxTokens: 393_216, priceFactor: 0.1,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'max', 'low'], defaultEffort: 'high', supportsDisable: true,
+  },
+  // ⚠️ 实测：`high` / `low` 档**不产出** reasoning_content（各 0 帧），
+  // 只有 `max` 档会（423/540 帧）。故默认档取 `max`，并把 `max` 排在最前，
+  // 让宿主默认落在能真正思考的那一档。
+  {
+    id: 'gmodel_latest', name: 'GLM-5.4', contextWindow: 200_000, priceFactor: 0.8,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['max', 'high', 'low'], defaultEffort: 'max',
+  },
+  {
+    id: 'gmodel', name: 'GLM-5.3', contextWindow: 200_000, priceFactor: 0.8,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'low', 'max'], defaultEffort: 'high',
+  },
+  {
+    id: 'gfmodel', name: 'GLM-5.3-Flash', contextWindow: 1_000_000, priceFactor: 0.1,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'max'], defaultEffort: 'max',
+  },
+  {
+    id: 'kmodel_latest', name: 'Kimi-K3.1-Pro', contextWindow: 200_000, priceFactor: 1.0,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'low', 'max'], defaultEffort: 'high',
+  },
   // 同目录已有 Kimi-K3.1-Pro（`kmodel_latest`），K2.8 预览款默认不选。
-  { id: 'kmodel', name: 'Kimi-K2.8-Preview', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.8, efforts: ['low', 'high', 'max'], defaultEffort: 'high', stale: true, staleReason: '同目录已有 Kimi-K3.1-Pro。' },
-  // 官方客户端只有 max 一档，不能补出关闭思考或其它强度选项。
-  { id: 'Step-5-Preview', name: 'Step-5-Preview', contextWindow: 0, priceFactor: 0.3 },
-  { id: 'mmodel', name: 'MiniMax-M3.1-Flash', contextWindow: 1_000_000, supportsImage: true, supportsThinking: true, priceFactor: 0.1, efforts: ['max'], defaultEffort: 'max' },
+  {
+    id: 'kmodel', name: 'Kimi-K2.8-Preview', contextWindow: 200_000, priceFactor: 0.8,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'low', 'max'], defaultEffort: 'high',
+    stale: true, staleReason: '同目录已有 Kimi-K3.1-Pro。',
+  },
+  {
+    id: 'jmodel', name: 'Step-5-Preview', contextWindow: 1_000_000, priceFactor: 0.3,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['high', 'low', 'medium'], defaultEffort: 'high', supportsDisable: true,
+  },
+  {
+    id: 'mmodel', name: 'MiniMax-M3.1-Flash', contextWindow: 200_000, priceFactor: 0.1,
+    supportsImage: true, supportsThinking: true,
+    efforts: ['xhigh', 'high', 'low', 'max', 'medium'], defaultEffort: 'xhigh',
+  },
+
 ]
+
+/**
+ * Qoder CN 目录里**真实可用的调用 key**（本机 0.4.11 目录实测，2026-11-26）。
+ *
+ * ⚠️ 为什么必须有这张表：`qoderclicn --list-models` 输出的是**显示名**，
+ * 括号里才是 key（`显示名 (key)`）。没有括号的条目（`Qwen4-Max`、`GLM-5.4`
+ * 这类新上架的展示项）**只有名字、没有 key**；拿显示名当 `model` 发请求时，
+ * 服务端回落到默认模型 —— 实测自称 `Qwen3.5`，且**一帧 `reasoning_content`
+ * 都不返回**（用户报障「Qoder 思考设置无效」的真实原因）。
+ *
+ * 判据是两条独立取证：本机 0.4.11 目录的 15 个逻辑键；
+ * `dsh-router-qoder` 的实测结论「显示用名字、请求用 key，拿显示名请求上游
+ * 只会 404，不要照规律猜 key」。
+ */
+export const QODER_CN_KNOWN_MODEL_KEYS: ReadonlySet<string> = new Set([
+  'auto', 'fast',
+  'gmodel', 'gfmodel', 'gm51model',
+  'dmodel', 'dfmodel',
+  'mmodel',
+  'kmodel', 'kmodel_latest',
+  'qmodel', 'qmodel_latest', 'qmodel_38max', 'q37fmodel', 'qfmodel',
+])
 
 /** Qoder provider 配置（**中国版**）。 */
 export const QODER_CN: QoderProduct = {

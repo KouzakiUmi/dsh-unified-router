@@ -177,6 +177,8 @@ export function ModelParams({ value, model, providerId, disabled, onSave }) {
   return h('div', { className: 'eac-params' },
     modelTokenValue(model.contextWindow) || modelTokenValue(current.contextWindow)
       ? ContextWindowField({ capacity: model.contextWindow, override: current.contextWindow, reserve: current.maxTokens ?? model.defaultMaxTokens,
+        // 渠道自己声明的上下文档位（如 Qoder 的 200K/400K/1M）；没声明用默认表。
+        tiers: providerCaps(providerId)?.contextTiers,
         disabled, onChange: value => set('contextWindow', value) }) : null,
     outputTiers.length || current.maxTokens !== undefined ? h('div', { className: 'eac-param-group' },
       h('p', { className: 'eac-group-title' }, '输出上限'),

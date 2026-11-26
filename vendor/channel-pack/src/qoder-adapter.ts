@@ -34,6 +34,8 @@ import { QoderEncryptedInfer, type QoderInferMessage, type QoderInferRequest, ty
 import { unwrapQoderEnvelopeStream } from './qoder-envelope.js'
 import { QODER, type QoderFallbackModel, type QoderModelPromotion, type QoderProduct } from './qoder-product.js'
 import { defaultRunQoderCli, readQoderCatalog, refreshQoderCatalog, saveQoderCatalog, type QoderCliResult, type QoderCatalogIssue } from './qoder-cli.js'
+import { QODER_MODEL_LIST_PATH, parseQoderModelList } from './qoder-model-list.js'
+import { cosyHeaders, newCosySession } from './qoder-cosy.js'
 import { defaultModelEffort, defaultModelOutputTokens, readableModelName, modelRecommendationExclusions } from '../../../lib/model-catalog.js'
 import { reasoningRankOf, canonicalEffortId, privateEffortFor, uniqueCanonicalEfforts } from './reasoning-ladder.js'
 import { projectRequestImage, type ImageRequestTarget } from './image-budget.js'
@@ -444,7 +446,9 @@ export function buildQoderHistory(messages: readonly QoderWireMessage[]): QoderI
       : (content as Array<Record<string, unknown>>).length === 0
     if (isEmpty && toolCalls === undefined && toolCallId === undefined) continue
     history.push({
-      role: message.role,
+      // ⚠️ 上游不认 `developer` 角色（OpenAI 新角色）：原样发出去会被当成未知
+      // role 忽略整条消息（社区插件的同一结论）。折叠为 `system`。
+      role: message.role === 'developer' ? 'system' : message.role,
       content,
       ...(toolCalls === undefined ? {} : { tool_calls: toolCalls }),
       ...(toolCallId === undefined ? {} : { tool_call_id: toolCallId }),
@@ -689,6 +693,18 @@ export class QoderAdapter extends LlmAdapter {
    * 只在用户**手动点「刷新目录」**时被调到 —— 第三方驱动官方组件的显式同意。
    */
   async refreshRemoteModels() {
+    // ⚠️ **优先直连目录接口**：`--list-models` 对部分条目只给显示名（不是可调用
+    // id），拿它发请求会回落默认模型且不产出思考。目录接口给的是真实 `key`，
+    // 还带 `price_factor` / `thinking_config` / `max_input_tokens`。
+    const direct = await this.fetchDirectCatalog()
+    if (direct !== null) {
+      this.catalogIssue = undefined
+      this.cliCatalog = direct
+      this.catalogSource = 'remote'
+      if (this.options.cliCatalogFile) await saveQoderCatalog(this.options.cliCatalogFile, direct).catch(() => {})
+      return { source: this.catalogSource, count: direct.length, catalog: direct }
+    }
+    // 接口不可用（无凭据 / 网络 / 形状变化）→ 回退 CLI，行为与旧版一致。
     const { catalog, ...result } = await refreshQoderCatalog(
       this.options.runQoderCli ?? defaultRunQoderCli,
       this.product.fallbackModels ?? [],
@@ -702,6 +718,29 @@ export class QoderAdapter extends LlmAdapter {
       this.catalogSource = this.cliCatalog ? 'cached' : 'fallback'
     }
     return { ...result, source: this.catalogSource, count: this.cliCatalog?.length ?? result.count }
+  }
+
+  /**
+   * 直连上游目录接口取模型表；任一环节不可用返回 `null`（交给 CLI 回退）。
+   *
+   * 凭据取当前可用账号的 `uid` + `security_oauth_token`（签名身份）；
+   * **凭据不进日志**。
+   */
+  private async fetchDirectCatalog(): Promise<QoderFallbackModel[] | null> {
+    try {
+      const credential = await this.options.resolveCredential(undefined)
+      if (credential === undefined) return null
+      const uid = credential.uid ?? ''
+      const securityOauthToken = credential.security_oauth_token ?? credential.access_token ?? ''
+      if (!uid || !securityOauthToken) return null
+      const url = `${this.product.encryptedInferBase.replace(/\/+$/, '')}${QODER_MODEL_LIST_PATH}`
+      const session = newCosySession({ uid, securityOauthToken, refreshToken: credential.refresh_token })
+      const response = await (this.options.fetchImpl ?? fetch)(url, {
+        headers: cosyHeaders(session, url, ''), signal: AbortSignal.timeout(20_000),
+      })
+      if (!response.ok) return null
+      return parseQoderModelList(await response.json().catch(() => null))
+    } catch { return null }
   }
 
   async listModels(_provider: string): Promise<readonly LlmModelInfo[]> {
@@ -893,7 +932,14 @@ export class QoderAdapter extends LlmAdapter {
         modelKey: options.model,
         userText,
         ...(systemText !== undefined ? { systemText } : {}),
-        isReasoning: fallback?.supportsThinking ?? (fallback !== undefined && qoderEffortsFor(fallback).some(effort => effort !== 'off')),
+        // ⚠️ 对齐官方 `dQ.isEnabled(model, config)`：`支持思考且未关闭`，
+        // **不是**只看模型能力。用户把档位切到「关闭思考」时仍发
+        // `is_reasoning: true` 会让上游按「要思考」解析、却又没有预算
+        // （旧实现连 `reasoning_budget_tokens` 都不发），回包因此没有任何
+        // 思考内容 —— 用户报障「思考设置无效」。
+        isReasoning: reasoningEffort === undefined
+          ? fallback?.supportsThinking === true
+          : reasoningEffort !== 'off' && fallback?.supportsThinking !== false,
         history,
         // 工具定义：这是模型**唯一**能学到函数 schema 的通道，
         // 缺了它模型只能用正文 XML 臆造调用（真实缺陷）。

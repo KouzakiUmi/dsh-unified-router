@@ -57,9 +57,22 @@ export interface QoderCliResult {
  * 跳过首行 `MODEL`、空行、以及 `Warning: no models available…` / `Not logged in…`
  * 这类非模型行。每行 `显示名 (key)` 时 **key 是目录 id**；无后缀时显示名当 id。
  * 按 id 去重。解析不出任何模型返回空数组（调用方据此回落，不把解析 bug 当「目录为空」）。
+ *
+ * ⚠️ `keyed` 记录这一行**是否真的带 key**。这是「能不能调用」的唯一判据：
+ * `--list-models` 对部分条目只回显示名（`Qwen4-Max` / `GLM-5.4` / `Step-5-Preview`），
+ * 拿显示名当 `model` 发请求时服务端回落到默认模型 —— 实测自称 `Qwen3.5`，
+ * 且**一帧 `reasoning_content` 都不返回**（用户报障「Qoder 思考设置无效」）。
  */
-export function parseQoderCliModels(stdout: string): { id: string; name: string }[] {
-  const out: { id: string; name: string }[] = []
+export interface QoderCliModelRow { id: string; name: string; keyed: boolean }
+
+/**
+ * 无 key 也仍然可用的**路由名**：`Auto` / `Fast` 是服务端路由档，本身就是 id。
+ * 其余没有 key 的条目一律视为「只有显示名、调不通」。
+ */
+const QODER_ROUTE_KEYS: ReadonlySet<string> = new Set(['auto', 'fast'])
+
+export function parseQoderCliModels(stdout: string): QoderCliModelRow[] {
+  const out: QoderCliModelRow[] = []
   const seen = new Set<string>()
   for (const raw of String(stdout ?? '').split(/\r?\n/)) {
     const line = raw.trim()
@@ -68,10 +81,11 @@ export function parseQoderCliModels(stdout: string): { id: string; name: string 
     const match = /^(.+?)(?: \(([^()]+)\))?$/.exec(line)
     if (!match) continue
     const name = match[1].trim()
+    const keyed = match[2] !== undefined
     const id = (match[2] ?? name).trim()
     if (!id || seen.has(id)) continue
     seen.add(id)
-    out.push({ id, name })
+    out.push({ id, name, keyed })
   }
   return out
 }
@@ -85,10 +99,14 @@ export function parseQoderCliModels(stdout: string): { id: string; name: string 
  *   哨兵（宿主投影按 `> 0` 过滤，故不会编造一个假窗口）；**不编造** efforts/倍率，
  *   `qoderRate` 对缺 priceFactor 返回未知 → 名字不带倍率、不挂徽标。
  * - 策展表有、CLI 无的 id → 视为上游已下架，**不并入**（目录以 CLI 为准）。
+ * - **没有 key 的条目**（`keyed === false` 且不是 `auto`/`fast` 这类路由名）→
+ *   **不并入**：显示名不是 model key，拿它发请求只会回落默认模型。
  */
 export function mergeQoderCatalog(
   cli: readonly { id: string; name: string }[],
   fallback: readonly QoderFallbackModel[],
+  /** 是否要求条目必须带 key（`auto`/`fast` 这类路由名豁免）。 */
+  requireKey = true,
 ): QoderFallbackModel[] {
   const byId = new Map(fallback.map(model => [model.id, model]))
   const byName = new Map(fallback.map(model => [model.name.toLowerCase(), model]))
@@ -98,6 +116,9 @@ export function mergeQoderCatalog(
     const known = byId.get(row.id) ?? (row.id === row.name ? byName.get(row.name.toLowerCase()) : undefined)
     const id = known?.id ?? row.id
     if (!id || seen.has(id)) continue
+    // ⚠️ 显示名不是 model key：CLI 对部分条目只回名字，拿它当 `model` 发请求
+    // 会回落默认模型、思考永不生效。`auto` / `fast` 是路由名，无 key 也照用。
+    if (requireKey && row.keyed === false && !QODER_ROUTE_KEYS.has(id)) continue
     seen.add(id)
     out.push(known ? { ...known, name: row.name } : { id, name: row.name, contextWindow: 0 })
   }
@@ -130,7 +151,7 @@ export async function saveQoderCatalog(file: string, catalog: readonly QoderFall
  * 任一失败 → `{catalog: null, count: 兜底条数, source:'fallback'}`。
  * 适配器把 `catalog` 存进 `cliCatalog`，`listAllModels`/`listModels` 据此切换目录来源。
  */
-export type QoderCatalogIssue = 'login-required' | 'cli-missing' | 'timeout' | 'cli-failed' | 'empty'
+export type QoderCatalogIssue = 'login-required' | 'cli-missing' | 'timeout' | 'cli-failed' | 'empty' | 'no-model-key'
 
 export async function refreshQoderCatalog(
   runCli: () => Promise<QoderCliResult>,
@@ -147,6 +168,9 @@ export async function refreshQoderCatalog(
     const cli = parseQoderCliModels(result.stdout)
     if (cli.length === 0) return fail('empty')
     const catalog = mergeQoderCatalog(cli, fallback)
+    // CLI 列出但**没有可用调用 key** 的条目（只有显示名）已被滤掉：全部滤光
+    // 说明这批条目都调不通，如实回落兜底而不是给出一个空目录。
+    if (catalog.length === 0) return fail('no-model-key')
     return { catalog, count: catalog.length, source: 'remote' }
   } catch {
     return fail('cli-failed')

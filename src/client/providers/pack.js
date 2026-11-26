@@ -115,6 +115,7 @@ export function packSettings(provider) {
             timeout: 'Qoder CLI 读取超时，可稍后重试。',
             'cli-failed': 'Qoder CLI 读取失败，可稍后重试。',
             empty: 'Qoder CLI 本次返回空目录，可稍后重试。',
+            'no-model-key': 'Qoder 目录只回了显示名、没有可调用 key，已跳过这些条目。',
           })[state.qoderCatalogIssue] : undefined,
           actions: [
             { label: '刷新目录', call: ['refreshModels', side.id] },

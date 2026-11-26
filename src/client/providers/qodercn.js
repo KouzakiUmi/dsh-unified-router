@@ -6,6 +6,13 @@ export const qodercn = {
   pack: true,
   caps: {
     cliCatalog: true,
+    // 上游目录（`context_config`）对每个模型都给 200K(默认)/400K/1M 三档；
+    // 与默认表的 256K/500K 不同，故按渠道声明，不改全局表。
+    contextTiers: [
+      { label: '200K', tokens: 200_000, nativeMax: 262_144 },
+      { label: '400K', tokens: 400_000, nativeMax: 524_288 },
+      { label: '1M', tokens: 1_000_000, nativeMax: 1_048_576 },
+    ],
     // 目录经本机官方 CLI 真拉，可能带回 `issue`（未登录 / CLI 不存在等），
     // 快照把它透出给界面提示。共享层读这个声明，不写 `=== 'qodercn'`。
     catalogIssue: true,

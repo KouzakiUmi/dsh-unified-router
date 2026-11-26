@@ -131,11 +131,14 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     const utc8 = new Date(Date.now() + 8 * 3_600_000)
     const minutes = utc8.getUTCHours() * 60 + utc8.getUTCMinutes()
     const peakPromo = minutes >= 22 * 60 || minutes < 8 * 60
-    // `qfmodel`（Qwen3.8 Flash）已列为全平台旧版、默认关闭，不再出现在选择器列表（仍在 model.list 保留倍率）；
-    // 选择器列表验证启用的 `auto` / `Qwen4-Max`。
+    // `qfmodel`（Qwen3.8 Flash）已列为全平台旧版、默认关闭，不再出现在选择器列表（仍在 model.list 保留倍率）。
+    // ⚠️ `Qwen4-Max` 只有显示名、没有可用 model key，已从策展表移除（拿显示名请求会回落
+    // 默认模型且不产出思考），故这里改用同样带实测倍率的 `dfmodel`（DeepSeek-Flash）验证。
     assert.equal(qoder.badgeOf('qfmodel'), undefined)
-    assert.deepEqual(qoder.badgeOf('auto'), reference('0.50'))
-    assert.deepEqual(qoder.badgeOf('Qwen4-Max'), reference('0.40'))
+    assert.equal(qoder.badgeOf('Qwen4-Max'), undefined, '显示名不是 id')
+    assert.deepEqual(qoder.badgeOf('qmodel_latest'), reference('0.40'), 'Qwen4-Max 的真实 key')
+    assert.deepEqual(qoder.badgeOf('auto'), reference('0.30'), '上游目录给 auto 0.3')
+    assert.deepEqual(qoder.badgeOf('dfmodel'), reference('0.10'))
     // `model.list`（设置页读的 RPC）不吃徽标，name 里的倍率文本照旧 —— 契约未变。
     const listed = await rpc('model.list', { provider: 'qodercn' })
     assert.equal(listed.ok, true)
@@ -143,7 +146,7 @@ test('四个渠道的模型选择器和设置页共享倍率徽标，模型 ID �
     assert.equal(listed.value.models.some(model => typeof model.name === 'string' && /·\s*x|·\s*免费/.test(model.name)), false)
     assert.ok(listed.value.models.every(model => !('badge' in model)))
     assert.deepEqual(listed.value.models.find(model => model.id === 'qmodel_38max').rateBadge, peakPromo ? promo('0.20') : reference('0.50'))
-    assert.deepEqual(listed.value.models.find(model => model.id === 'Step-5-Preview').rateBadge, reference('0.30'))
+    assert.deepEqual(listed.value.models.find(model => model.id === 'jmodel').rateBadge, reference('0.30'), 'Step-5-Preview 的真实 key 是 jmodel')
     assert.deepEqual(listed.value.models.find(model => model.id === 'qfmodel').rateBadge, reference('0.10'))
 
     const offlineTrae = await rpc('model.list', { provider: 'trae' })

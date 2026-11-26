@@ -31,16 +31,21 @@ test('parseQoderCliModels：key 后缀才是 id，跳过表头/警告/未登录�
     '',
     'Warning: no models available for your account.',
   ].join('\n')
-  assert.deepEqual(parseQoderCliModels(stdout), [
-    { id: 'qmodel_38max', name: 'Qwen3.8-Max' },
-    { id: 'qfmodel', name: 'Qwen3.8-Flash' },
-    { id: 'Auto', name: 'Auto' },
-    { id: 'dfmodel', name: 'DeepSeek-Flash' },
+  assert.deepEqual(parseQoderCliModels(stdout).map(r => [r.id, r.name]), [
+    ['qmodel_38max', 'Qwen3.8-Max'],
+    ['qfmodel', 'Qwen3.8-Flash'],
+    ['Auto', 'Auto'],
+    ['dfmodel', 'DeepSeek-Flash'],
   ])
-  // 无后缀：显示名当 id。
-  assert.deepEqual(parseQoderCliModels('MODEL\nAuto\nFast'), [{ id: 'Auto', name: 'Auto' }, { id: 'Fast', name: 'Fast' }])
+  // 括号里才是可调用 key：`Auto` 这类只有显示名的行 keyed=false。
+  assert.deepEqual(parseQoderCliModels(stdout).map(r => r.keyed), [true, true, false, true])
+  // 无后缀：显示名当 id，且标记为「没有 key」（不可调用）。
+  const LF = String.fromCharCode(10)
+  const plain = parseQoderCliModels(['MODEL', 'Auto', 'Fast'].join(LF))
+  assert.deepEqual(plain.map(r => [r.id, r.name, r.keyed]), [['Auto', 'Auto', false], ['Fast', 'Fast', false]])
   // CRLF + 首尾空白。
-  assert.deepEqual(parseQoderCliModels('MODEL\r\n  GLM-5.3 (gmodel)  \r\n'), [{ id: 'gmodel', name: 'GLM-5.3' }])
+  const crlf = parseQoderCliModels(['MODEL', '  GLM-5.3 (gmodel)  ', ''].join(String.fromCharCode(13, 10)))
+  assert.deepEqual(crlf.map(r => [r.id, r.name, r.keyed]), [['gmodel', 'GLM-5.3', true]])
   // 未登录 / 空 / 纯警告 → 0 条。
   assert.deepEqual(parseQoderCliModels('Not logged in. Run `qoderclicn login` to authenticate.'), [])
   assert.deepEqual(parseQoderCliModels(''), [])
@@ -110,9 +115,11 @@ test('Qoder 文本目录保留已知调用 ID 和模型能力，成功目录可�
   const dir = await mkdtemp(join(tmpdir(), 'qoder-cli-catalog-'))
   try {
     const file = join(dir, 'catalog.json')
-    const catalog = mergeQoderCatalog(parseQoderCliModels('MODEL\nQwen3.8-Flash\nNew-Model'), fallback)
+    const catalog = mergeQoderCatalog(parseQoderCliModels(
+      ['MODEL', 'Qwen3.8-Flash (qfmodel)', 'New-Model (newmodel)'].join(String.fromCharCode(10))), fallback)
     assert.equal(catalog[0].id, 'qfmodel')
     assert.equal(catalog[0].supportsImage, true)
+    assert.equal(catalog[1].id, 'newmodel', '带 key 的新 id 以最小条目并入')
     assert.equal(catalog[1].supportsImage, undefined)
     await saveQoderCatalog(file, catalog)
     assert.deepEqual(readQoderCatalog(file, fallback), catalog)
@@ -131,15 +138,81 @@ test('机械可读化保留版本小数和原模型标识', () => {
   assert.equal(readableModelName('sn-qwen4-max-p', 'sn-qwen4-max-p'), 'Qwen 4 Max')
 })
 
-test('Qoder CN 策展表为 GLM-5.4 提供 1M/128K、视觉与三档思考能力，不编造倍率', async () => {
+test('Qoder 目录只保留带 key 的条目：显示名（无 key）不并入，auto/fast 路由名豁免', async () => {
   const { QODER_CN } = await import('../vendor/channel-pack/src/qoder-product.ts')
-  const merged = mergeQoderCatalog(parseQoderCliModels('MODEL\nGLM-5.4'), QODER_CN.fallbackModels)
-  assert.equal(merged.length, 1)
-  assert.equal(merged[0].id, 'GLM-5.4')
-  assert.equal(merged[0].contextWindow, 1_000_000)
-  assert.equal(merged[0].maxTokens, 131_072)
-  assert.equal(merged[0].supportsImage, true)
-  assert.deepEqual(merged[0].efforts, ['low', 'high', 'max'])
-  assert.equal(merged[0].defaultEffort, 'high')
-  assert.equal(merged[0].priceFactor, undefined, '未实测倍率不编造')
+  const LF = String.fromCharCode(10)
+  // `--list-models` 的 `显示名 (key)` 里 key 才是可调用 id；只回显示名的条目
+  // （Qwen4-Max / GLM-5.4 / Step-5-Preview / HungerG）拿名字发请求会回落默认模型
+  // 且不产出思考，故一律不并入目录。
+  const parsed = parseQoderCliModels(['MODEL', 'Qwen3.8-Max (qmodel_38max)', 'Qwen4-Max', 'GLM-5.4', 'Auto', 'Fast', 'HungerG'].join(LF))
+  assert.equal(parsed.find(r => r.id === 'qmodel_38max').keyed, true)
+  assert.equal(parsed.find(r => r.id === 'Qwen4-Max').keyed, false)
+  assert.equal(parsed.find(r => r.id === 'HungerG').keyed, false, '无括号即无 key')
+
+  const merged = mergeQoderCatalog(parsed, QODER_CN.fallbackModels)
+  // 带 key 的保留；`auto`/`fast` 作为路由名保留；其余无 key 条目全部剔除。
+  // `Auto`/`Fast` 经策展表归一成本体 id `auto`/`fast`（路由名的真实 key）。
+  // 策展表按真实目录重建后没有 `fast` 条目（上游 `chat` 分组无 Fast）。
+  assert.deepEqual(merged.map(m => m.id), ['qmodel_38max', 'auto'])
+  // 策展表里也不该再有「显示名冒充 id」的条目。
+  // 策展表的 id 必须是真实调用 key，不能是显示名。
+  for (const name of ['Qwen4-Max', 'GLM-5.4', 'Step-5-Preview']) {
+    assert.equal(QODER_CN.fallbackModels.some(m => m.id === name), false, `${name} 是显示名，不应作 id`)
+  }
+  for (const key of ['qmodel_latest', 'gmodel_latest', 'jmodel']) {
+    assert.ok(QODER_CN.fallbackModels.some(m => m.id === key), `${key} 应作为真实 key 在策展表`)
+  }
+  // 关掉该规则时保持原行为（其它区域不拿 CN 的结论去猜）。
+  const unfiltered = mergeQoderCatalog(parsed, QODER_CN.fallbackModels, false)
+  // 关掉过滤时：`byName` 会把显示名命中策展表的新条目（Qwen4-Max→qmodel_latest、
+  // GLM-5.4→gmodel_latest），这正是旧行为的隐患 —— 名字对上了、key 却是猜的。
+  assert.deepEqual(unfiltered.map(m => m.id), ['qmodel_38max', 'qmodel_latest', 'gmodel_latest', 'auto', 'Fast', 'HungerG'])
+})
+
+test('Qoder 加密端点 parameters：思考档位带预算，关闭统一发 none（对齐官方 lma）', async () => {
+  const { buildQoderInferPayload, reasoningBudgetFor } = await import('../vendor/channel-pack/src/qoder-wasm.ts')
+  // 官方 effortFromBudget 的逆：<=1024 low | <=8192 medium | <=24576 high | <=49152 xhigh | else max
+  assert.equal(reasoningBudgetFor('low'), 1024)
+  assert.equal(reasoningBudgetFor('medium'), 8192)
+  assert.equal(reasoningBudgetFor('high'), 24_576)
+  assert.equal(reasoningBudgetFor('xhigh'), 49_152)
+  assert.equal(reasoningBudgetFor('max'), 65_536)
+  assert.equal(reasoningBudgetFor('nonsense'), undefined, '未知档位不发预算，交给上游默认')
+
+  const params = effort => buildQoderInferPayload({ modelKey: 'GLM-5.4', userText: 'hi', reasoningEffort: effort }, 'fixed-id').parameters
+  // 选档必须同时给预算 —— 只发 effort/enable_thinking 时上游按「无预算」处理，回包无 reasoning_content。
+  assert.deepEqual(params('high'), { reasoning_effort: 'high', reasoning_budget_tokens: 24_576, enable_thinking: true })
+  assert.deepEqual(params('max'), { reasoning_effort: 'max', reasoning_budget_tokens: 65_536, enable_thinking: true })
+  // DSH 规范名 off 必须翻成上游唯一认识的 none，且不发预算。
+  assert.deepEqual(params('off'), { reasoning_effort: 'none', enable_thinking: false })
+  assert.deepEqual(params('none'), { reasoning_effort: 'none', enable_thinking: false })
+  // 没有档位时一个思考键都不发（官方 lma 的同一判据）。
+  assert.deepEqual(params(undefined), {})
+})
+
+test('Qoder 上下文档位按渠道声明为 200K/400K/1M，不改全局默认表', async () => {
+  const { qodercn } = await import('../src/client/providers/qodercn.js')
+  // 上游目录的 `context_config` 实测就是这三档；与全局默认表（256K/500K）不同，
+  // 所以按渠道声明，避免某个渠道的口径改写所有渠道。
+  assert.deepEqual(qodercn.caps.contextTiers.map(t => [t.label, t.tokens]), [
+    ['200K', 200_000], ['400K', 400_000], ['1M', 1_000_000],
+  ])
+})
+
+test('Qoder 目录解析对齐客户端：取 assistant 组、窗口取 context_config 默认档、URL 带 Encode=1', async () => {
+  const { QODER_MODEL_LIST_PATH, parseQoderModelList } = await import('../vendor/channel-pack/src/qoder-model-list.ts')
+  assert.match(QODER_MODEL_LIST_PATH, /Encode=1$/, '与官方用法一致')
+  // 客户端按 assistant → developer → chat 取第一个非空组。
+  const models = parseQoderModelList({
+    chat: [{ key: 'from_chat', display_name: 'X' }],
+    assistant: [{ key: 'gmodel_latest', display_name: 'GLM-5.4', price_factor: 0.8, max_input_tokens: 180_000,
+      context_config: { '1M': { token_count: 1_000_000 }, '200K': { token_count: 200_000, is_default: true }, '400K': { token_count: 400_000 } } }],
+    developer: [{ key: 'from_developer', display_name: 'Y' }],
+  })
+  assert.deepEqual(models.map(m => m.id), ['gmodel_latest'], 'assistant 优先')
+  // 窗口取默认档 200K，而不是 max_input_tokens 的 180K（含输出预留）。
+  assert.equal(models[0].contextWindow, 200_000)
+  assert.equal(models[0].priceFactor, 0.8)
+  // 一组都没有 → null（调用方据此回退，不猜）。
+  assert.equal(parseQoderModelList({ chat: [], assistant: [], developer: [] }), null)
 })

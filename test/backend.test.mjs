@@ -165,7 +165,9 @@ test('独立后端渠道的精选列表、启停恢复与持久化', async t => 
       raccoon: { total: 7, off: ['sn-glm-5-3'], legacy: [] },
       'raccoon-pro': { total: 7, off: ['sn-glm-5-3-p'], legacy: [] },
       // 同族旧版：kmodel（K2.8-Preview）；全平台旧版（off 且 UI 标旧版）：dmodel（DS V4 Pro）、qfmodel（Qwen3.8 Flash）、gmodel（GLM-5.3）。
-      qodercn: { total: 14, off: ['kmodel', 'qmodel_38max', 'qfmodel', 'dmodel', 'gmodel', 'Step-5-Preview'], legacy: ['kmodel'] },
+      // 11 条 = 真实 key 白名单里的模型（`Qwen4-Max`/`GLM-5.4`/`Step-5-Preview` 只有显示名、
+      // 没有可用 model key，已从目录剔除；拿显示名请求会回落默认模型且不产出思考）。
+      qodercn: { total: 13, off: ['dmodel', 'gmodel', 'kmodel', 'qfmodel'], legacy: ['kmodel'] },
       // 同族旧版：kimi-k3 / minimax-m3；全平台旧版（off 且 UI 标旧版）：DeepSeek-V4-Pro-Official / qwen3.8-flash。
       trae: { total: 20, off: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3', 'qwen3.8-max', 'qwen3.8-flash', 'DeepSeek-V4-Pro-Official', 'glm-5.3'], legacy: ['Doubao-Seed-Code', 'kimi-k3', 'minimax-m3'] },
     }
