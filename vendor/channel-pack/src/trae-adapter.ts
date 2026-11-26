@@ -42,6 +42,7 @@ import {
   type TraeReasoningConfig,
   type TraeRemoteModel,
 } from './trae.js'
+import { traeCacheUsage } from './trae-cache.js'
 import { TRAE, TRAE_REFERENCE_RATES, TRAE_SUBSCRIPTION_ONLY_MODELS, type TraeFallbackModel, type TraeProduct } from './trae-product.js'
 import { classifyTraeError, recordsTraeRateLimit, shouldRotateTraeAccount } from './trae-errors.js'
 import { normalizeHarnessMessages } from './message-shape.js'
@@ -581,26 +582,6 @@ function isTransportError(error: unknown): boolean {
   return false
 }
 
-/**
- * Trae 用量帧里的缓存命中量（#213）。
- *
- * 上游实测（见 issue 的原始报文）发的是 Anthropic 口径的
- * `cache_read_input_tokens`（写入量在 `cache_creation_input_tokens`），
- * 不是 openai-compat.ts 读的 OpenAI 口径。三处来源按优先级取首个有值的：
- * 兼容其它 Trae 端点沿用 OpenAI 拼写的可能。
- */
-function traeCacheReadTokens(usage: Record<string, unknown>): number {
-  const anthropic = usage.cache_read_input_tokens
-  if (typeof anthropic === 'number' && anthropic > 0) return anthropic
-  const details = usage.prompt_tokens_details
-  if (details != null && typeof details === 'object') {
-    const cached = (details as { cached_tokens?: unknown }).cached_tokens
-    if (typeof cached === 'number' && cached > 0) return cached
-  }
-  const openai = usage.prompt_cache_hit_tokens
-  if (typeof openai === 'number' && openai > 0) return openai
-  return 0
-}
 
 /**
  * 组装模型选择器里展示的名字：`模型名 · 倍率`。
@@ -1499,6 +1480,14 @@ export class TraeAdapter extends LlmAdapter {
     let currentData = ''
     // 会话 id（从 metadata 事件获取，但非必需）
     let gotAnyContent = false
+    // 上游是否**明确**说本次请求挂了缓存池（`metadata.prompt_cache_pool_record`）。
+    //
+    // - `true`：池记录非空 ⇒ 缓存计数可信，`0` 就是「本次没命中」。
+    // - `false`：显式 `null` ⇒ 上游说这次没挂池，计数不可采信（按未知处理）。
+    //
+    // ⚠️ 默认 `false`（未知）：`token_usage` 可能先于 `metadata` 到达，此时
+    // 宁可不下发缓存字段，也不把缺失的计数当成 0% 未命中。
+    let cachePoolAssigned = false
     /**
      * 是否收到过**任何**可解析的上游事件。
      *
@@ -1555,6 +1544,14 @@ export class TraeAdapter extends LlmAdapter {
 
               // 分发事件
               switch (ev.event) {
+                case 'metadata': {
+                  // 只关心缓存池声明：`prompt_cache_pool_record` 非 null 表示
+                  // 上游明确本次挂了缓存池，此时 `token_usage` 的 0 才是测量值。
+                  const poolRecord = ev.metadata?.prompt_cache_pool_record
+                  cachePoolAssigned = ev.metadata !== undefined
+                    && poolRecord !== null && poolRecord !== undefined
+                  break
+                }
                 case 'output': {
                   const delta: Record<string, unknown> = {}
                   if (ev.response !== undefined && ev.response.length > 0) {
@@ -1683,13 +1680,19 @@ export class TraeAdapter extends LlmAdapter {
                     // 里已含 cache_read_input_tokens 4224），所以 inputTokens 只计
                     // 未命中部分，命中量单列 cacheReadTokens —— 与 openai-compat.ts
                     // 的 DSH 口径一致，否则缓存命中率恒为 0、账本全按 cacheMiss 计价。
-                    const cachedTokens = traeCacheReadTokens(ev.usage)
+                    //
+                    // ⚠️ 上游自 2026-10-27 起不再如实回填缓存计数（恒 0 且
+                    // `prompt_cache_pool_record` 为 null）。0 只有在上游明确挂了
+                    // 缓存池时才采信；否则字段缺失（未知），不把「没报」写成 0%。
+                    const cache = traeCacheUsage(ev.usage, cachePoolAssigned)
+                    const cachedTokens = cache.read ?? 0
                     yield {
                       type: 'usage',
                       usage: {
                         inputTokens: cachedTokens > 0 ? promptTokens - cachedTokens : promptTokens,
                         outputTokens: completionTokens,
-                        ...cachedTokens > 0 ? { cacheReadTokens: cachedTokens } : {},
+                        ...(cache.read !== undefined ? { cacheReadTokens: cache.read } : {}),
+                        ...(cache.write !== undefined ? { cacheWriteTokens: cache.write } : {}),
                         ...reasoningTokens !== undefined && reasoningTokens > 0 ? { reasoningTokens } : {},
                       },
                     }

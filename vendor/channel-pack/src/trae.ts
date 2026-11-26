@@ -1743,6 +1743,14 @@ export interface TraeSSEEvent {
   reasoningContent?: string
   toolCalls?: unknown[]
   usage?: Record<string, unknown>
+  /**
+   * `metadata` 事件的原始字段。
+   *
+   * 缓存计数是否可信要看这里的 `prompt_cache_pool_record`：上游自 2026-10-27
+   * 起不再如实回填缓存计数，但会明说本次有没有挂缓存池（`null` = 没挂）。
+   * 调用点据此区分「真的 0%」与「上游没报」，见 `trae-adapter.ts`。
+   */
+  metadata?: Record<string, unknown>
   finishReason?: string
   errorCode?: number
   errorMessage?: string
@@ -1781,6 +1789,9 @@ export function parseTraeSSELine(eventName: string, dataLine: string): TraeSSEEv
       break
     case 'token_usage':
       ev.usage = raw
+      break
+    case 'metadata':
+      ev.metadata = raw
       break
     case 'done':
       if (typeof raw.finish_reason === 'string') ev.finishReason = raw.finish_reason

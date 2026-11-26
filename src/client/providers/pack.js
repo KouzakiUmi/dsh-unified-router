@@ -112,14 +112,16 @@ export function packSettings(provider) {
         }))
         return {
           id: side.id, title: side.title, rows, source: state.modelSource[side.id] ?? 'unknown',
-          notice: side.id === 'qodercn' ? ({
+          // 渠道可在 caps 里声明模型分区的状态行（如 TRAE 的缓存命中率口径）；
+          // 未声明时沿用 Qoder CLI 的目录状态映射。
+          notice: caps.modelNotice ?? (side.id === 'qodercn' ? ({
             'login-required': 'Qoder CLI 未登录 · qoderclicn login',
             'cli-missing': '找不到 Qoder 中国版 CLI。安装后可刷新目录。',
             timeout: 'Qoder CLI 读取超时，可稍后重试。',
             'cli-failed': 'Qoder CLI 读取失败，可稍后重试。',
             empty: 'Qoder CLI 本次返回空目录，可稍后重试。',
             'no-model-key': 'Qoder 目录只回了显示名、没有可调用 key，已跳过这些条目。',
-          })[state.qoderCatalogIssue] : undefined,
+          })[state.qoderCatalogIssue] : undefined),
           actions: [
             { label: '刷新目录', call: ['refreshModels', side.id] },
             { label: '恢复推荐', call: ['resetModels', side.id], disabled: rows.length === 0 },

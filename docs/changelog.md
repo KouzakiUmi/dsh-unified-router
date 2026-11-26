@@ -2,9 +2,14 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
-## 0.8.0（2026-11-27）
+## 0.8.1（2026-11-27）
 
+- **TRAE 缓存命中率统计修复**：上游自 2026-10-27 起不再下发缓存命中计数——同前缀连发多次，`cache_read_input_tokens` 恒 0、`metadata.prompt_cache_pool_record` 恒 `null`，但账单显示同前缀第二次仍便宜约 3 倍（缓存真实生效、只是不上报）。适配器原先只认 3 个字段名、取不到就按 0 计，于是命中率恒为 0%。现在：① 候选字段扩到 6 个读取 / 4 个写入（Anthropic、OpenAI、DeepSeek 与 camelCase 命名）；② 解析 `metadata` 的缓存池声明，0 只在上游明确挂了缓存池时采信，否则按未知省略字段，不替上游编造 0%；③ 解析逻辑抽成纯函数 `vendor/channel-pack/src/trae-cache.ts`。设置页 TRAE 模型分区同步显示一行状态「缓存命中率：上游未上报（按 0 计）」。回归 `test/trae-cache.test.mjs` + `test/web-client.test.mjs`。
 - **签到/领取的「待确认」可以用额度增长确认**：AStudio 与 CodeArts 的签到长期停在「签到待确认」——上游只读核实给不出入账证据（AStudio 只认今日积分流水里的 `GRANT + 每日/登录`，CodeArts 活动状态停在 `CLAIMED`），而账本铁律是 pending 只能由上游证据解除，于是永久卡住。现在提交前把该账号额度写成主记录基线，只读核实时若当前额度高于基线（增量在 `(0, 1_000_000]` 内）即按已到账确认，落 `.confirmed` 观察票据：签到显示「已签到 +N」，奖励/任务显示「奖励已领 +N」/「任务已完成 +N」。上游核实给不出 done 证据时兜底（待确认 / 无 `verify` 通道 / 查询失败）；额度没变、无基线、读不到额度、增量异常时保持原状态。主记录与「pending 绝不重放」铁律不变。回归 `test/balance-confirm.test.mjs`。
+- **思维链守卫的事件广播默认关闭**：`unified-router/cot-loop-guard` 事件只供外部监控项目订阅，需显式配置 `cotLoopGuard.emitEvents: true` 才对外发；守卫本身的切断与续跑不受影响。回归 `test/cot-loop-guard.test.mjs`。
+- **移除未使用的 `undici` 开发依赖**：源码没有任何引用，移除后消除 5 条 Dependabot 安全告警（4 high + 1 medium）。
+
+## 0.8.0（2026-11-27）
 - **TRAE 付费专用模型标注**：`qwen4-max`（Qwen4）、`glm-5.4`（GLM-5.4）、`kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed`（K3.1 系列）只有付费订阅账号可调用，免费账号调用会被上游拒绝。这四个 id 挂「订阅限定」info 徽标（独立于倍率/免费徽标）。由于远端目录不下发订阅标志、`glm-5.4` 又不在离线兜底表里，新增 `TRAE_SUBSCRIPTION_ONLY_MODELS` id 集合在 `listAllModels()` 里统一标注。`Doubao-Seed-Evolving` 已开放普通账号，不再挂标。回归 `test/model-rate-badge.test.mjs`。
 - **账号订阅类型（`planLabel`）在设置页与额度药丸可见**：TRAE 从只读端点 `POST /trae/api/v2/pay/ide_user_pay_status` 读取 `user_pay_identity_str`（`Free` / `Pro` / `Pro+` / `Ultra` / `Express`），`account.list` 时为启用账号附加 `planLabel`（按 uid 缓存 60 秒、并发去重、失败或凭据不可解析静默跳过，绝不影响账号列表）。新增 wire 契约字段 `planLabel`，设置页账号行（pack 卡）与额度药丸的账号行/详情都优先显示订阅类型；Raccoon 继续用 `plan` 枚举映射（体验版/订阅/未知），WorkBuddy 与自管渠道展示上游 `plan` 文案，Qoder 上游不下发订阅身份、不显示不编造。回归 `test/backend.test.mjs`、`test/quota-pill.test.mjs`、`test/web-client.test.mjs`、`test/channel-contract.test.mjs`。
 

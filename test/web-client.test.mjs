@@ -1096,6 +1096,25 @@ test('TRAE 卡账号行显示订阅类型，快照状态携带 planLabel', async
 
 // ===== 模型目录：真正拉取上游（model.refresh）+ 来源标识 =====
 
+test('TRAE 模型分区显示缓存命中率口径（上游未上报，按 0 计）', async () => {
+  const { module, react } = loadClient(reactHarness(), { localStorage: { getItem: () => 'trae' } })
+  const host = hostFixture(); let Settings
+  host.overrides.set('provider.status', async () => ({ ok: true, value: { statuses: { trae: { closed: false, accounts: { enabled: 1 }, models: { total: 1 } } } } }))
+  host.overrides.set('account.list', async () => ({ ok: true, value: { accounts: [] } }))
+  host.overrides.set('model.list', async () => ({ ok: true, value: { models: [{ id: 'trae-m1', name: '模型一', disabled: false }] } }))
+  host.overrides.set('model.params', async () => ({ ok: true, value: { provider: 'trae', params: {} } }))
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  render(); await tick()
+  const tree = render()
+  // 说明是模型分区的一行状态（数据/状态，不是说明性段落）。
+  assert.ok(treeNodes(tree).some(n => n.props.className === 'eac-muted'
+    && typeof n.children?.[0] === 'string' && n.children[0].includes('缓存命中率：上游未上报（按 0 计）')),
+  'TRAE 模型分区应说明缓存命中率口径')
+  react.dispose()
+})
+
 test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互相覆盖', async () => {
   const { module, react } = loadClient(); const host = hostFixture(); let Settings
   // raccoon 目录（免费面）：一条订阅限定（带倍率）、一条订阅限定（无倍率）、一条普通免费。
