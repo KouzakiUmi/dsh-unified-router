@@ -146,4 +146,5 @@ export function apply(ctx) {
   ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'unified-router', order: 23, label: 'Unified Router', inject: () => ({ ctx }) }, Settings))
   registerContextPill(ctx)
   registerQuotaPill(ctx)
+  registerImageToolViews(ctx)
 }

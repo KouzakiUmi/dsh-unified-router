@@ -61,9 +61,9 @@ function hostFixture() {
 }
 function treeNodes(tree) { return !tree || typeof tree !== 'object' ? [] : [tree, ...(tree.children || []).flatMap(treeNodes)] }
 
-test('客户端只注册 settings.section，不声明聊天或侧栏入口；实际调用约定 RPC', async () => {
+test('没有会话工具槽时，设置分区仍能实际调用约定 RPC', async () => {
   const { module, react } = loadClient(); const registrations = []; const host = hostFixture(); const transport = []
-  const ctx = { slots: { inject(slot, run) { assert.equal(slot, 'settings.section'); run() }, register(spec, component) { registrations.push({ spec, component }) } }, connection: { rpc: { call(...args) {
+  const ctx = { slots: { inject(slot, run) { if (slot === 'settings.section') run() }, register(spec, component) { registrations.push({ spec, component }) } }, connection: { rpc: { call(...args) {
     transport.push(args); return host.call(args[2].method, args[2].payload, args[3])
   } } } }
   module.apply(ctx)
@@ -93,6 +93,126 @@ test('客户端只注册 settings.section，不声明聊天或侧栏入口；实
   assert.equal(transport.length, before, '当前渠道已选中，重复点击不应再触发整页读取')
   react.dispose()
   assert.ok(transport.filter(args => args[2].method !== 'settings.snapshot').every(args => args[3].aborted))
+})
+
+function fixtureImageToolView() {
+  const { module, react } = loadClient()
+  const registrations = new Map()
+  module.apply({ slots: {
+    inject(slot, run) { if (slot === 'tool.call.toolview') for (const dispose of run()) assert.equal(typeof dispose, 'function') },
+    register(spec, component) { registrations.set(spec.key, { spec, component }); return () => registrations.delete(spec.key) },
+  } })
+  return { react, registrations }
+}
+
+test('四个图片工具共用 keyed 会话视图并读取持久化的图片块', () => {
+  const { registrations } = fixtureImageToolView()
+  assert.deepEqual([...registrations.keys()], ['agnes_image_generate', 'sensenova_image_generate', 'bailian_image_generate', 'image_read'])
+  assert.equal(new Set([...registrations.values()].map(item => item.component)).size, 1)
+  const { component: Tool, spec } = registrations.get('image_read')
+  const props = spec.inject()
+  const loadImage = async () => 'blob:test'
+  const attachment = { attachmentId: 'image-ref', mediaType: 'image/png', width: 8, height: 6, bytes: 128 }
+  const image = { type: 'image', attachment }
+  const text = { type: 'text', text: '附件找不到' }
+  const gallery = tree => treeNodes(tree).filter(node => node.type?.name === 'ImageToolPreview')
+  const block = { kind: 'tool-result', content: [image, image, { type: 'image', attachment: { ...attachment, attachmentId: 'invalid', mediaType: 'image/svg+xml' } }] }
+  const result = Tool({ ...props, owner: { phase: 'result', block, loadImage } })
+  assert.equal(result.props['aria-label'], '读取图片')
+  assert.equal(gallery(result).length, 1, '只取内容中的有效图片、去重，不依赖 meta')
+  assert.equal(gallery(result)[0].props.attachment, attachment)
+  assert.equal(gallery(result)[0].props.loadImage, loadImage)
+  assert.equal(gallery(Tool({ ...props, phase: 'start', block })).length, 0)
+  const error = Tool({ ...props, phase: 'result', block: { ...block, isError: true, content: [text, image] } })
+  assert.equal(gallery(error).length, 0)
+  assert.equal(treeNodes(error).find(node => node.props.role === 'alert').children[0], text.text)
+  // 状态徽标三态：进行中 busy、成功 success、失败 error。
+  assert.equal(treeNodes(result).find(node => node.props.className === 'eac-image-status').props['data-tone'], 'success')
+  assert.equal(treeNodes(Tool({ ...props, phase: 'start', block })).find(node => node.props.className === 'eac-image-status').props['data-tone'], 'busy')
+  assert.equal(treeNodes(error).find(node => node.props.className === 'eac-image-status').props['data-tone'], 'error')
+})
+
+test('图片缩略图加载失败可重试；灯箱可缩放/重置/下载/关闭，扩展名跟随宿主类型', async () => {
+  const { react, registrations } = fixtureImageToolView()
+  const { component: Tool, spec } = registrations.get('agnes_image_generate')
+  const attachment = { attachmentId: 'stored-image', mediaType: 'image/jpeg', width: 640, height: 480, bytes: 2048,
+    name: 'source.png', originalDimensions: { width: 1280, height: 960 } }
+  const calls = []
+  const loadImage = async ref => {
+    calls.push(ref)
+    if (calls.length === 1) throw new Error('内部附件错误')
+    return 'blob:stored-image'
+  }
+  const result = Tool({ ...spec.inject(), phase: 'result', block: { content: [{ type: 'image', attachment }] }, loadImage })
+  const { type: ImagePreview, props } = treeNodes(result).find(node => node.type?.name === 'ImageToolPreview')
+  const render = () => { react.begin(); const tree = ImagePreview(props); react.flush(); return treeNodes(tree) }
+  assert.equal(render().find(node => node.props.role === 'status').children[0], '正在加载图片…')
+  await tick()
+  const failed = render()
+  assert.equal(failed.find(node => node.props.role === 'status').children[0], '图片加载失败')
+  failed.find(node => node.type === 'button' && node.children[0] === '重试').props.onClick()
+  render()
+  await tick()
+  const nodes = render()
+  assert.deepEqual(calls, [attachment, attachment])
+  // 尺寸与原尺寸合并在灯箱规格行。
+  assert.match(nodes.find(node => node.props.className === 'eac-image-dialog-size').children[0], /640 × 480 px（原尺寸 1280 × 960 px）/)
+  const dialog = nodes.find(node => node.type === 'dialog')
+  const native = { open: false, showModal() { this.open = true }, close() { this.open = false } }
+  dialog.props.ref.current = native
+  const thumbnail = nodes.find(node => node.props['aria-haspopup'] === 'dialog')
+  thumbnail.props.onClick()
+  assert.equal(native.open, true)
+  assert.equal(thumbnail.children[0].props.src, 'blob:stored-image')
+  // 灯箱内下载用宿主 blob URL，扩展名按宿主 mediaType（jpeg→jpg）。
+  const downloads = nodes.filter(node => node.type === 'a')
+  assert.equal(downloads.length, 1)
+  assert.ok(downloads.every(node => node.props.href === 'blob:stored-image' && node.props.download === 'source.jpg'))
+  // 缩放：默认 100%，放大到 150%，重置回 100%。
+  assert.ok(nodes.some(node => node.children[0] === '100%'))
+  nodes.find(node => node.props['aria-label'] === '放大').props.onClick()
+  const zoomed = render()
+  assert.ok(zoomed.some(node => node.children[0] === '150%'))
+  assert.ok(zoomed.some(node => node.props.style?.width === '150%'))
+  zoomed.find(node => node.type === 'button' && node.children[0] === '重置').props.onClick()
+  assert.ok(render().some(node => node.children[0] === '100%'))
+  render().find(node => node.type === 'button' && node.children[0] === '关闭').props.onClick()
+  assert.equal(native.open, false)
+  react.dispose()
+})
+
+test('结果卡片提供下载/复制/再生成动作与详情；再生成经会话 prompt queued 跟随', async () => {
+  const { react, registrations } = fixtureImageToolView()
+  const { component: Tool, spec } = registrations.get('bailian_image_generate')
+  const attachment = { attachmentId: 'sha256:abc', mediaType: 'image/png', width: 2048, height: 1152, bytes: 524288, name: 'bailian-image.png' }
+  const prompts = []
+  const sessions = { binding: id => ({ session: { prompt: async (content, mode) => { prompts.push({ id, content, mode }); return { ok: true } }, cancel: async () => ({ ok: true }) } }) }
+  const loadImage = async () => 'blob:x'
+  const block = { kind: 'tool-result', content: [{ type: 'image', attachment }], call: { name: 'bailian_image_generate', argsRaw: JSON.stringify({ prompt: '一只橘猫', references: [] }) } }
+  const props = { ...spec.inject(), sessions }
+  const render = () => { react.begin(); const tree = Tool({ ...props, phase: 'result', block, loadImage, sessionId: 's1', toolName: 'bailian_image_generate' }); react.flush(); return treeNodes(tree) }
+  const nodes = render()
+  // 规格行：尺寸 · 格式 · 体积（十进制 KB，与 Grok/Codex 一致）。
+  assert.match(nodes.find(node => node.props.className === 'eac-image-spec').children[0], /2048×1152 · PNG · 524 KB/)
+  // 操作行有下载按钮与复制图片按钮；再生成按钮（primary）。
+  assert.ok(nodes.some(node => node.type?.name === 'ImageToolDownloadButton'))
+  assert.ok(nodes.some(node => node.type?.name === 'ImageToolCopyImage'))
+  const regen = nodes.find(node => node.type?.name === 'ImageToolSessionButton' && node.props.primary === true)
+  assert.equal(regen.props.label, '再生成一张')
+  // 详情折叠里给出提示词与图片句柄（ImageToolDetails 是普通函数直接求值）。
+  const details = nodes.find(node => node.type === 'details')
+  assert.match(treeNodes(details).find(node => node.props.className === 'eac-image-prompt').children[0], /一只橘猫/)
+  assert.ok(treeNodes(details).some(node => node.props.className === 'eac-image-handle' && node.children[0] === 'sha256:abc'))
+  // 单独渲染再生成按钮并点击：经 sessions.binding(sessionId).session.prompt(…, 'queue')。
+  const { type: SessionButton, props: buttonProps } = regen
+  const renderButton = () => { react.begin(); const tree = SessionButton(buttonProps); react.flush(); return treeNodes(tree) }
+  renderButton().find(node => node.type === 'button').props.onClick()
+  await tick()
+  assert.equal(prompts.length, 1)
+  assert.equal(prompts[0].id, 's1')
+  assert.equal(prompts[0].mode, 'queue')
+  assert.match(prompts[0].content[0].text, /一只橘猫/)
+  react.dispose()
 })
 
 test('样式模板字面量内部不得出现反引号（会让 CSS 提前闭合、后面的片段被当 JS 执行）', () => {

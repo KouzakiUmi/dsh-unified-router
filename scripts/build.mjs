@@ -72,6 +72,7 @@ const clientModules = [
   'context-pill.js',         // 会话输入栏上下文窗口药丸（conversation.input.right）
   'store/quota.js',           // 输入栏额度快照订阅与投影
   'quota-pill.js',            // 当前渠道的额度药丸
+  'image-tool-view.js',      // 会话图片卡片（tool.call.toolview）
   'settings.js',             // Settings 根组件与 settings.section 注册
 ]
 const stripExports = source => source.replace(/^export /gm, '')
