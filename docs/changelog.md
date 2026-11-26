@@ -4,6 +4,7 @@
 
 ## 0.8.0（2026-11-27）
 
+- **签到/领取的「待确认」可以用额度增长确认**：AStudio 与 CodeArts 的签到长期停在「签到待确认」——上游只读核实给不出入账证据（AStudio 只认今日积分流水里的 `GRANT + 每日/登录`，CodeArts 活动状态停在 `CLAIMED`），而账本铁律是 pending 只能由上游证据解除，于是永久卡住。现在提交前把该账号额度写成主记录基线，只读核实时若当前额度高于基线（增量在 `(0, 1_000_000]` 内）即按已到账确认，落 `.confirmed` 观察票据：签到显示「已签到 +N」，奖励/任务显示「奖励已领 +N」/「任务已完成 +N」。上游核实给不出 done 证据时兜底（待确认 / 无 `verify` 通道 / 查询失败）；额度没变、无基线、读不到额度、增量异常时保持原状态。主记录与「pending 绝不重放」铁律不变。回归 `test/balance-confirm.test.mjs`。
 - **TRAE 付费专用模型标注**：`qwen4-max`（Qwen4）、`glm-5.4`（GLM-5.4）、`kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed`（K3.1 系列）只有付费订阅账号可调用，免费账号调用会被上游拒绝。这四个 id 挂「订阅限定」info 徽标（独立于倍率/免费徽标）。由于远端目录不下发订阅标志、`glm-5.4` 又不在离线兜底表里，新增 `TRAE_SUBSCRIPTION_ONLY_MODELS` id 集合在 `listAllModels()` 里统一标注。`Doubao-Seed-Evolving` 已开放普通账号，不再挂标。回归 `test/model-rate-badge.test.mjs`。
 - **账号订阅类型（`planLabel`）在设置页与额度药丸可见**：TRAE 从只读端点 `POST /trae/api/v2/pay/ide_user_pay_status` 读取 `user_pay_identity_str`（`Free` / `Pro` / `Pro+` / `Ultra` / `Express`），`account.list` 时为启用账号附加 `planLabel`（按 uid 缓存 60 秒、并发去重、失败或凭据不可解析静默跳过，绝不影响账号列表）。新增 wire 契约字段 `planLabel`，设置页账号行（pack 卡）与额度药丸的账号行/详情都优先显示订阅类型；Raccoon 继续用 `plan` 枚举映射（体验版/订阅/未知），WorkBuddy 与自管渠道展示上游 `plan` 文案，Qoder 上游不下发订阅身份、不显示不编造。回归 `test/backend.test.mjs`、`test/quota-pill.test.mjs`、`test/web-client.test.mjs`、`test/channel-contract.test.mjs`。
 

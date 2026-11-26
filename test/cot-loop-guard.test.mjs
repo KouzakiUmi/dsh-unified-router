@@ -12,6 +12,7 @@ import {
   createResumeBook,
   installCotLoopGuard,
   CONTINUE_PROMPT,
+  GUARD_EVENT,
 } from '../lib/cot-loop-guard/index.js'
 import { apply } from '../lib/web-host.js'
 
@@ -185,6 +186,8 @@ test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 p
     llm: {},
     agents: agentsService,
     logger: { info() {}, warn() {} },
+    emitted: [],
+    emit(name, payload) { this.emitted.push({ name, payload }) },
     get(key) { return this[key] },
     on(event, fn, opts) {
       listeners.set(event, { fn, opts })
@@ -197,7 +200,7 @@ test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 p
     effect(fn) { cleanup.push(fn()) },
   }
 
-  apply(ctx, { backend: 'shared' }, {
+  apply(ctx, { backend: 'shared', cotLoopGuard: { emitEvents: true } }, {
     autoCollect: false,
     snapshotFile: join(dir, 'settings.json'),
     automationFile: join(dir, 'automation.json'),
@@ -228,6 +231,19 @@ test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 p
     listeners.get('agent/status')?.fn({ agent, status: 'idle' })
     assert.equal(followups.length, 1)
 
+    // 监控广播：每次切断与续跑都发一条只含元数据的事件
+    const guardEvents = ctx.emitted.filter(e => e.name === GUARD_EVENT).map(e => e.payload)
+    const cuts = guardEvents.filter(e => e.type === 'cut')
+    assert.ok(cuts.length >= 9, '每个被切断的调用都应广播 cut')
+    const sessCut = cuts.find(e => e.provider === 'astudio' && e.sessionHash)
+    assert.match(sessCut.sessionHash, /^[0-9a-f]{16}$/)
+    assert.equal(sessCut.state, 'CUT')
+    assert.ok(sessCut.droppedChars > 0)
+    assert.ok(guardEvents.some(e => e.type === 'resume' && /^[0-9a-f]{16}$/.test(e.agentHash)))
+    const serialized = JSON.stringify(guardEvents)
+    assert.ok(!serialized.includes('不断重复思考'), '广播不得含 reasoning 原文')
+    assert.ok(!serialized.includes('sess-1'), '广播不得含原始 session/agent id')
+
     // 通过 RPC 关闭单个渠道（trae）的思考循环保护，验证动态生效
     const route = routes.get('/api/unified-router')
     const res = await route.fetch(new Request('http://dsh.internal/api/unified-router', {
@@ -250,4 +266,38 @@ test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 p
   } finally {
     for (const stop of cleanup.reverse()) stop?.()
   }
+})
+
+test('广播失败不影响守卫：监听器抛错时仍正常切断', async () => {
+  const listeners = new Map()
+  const ctx = {
+    on(event, fn) { listeners.set(event, fn); return () => {} },
+    emit() { throw new Error('listener boom') },
+  }
+  const guard = installCotLoopGuard(ctx, {})
+  const loop = async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+    for (let i = 0; i < 80; i += 1) yield { type: 'reasoning-delta', index: 0, text: '不断重复思考同一句话用来验证切断。' }
+  }
+  const out = await collect(listeners.get('llm/stream')({ provider: 'p', model: 'm' }, loop))
+  assert.equal(out.at(-1)?.type, 'finish')
+  guard.dispose()
+})
+
+test('监控广播默认关闭：未显式开启 emitEvents 时不发任何事件', async () => {
+  const listeners = new Map()
+  const emitted = []
+  const ctx = {
+    on(event, fn) { listeners.set(event, fn); return () => {} },
+    emit(name, payload) { emitted.push({ name, payload }) },
+  }
+  const guard = installCotLoopGuard(ctx, {})
+  const loop = async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+    for (let i = 0; i < 80; i += 1) yield { type: 'reasoning-delta', index: 0, text: '不断重复思考同一句话用来验证切断。' }
+  }
+  const out = await collect(listeners.get('llm/stream')({ provider: 'p', model: 'm' }, loop))
+  assert.equal(out.at(-1)?.type, 'finish', '守卫照常切断')
+  assert.equal(emitted.length, 0, '默认不对外广播')
+  guard.dispose()
 })
