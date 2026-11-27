@@ -2,6 +2,14 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.8.3（2026-11-27）
+
+- **额度推送按渠道拆源**：`source` 改为 `unified-router-<provider>`，每个渠道一张卡、卡标题是渠道名，条目才是账号名（此前所有渠道挤在一张卡里，接收端只看到一串账号名、无法识别 provider）。
+- **新增全局开关 `quotaIngest`（默认关闭）**：设置页「向 subusage 推送额度：关 / 开」，开启后立即推一次；默认关闭，避免一次往接收端塞入多张卡。
+- **推送频率与药丸/快照刷新对齐**：由 5 分钟改为 60 秒（宿主采集周期 `SNAPSHOT_INTERVAL_MS`）。
+- 没有条目的卡不再产出（接收端 `parseIngestPayload` 会拒收空载荷，推过去只是白写日志）。
+- 回归 `test/quota-ingest.test.mjs`（15 条，含拆源与开关口径）。
+
 ## 0.8.2（2026-11-27）
 
 - **向 subusage 推送额度（ingest 被动接入）**：新增 `lib/quota-ingest.js`，宿主启动 20 秒后与每 5 分钟把**已采集的公开快照**翻译成 QuotaEntry 元素，经 `ctx.get('subUsage').ingest()` 推给 dsh-subusage（契约见该仓库 `docs/ingest-handoff.md`）。覆盖账号池（`credits.balances`）、商汤（`plan.snapshot` 的 `quota.pools`，带 5h/7d 周期与绝对 `resetAt`）、自管多账号（`managed.snapshot`）、WorkBuddy（额度窗口）与 API Key 渠道（`apikey.snapshot` 的 `quota` / `balance`）。**只消费快照、不发任何上游请求**；服务缺席静默跳过，推送被拒记一条 warn。

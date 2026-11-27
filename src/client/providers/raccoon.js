@@ -21,5 +21,7 @@ export const raccoon = {
     familySide: 'free',
     quotaExtraResources: ['automation.status'],
     permanentPackageNames: ['奖励积分'],
+    // 全局「向 subusage 推送额度」开关只在本卡渲染（家族卡是设置页第一张）。
+    quotaIngestToggle: true,
   },
 }

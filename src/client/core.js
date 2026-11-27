@@ -410,6 +410,7 @@ export function automationFrom(value) {
       cotLoopGuard: cfg.cotLoopGuard !== false,
       preferExpiringQuota: cfg.preferExpiringQuota === true,
       raccoonUnifiedModels: cfg.raccoonUnifiedModels === true,
+      quotaIngest: cfg.quotaIngest === true,
       routingMode: ['manual', 'free', 'expiring', 'sticky'].includes(cfg.routingMode) ? cfg.routingMode
         : cfg.preferExpiringQuota === true ? 'expiring' : 'manual',
       providers,

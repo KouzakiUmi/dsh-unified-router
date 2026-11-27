@@ -264,6 +264,18 @@ function automationRowsFor(provider, state) {
   const inherited = field => !state.automation ? '待读取' : typeof overrides[field] === 'boolean' ? '本渠道单独设置' : '跟随全局设置'
   const scope = 'automation'
   const rows = []
+  // 全局开关（只在一个渠道卡渲染，避免每张卡重复）：向 subusage 推送额度。
+  // 默认关闭——接收端一次会被塞入多张卡，开与不开由用户决定。
+  if (provider.caps?.quotaIngestToggle === true) {
+    const enabled = state.automation?.config?.quotaIngest === true
+    rows.push({ id: 'quota-ingest', name: '向 subusage 推送额度', scope,
+      meta: enabled ? '按渠道分卡推送 · 与额度刷新同频（60 秒）' : '关闭 · 不向 subusage 推送',
+      value: enabled,
+      options: [
+        { value: false, label: '关' },
+        { value: true, label: '开' },
+      ].map(option => ({ ...option, call: ['setAutomationConfig', { quotaIngest: option.value }] })) })
+  }
   if (state.automation?.quotaProviders?.includes(id)) {
     // 智能选号模式（全局单选）：分段控件代替旧的布尔开关。
     // manual = 手动顺序；free = 免费额度优先；expiring = 临期优先（兼容旧开关）；
