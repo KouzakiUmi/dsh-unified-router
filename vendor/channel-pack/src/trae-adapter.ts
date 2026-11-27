@@ -1685,13 +1685,17 @@ export class TraeAdapter extends LlmAdapter {
                     // `prompt_cache_pool_record` 为 null）。0 只有在上游明确挂了
                     // 缓存池时才采信；否则字段缺失（未知），不把「没报」写成 0%。
                     const cache = traeCacheUsage(ev.usage, cachePoolAssigned)
-                    const cachedTokens = cache.read ?? 0
+                    // 命中量不可能超过 prompt 总量：上游异常（候选 > prompt）时
+                    // 夹到 prompt，否则 inputTokens 变负数、账本钳 0 后缓存量
+                    // 仍大于输入，破坏「input + cacheRead = prompt」的守恒。
+                    const cachedTokens = Math.min(cache.read ?? 0, promptTokens)
                     yield {
                       type: 'usage',
                       usage: {
-                        inputTokens: cachedTokens > 0 ? promptTokens - cachedTokens : promptTokens,
+                        inputTokens: promptTokens - cachedTokens,
                         outputTokens: completionTokens,
-                        ...(cache.read !== undefined ? { cacheReadTokens: cache.read } : {}),
+                        // 可信的 0 照常下发（0% 是测量值）；只有「未知」才省略字段。
+                        ...(cache.read !== undefined ? { cacheReadTokens: cachedTokens } : {}),
                         ...(cache.write !== undefined ? { cacheWriteTokens: cache.write } : {}),
                         ...reasoningTokens !== undefined && reasoningTokens > 0 ? { reasoningTokens } : {},
                       },

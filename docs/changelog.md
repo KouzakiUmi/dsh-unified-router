@@ -2,6 +2,14 @@
 
 > 按版本倒序排列。0.3.0 是首个公开版本，此前 0.4.0–0.9.x 的内部迭代编号已合并进 0.3.0，不再逐版本罗列。
 
+## 0.8.2（2026-11-27）
+
+- **向 subusage 推送额度（ingest 被动接入）**：新增 `lib/quota-ingest.js`，宿主启动 20 秒后与每 5 分钟把**已采集的公开快照**翻译成 QuotaEntry 元素，经 `ctx.get('subUsage').ingest()` 推给 dsh-subusage（契约见该仓库 `docs/ingest-handoff.md`）。覆盖账号池（`credits.balances`）、商汤（`plan.snapshot` 的 `quota.pools`，带 5h/7d 周期与绝对 `resetAt`）、自管多账号（`managed.snapshot`）、WorkBuddy（额度窗口）与 API Key 渠道（`apikey.snapshot` 的 `quota` / `balance`）。**只消费快照、不发任何上游请求**；服务缺席静默跳过，推送被拒记一条 warn。
+- **推送口径按独立复核收紧**：`receivedAt` 取保留项里**最旧**的数据时间（新快照不能把旧额度洗成 fresh）；`resetsAt` 由数据时间 + 相对值或上游绝对时间推出，不随推送时刻后移；控制台余额 0 优先且不借 API 的 USD/CNY 单位；`quota` 非 ready 仍报 API 余额；窗口带 `pool` / `poolLabel` / `poolScope:'independent'`，同渠道多账号不再合并；原始百分比 ≥100 才写 `status:'rate-limited'`（展示值夹到 ≤99.9，取整不造假限流）；id 用稳定短哈希、自由文本过秘密闸门、超 60KB 逐步丢尾并标 `partial`。
+- **额度增长确认覆盖账号池**：宿主额度读取原先只认数字 `balance`，账号池的 `balance.total` 与 WorkBuddy 的窗口都不认，导致这些渠道永远拿不到基线。现在支持账号池总额；WorkBuddy 因窗口混着试用积分 / Token / 百分比、且有 429 合成的 0 余额，**保持未知**（否则合成额度消失会被误判成签到到账并永久确认）。
+- **TRAE 缓存命中量夹取**：命中量不可能超过 `prompt_tokens`，上游异常时夹到 prompt，`inputTokens = prompt - cached`，可信 0 照常下发、未知才省略字段。
+- 回归 `test/quota-ingest.test.mjs`（14 条）+ `test/trae-cache.test.mjs` + `test/web-client.test.mjs`。
+
 ## 0.8.1（2026-11-27）
 
 - **TRAE 缓存命中率统计修复**：上游自 2026-10-27 起不再下发缓存命中计数——同前缀连发多次，`cache_read_input_tokens` 恒 0、`metadata.prompt_cache_pool_record` 恒 `null`，但账单显示同前缀第二次仍便宜约 3 倍（缓存真实生效、只是不上报）。适配器原先只认 3 个字段名、取不到就按 0 计，于是命中率恒为 0%。现在：① 候选字段扩到 6 个读取 / 4 个写入（Anthropic、OpenAI、DeepSeek 与 camelCase 命名）；② 解析 `metadata` 的缓存池声明，0 只在上游明确挂了缓存池时采信，否则按未知省略字段，不替上游编造 0%；③ 解析逻辑抽成纯函数 `vendor/channel-pack/src/trae-cache.ts`。设置页 TRAE 模型分区同步显示一行状态「缓存命中率：上游未上报（按 0 计）」。回归 `test/trae-cache.test.mjs` + `test/web-client.test.mjs`。
