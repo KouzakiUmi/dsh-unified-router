@@ -52,6 +52,7 @@ const clientModules = [
   'ui.js',                   // UI 原语、格式化与表单组件
   'kit/index.js',            // 共用设置原语
   'panels-core.js',          // 账号、模型、渠道视图
+  'global-settings.js',      // 跨渠道设置与自动化默认值
   'providers/pack.js',       // 账号池渠道的共用视图适配器
   'providers/managed.js',    // 自管多账号渠道的共用视图工厂
   'providers/raccoon.js',    // Raccoon provider 模块

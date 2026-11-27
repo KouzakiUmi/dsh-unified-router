@@ -75,6 +75,7 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
 
   await first.update({ provider: 'raccoon', autoCheckin: false })
   await first.update({ provider: 'codearts', autoCompleteTasks: true })
+  await first.update({ quotaIngest: true })
   assert.equal(first.isAutoCheckinEnabled('raccoon'), false)
   assert.equal(first.isAutoCheckinEnabled('astudio'), true)
   assert.equal(first.isAutoCompleteTasksEnabled('codearts'), true)
@@ -87,6 +88,9 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
   assert.equal(reopened.snapshot().routingMode, 'sticky')
   assert.equal(reopened.snapshot().preferExpiringQuota, false, '旧布尔字段由模式派生')
   assert.equal(reopened.isRaccoonUnifiedModels(), true, '统一模型开关随 automation.json 重启恢复')
+  assert.equal(reopened.isQuotaIngestEnabled(), true, '额度上报开关随重启恢复')
+  await reopened.update({ quotaIngest: false })
+  assert.equal(createAutomationSettings({ file, defaults: { quotaIngest: true } }).isQuotaIngestEnabled(), false)
   await reopened.update({ preferExpiringQuota: false })
   assert.equal(reopened.isQuotaPriorityEnabled(), false)
   assert.equal(reopened.routingMode(), 'sticky', '旧开关关闭不推翻 sticky 模式')
@@ -105,6 +109,8 @@ test('自动化配置持久化：全局默认（autoCompleteTasks 默认关闭�
   const legacy = createAutomationSettings({ file: legacyFile, allowedProviders: ['raccoon'] })
   assert.equal(legacy.routingMode(), 'expiring')
   assert.equal(legacy.snapshot().preferExpiringQuota, true)
+  assert.equal(legacy.isQuotaIngestEnabled(), false)
+  assert.equal(createAutomationSettings({ file: legacyFile, defaults: { quotaIngest: true } }).isQuotaIngestEnabled(), true)
 
   // 恢复跟随全局（设为 null）
   await reopened.update({ provider: 'raccoon', autoCheckin: null })
@@ -164,6 +170,151 @@ test('auto-tasks 调度器：claimRewards 默认可跑，completeTasks 需显式
     await tasks.tick()
     assert.deepEqual(events, ['astudio:claim', 'codearts:complete'], '显式开启后自动执行，且不重复执行已领的 astudio')
   } finally { tasks.dispose() }
+})
+
+test('保存期间发出的旧快照即使在保存后返回，也不能覆盖新值或推进游标', async () => {
+  const { module } = loadClient()
+  const snapshot = (cursor, quotaIngest, at) => ({ ok: true, value: { cursor, entries: {
+    'automation/automation.status': { value: { config: { quotaIngest } }, at },
+  } } })
+  const save = Promise.withResolvers()
+  const stale = Promise.withResolvers()
+  let readCount = 0
+  const store = module.createRouterStore(async (method, payload) => {
+    if (method === 'automation.setConfig') return save.promise
+    if (method !== 'settings.snapshot') return { ok: true, value: {} }
+    if (++readCount === 1) return snapshot('initial', false, 100)
+    if (readCount === 2) return stale.promise
+    assert.equal(payload.cursor, 'initial')
+    return snapshot('current', true, 200)
+  })
+  try {
+    await store.readHostSnapshots()
+    const writing = store.setAutomationConfig({ quotaIngest: true }, { globalNotice: true })
+    const reading = store.readHostSnapshots()
+    save.resolve({ ok: true, value: { config: { quotaIngest: true } } })
+    assert.equal(await writing, true)
+    stale.resolve(snapshot('unrelated-update', false, 100))
+    assert.equal(await reading, false)
+    assert.equal(store.getSnapshot().automation.config.quotaIngest, true)
+    assert.equal(await store.readHostSnapshots(), true)
+    assert.equal(store.getSnapshot().automation.config.quotaIngest, true)
+  } finally { store.dispose() }
+})
+
+test('全局区跨渠道可用：选项只显示一次、写入全局值、渠道覆盖可恢复继承', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-global-settings-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const { module, react } = loadClient()
+  t.after(() => react.dispose())
+  const config = createAutomationSettings({ file: join(dir, 'automation.json'), allowedProviders: ['raccoon', 'codearts'] })
+  let revision = 0
+  let pendingSave
+  let lastSave
+  const writes = []
+  const status = () => ({ config: config.snapshot(), quotaProviders: ['raccoon', 'codearts'], unifiedModelProviders: ['raccoon'],
+    // 模拟宣布支持奖励和任务的渠道，覆盖三态及同一行的手动动作。
+    tasks: { codearts: { capabilities: { claimRewards: true, completeTasks: true } } },
+  })
+  const rpc = async (method, payload) => {
+    if (method === 'settings.snapshot') {
+      const cursor = `s${revision}`
+      return { ok: true, value: { cursor, entries: payload.cursor === cursor ? null : {
+        'automation/automation.status': { value: status(), at: 100 + revision },
+      } } }
+    }
+    if (method === 'automation.setConfig') {
+      writes.push(JSON.parse(JSON.stringify(payload)))
+      if (pendingSave && !await pendingSave) return { ok: false }
+      await config.update(payload)
+      revision++
+      return { ok: true, value: status() }
+    }
+    return { ok: true, value: {} }
+  }
+  let Settings
+  const ctx = { slots: { inject(_slot, fn) { fn() }, register(_slot, component) { Settings = component } },
+    connection: { rpc: { call(_path, _service, req) {
+      const response = rpc(req.method, req.payload)
+      if (req.method === 'automation.setConfig') lastSave = response
+      return response
+    } } } }
+  module.apply(ctx)
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  const settleSave = async () => { await lastSave; await settle() }
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  const panel = tree => tree.children.find(n => n.props['data-section'] === 'global-settings')
+  const getSwitch = (tree, label) => treeNodes(tree).find(n => n.props.role === 'switch' && n.props['aria-label'] === label)
+  const globalSwitch = label => getSwitch(panel(render()), label)
+  const quotaLabel = '向 subusage 推送额度'
+
+  const first = render()
+  assert.equal(panel(first).type, 'details')
+  assert.equal(panel(first).props.open, undefined, '默认收起，由浏览器保留展开状态')
+  assert.equal(getSwitch(panel(first), quotaLabel), undefined, '未读到数据时不猜测开关状态')
+  await settle()
+  assert.deepEqual(treeNodes(panel(render())).filter(n => n.props.role === 'switch').map(n => n.props['aria-label']),
+    [quotaLabel, '自动每日签到', '自动领取奖励', '自动完成任务', '思考循环保护'])
+  assert.equal(globalSwitch(quotaLabel).props['aria-checked'], false)
+  assert.equal(globalSwitch('自动完成任务').props['aria-checked'], false)
+
+  let finish
+  pendingSave = new Promise(resolve => { finish = resolve })
+  globalSwitch(quotaLabel).props.onClick()
+  assert.deepEqual(writes.at(-1), { quotaIngest: true })
+  assert.equal(globalSwitch(quotaLabel).props.disabled, true, '保存中锁住全局设置')
+  finish(false)
+  await settleSave()
+  assert.equal(globalSwitch(quotaLabel).props['aria-checked'], false)
+  assert.ok(treeNodes(panel(render())).some(n => n.children.includes('全局设置保存失败，请重试。')))
+  pendingSave = null
+  globalSwitch(quotaLabel).props.onClick()
+  await settleSave()
+  assert.equal(globalSwitch(quotaLabel).props['aria-checked'], true)
+  globalSwitch('自动每日签到').props.onClick()
+  await settleSave()
+  assert.deepEqual(writes.at(-1), { autoCheckin: false })
+
+  treeNodes(render()).find(n => n.props['aria-label'] === '切换到 CodeArts').props.onClick()
+  await settle()
+  treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
+  const channel = () => treeNodes(render()).find(n => n.props.id === 'eac-panel-advanced')
+  assert.equal(getSwitch(channel(), quotaLabel), undefined, '渠道页不重复展示全局开关')
+  assert.equal(globalSwitch(quotaLabel).props['aria-checked'], true)
+  for (const [name, field, globalDefault, actions] of [
+    ['自动每日签到', 'autoCheckin', false, ['查询状态']],
+    ['自动领取奖励', 'autoClaimRewards', true, ['立即领取', '查询状态']],
+    ['自动完成任务', 'autoCompleteTasks', false, ['立即执行', '查询状态']],
+    ['思考循环保护', 'cotLoopGuard', true, []],
+  ]) {
+    const row = () => treeNodes(channel()).find(n => n.props.className === 'eac-row-item' && treeNodes(n).some(child => child.props.className === 'eac-row-name' && child.children[0] === name))
+    const tiers = () => treeNodes(row()).filter(n => n.props.className === 'eac-tier')
+    const selected = () => tiers().find(n => n.props['aria-pressed'])?.children[0]
+    assert.deepEqual(tiers().map(n => n.children[0]), ['跟随全局', '单独开启', '单独关闭'])
+    assert.deepEqual(treeNodes(row()).filter(n => n.type === 'button' && n.props.className === 'eac-button').map(n => n.children[0]), actions)
+    assert.equal(selected(), '跟随全局')
+    assert.ok(treeNodes(row()).some(n => n.children.includes(`当前按全局${globalDefault ? '开启' : '关闭'}`)))
+    const before = writes.length
+    tiers()[0].props.onClick()
+    assert.equal(writes.length, before, '点击已选项不重复写入')
+    for (const [index, value] of [[1, true], [2, false], [0, null]]) {
+      tiers()[index].props.onClick()
+      assert.ok(tiers().every(n => n.props.disabled), '保存期间禁止重复切换')
+      await settleSave()
+      assert.deepEqual(writes.at(-1), { provider: 'codearts', [field]: value })
+      assert.equal(selected(), tiers()[index].children[0])
+      assert.equal(config.snapshot().providers.codearts?.[field], value ?? undefined)
+      assert.equal(globalSwitch(name).props['aria-checked'], globalDefault)
+      if (value === true) {
+        globalSwitch(name).props.onClick()
+        await settleSave()
+        assert.equal(globalSwitch(name).props['aria-checked'], !globalDefault)
+        assert.equal(selected(), '单独开启', '更改全局值不覆盖渠道设置')
+        globalSwitch(name).props.onClick()
+        await settleSave()
+      }
+    }
+  }
 })
 
 test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，且 CodeArts渲染自动化开关与多方式登录', async () => {
@@ -228,17 +379,20 @@ test('客户端局部非阻塞锁与 Host 快照解耦：不同域可并发，�
 
     treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced').props.onClick()
     const chTree = render()
-    const switches = treeNodes(chTree).filter(n => n.props?.role === 'switch').map(n => n.props['aria-label'])
-    assert.ok(switches.includes('CodeArts 自动每日签到'))
-    // ⚠️ CodeArts 只有签到、没有 claimRewards（原 AStudio 才有），故此处不再断言
-    // 「自动领取奖励」开关 —— 该能力随 AStudio 停用而失去测试载体。
+    const channelTree = treeNodes(chTree).find(n => n.props.id === 'eac-panel-advanced')
+    const optionGroups = treeNodes(channelTree).filter(n => n.props.role === 'group').map(n => n.props['aria-label'])
+    assert.ok(optionGroups.includes('自动每日签到'))
+    assert.ok(!optionGroups.includes('自动领取奖励'))
+    assert.ok(!optionGroups.includes('自动完成任务'))
     // 智能选号模式：四档分段控件（aria-pressed 标记当前档）
     const modeTiers = tree => treeNodes(tree).filter(n => n.type === 'button' && n.props?.className === 'eac-tier'
       && ['手动', '免费优先', '临期优先', '缓存优先'].includes(n.children?.[0]))
-    assert.equal(modeTiers(chTree).find(n => n.props['aria-pressed'] === true).children[0], '手动')
-    modeTiers(chTree).find(n => n.children[0] === '临期优先').props.onClick()
+    const globalPanel = tree => treeNodes(tree).find(n => n.props['data-section'] === 'global-settings')
+    assert.equal(modeTiers(treeNodes(chTree).find(n => n.props.id === 'eac-panel-advanced')).length, 0)
+    assert.equal(modeTiers(globalPanel(chTree)).find(n => n.props['aria-pressed'] === true).children[0], '手动')
+    modeTiers(globalPanel(chTree)).find(n => n.children[0] === '临期优先').props.onClick()
     await new Promise(r => setImmediate(r))
-    assert.equal(modeTiers(render()).find(n => n.props['aria-pressed'] === true).children[0], '临期优先')
+    assert.equal(modeTiers(globalPanel(render())).find(n => n.props['aria-pressed'] === true).children[0], '临期优先')
     // 「立即领取」按钮属 claimRewards，CodeArts 无此能力（见上），故不再断言。
     // 验证：Host 快照协议激活后，登录/导入完成无需关闭设置页即可立即刷新账号列表与已连接状态
     let snapCursor = 'snap-1'

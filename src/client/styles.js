@@ -77,7 +77,12 @@ export const CLIENT_STYLES = `
 .eac-provider-dot[data-tone=success]{background:var(--eac-success)}
 .eac-provider-dot[data-tone=warn]{background:var(--eac-warn)}
 
-/* ---------- 工作区 ---------- */
+/* ---------- 全局设置与工作区 ---------- */
+.eac-global-settings{min-width:0;border:1px solid var(--eac-divider);border-radius:var(--eac-r);background:var(--eac-subtle)}
+.eac-global-summary{padding:var(--eac-s2) var(--eac-s4);border-radius:var(--eac-r);font-size:var(--eac-fs);font-weight:620;cursor:pointer}
+.eac-global-summary:hover{background:var(--eac-hover)}
+.eac-global-body{display:flex;flex-direction:column;gap:var(--eac-s3);min-width:0;padding:var(--eac-s1) var(--eac-s4) var(--eac-s4)}
+.eac-global-body .eac-row-name{white-space:normal;overflow-wrap:anywhere}
 .eac-workspace{display:flex;flex-direction:column;min-width:0;padding:var(--eac-s3) var(--eac-s4) var(--eac-s5);border:1px solid var(--eac-divider);border-radius:var(--eac-r);background:var(--eac-subtle)}
 .eac-panels{display:flex;align-items:center;gap:2px;min-height:36px;border-bottom:1px solid var(--eac-divider)}
 .eac-panel-tab{align-self:stretch;display:inline-flex;align-items:center;gap:6px;margin:0 0 -1px;padding:6px 12px;border:0;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;background:transparent;color:inherit;opacity:.68;cursor:pointer;font-size:var(--eac-fs);font-weight:500;white-space:nowrap;transition:opacity .14s ease,border-color .14s ease,background .14s ease}
@@ -354,6 +359,7 @@ html[data-dsh-go-island][data-dsh-go-island-form="panel"] .eac-quota-popover{pos
 }
 @container eac (max-width:640px){
   .eac-header{align-items:center}
+  .eac-global-summary,.eac-global-body{padding-inline:var(--eac-s3)}
   .eac-workspace{padding:var(--eac-s2) var(--eac-s3) var(--eac-s4)}
   .eac-panels{gap:var(--eac-s4)}.eac-panel-body{padding:var(--eac-s3) 0 0}
   .eac-section-head{flex-direction:column}.eac-section-actions{justify-content:flex-start}.eac-group-actions{justify-content:flex-start}

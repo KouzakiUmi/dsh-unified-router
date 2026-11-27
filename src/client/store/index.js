@@ -23,7 +23,7 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
   ])
   /** 本次读取的结果是否由快照提供（决定要不要推进「最新读取时刻」水位）。 */
   const snapshotServed = new WeakSet()
-  const sharedFields = ['statuses', 'checkin', 'automation', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
+  const sharedFields = ['statuses', 'checkin', 'automation', 'globalSettingsNotice', ...snapshotProviders.flatMap(item => item.snapshot.keep ?? [])]
   let state = restoredRouterState(provider, persisted)
   let disposed = false, readController = null, balanceController = null,
     planController = null, planPollTimer = null, planPollGeneration = 0, planRevision = 0,
@@ -609,22 +609,27 @@ export function createRouterStore(call, provider = PROVIDERS[0].id) {
       rememberChannel: target => cache.rememberChannel(target, state),
     }))),
     message(notice) { publish({ notice }) },
-    async setAutomationConfig(patch) {
+    clearGlobalSettingsNotice() { publish({ globalSettingsNotice: '' }) },
+    async setAutomationConfig(patch, { globalNotice = false } = {}) {
       if (disposed || pending.has('automation')) return false
+      const noticeKey = globalNotice ? 'globalSettingsNotice' : 'notice'
       const controller = new AbortController()
       writes.add(controller)
       const release = pending.enter('automation')
       writeRevision++
+      if (globalNotice) publish({ globalSettingsNotice: '' })
       try {
         const value = await request('automation.setConfig', patch, controller.signal)
         if (!disposed) {
+          // 保存期间开始的读取也可能带着写入前的快照。
+          writeRevision++
           const next = automationFrom(value)
-          publish({ ...(next ? { automation: next } : {}), notice: '自动化设置已保存。' })
+          publish({ ...(next ? { automation: next } : {}), [noticeKey]: globalNotice ? '全局设置已保存。' : '自动化设置已保存。' })
           if (sync.hasSnapshots()) void sync.readHostSnapshots()
         }
         return true
       } catch {
-        if (!disposed) publish({ notice: '自动化设置保存失败。' })
+        if (!disposed) publish({ [noticeKey]: globalNotice ? '全局设置保存失败，请重试。' : '自动化设置保存失败。' })
         return false
       } finally {
         writes.delete(controller)

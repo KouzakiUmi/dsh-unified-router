@@ -29,6 +29,7 @@ export const number = value => typeof value === 'number' && Number.isFinite(valu
 export const initial = provider => ({ provider, accounts: [], models: [], balances: [], statuses: {}, selected: '', loadFailed: false,
   checkin: null,
   automation: null,
+  globalSettingsNotice: '',
   login: null, pendingDelete: null, params: {}, plan: null, planStale: false, planError: false,
   // WorkBuddy 是自管多账号快照：accounts 逐账号、models 全局、loginUrl 属登录窗口。
     workbuddy: { accounts: [], models: [], loginUrl: '' }, workbuddyReady: false, workbuddyStale: false, workbuddyError: false, workbuddyLoginUrl: null,

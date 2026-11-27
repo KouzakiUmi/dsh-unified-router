@@ -37,7 +37,7 @@ function fixture({ autoCollect = false, snapshotFile, balance, testDeps, request
 
 test('额度推送撤回已确认没有账号的来源，保留缺失或陈旧的来源', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'router-quota-revoke-'))
-  t.after(() => rm(dir, { recursive: true, force: true }))
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 3 }))
   const snapshotFile = join(dir, 'settings.json')
   const at = Date.now()
   await writeFile(snapshotFile, JSON.stringify({ version: 1, entries: {
@@ -55,6 +55,30 @@ test('额度推送撤回已确认没有账号的来源，保留缺失或陈旧�
     assert.equal((await host.call('automation.setConfig', { quotaIngest: true })).result.ok, true)
     assert.deepEqual(revoked, ['unified-router-codearts'])
   } finally { host.dispose() }
+})
+
+test('全局设置保存完成前同步宿主快照：已有和冷启动快照都能立即读到新值', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-automation-snapshot-'))
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 3 }))
+  const resource = 'automation/automation.status'
+  for (const existing of [true, false]) {
+    const snapshotFile = join(dir, `settings-${existing}.json`)
+    if (existing) await writeFile(snapshotFile, JSON.stringify({ version: 1, entries: {
+      [resource]: { at: 100, value: { config: { quotaIngest: false } } },
+    } }))
+    const host = fixture({ snapshotFile, testDeps: { automationFile: join(dir, `auto-${existing}.json`) } })
+    try {
+      const before = (await host.call('settings.snapshot', {})).result.value
+      assert.equal(Boolean(before.entries[resource]), existing)
+      const write = (await host.call('automation.setConfig', { quotaIngest: true })).result
+      assert.equal(write.value.config.quotaIngest, true)
+      const after = (await host.call('settings.snapshot', { cursor: before.cursor })).result.value
+      assert.notEqual(after.cursor, before.cursor)
+      assert.equal(after.entries[resource].value.config.quotaIngest, true)
+      assert.equal((await host.call('automation.setConfig', { quotaIngest: false })).result.ok, true)
+      assert.equal((await host.call('settings.snapshot', { cursor: after.cursor })).result.value.entries[resource].value.config.quotaIngest, false)
+    } finally { host.dispose() }
+  }
 })
 
 test('额度账号 RPC 仅返回命中的会话和模型，不写入设置快照，且经宿主授权', async () => {
@@ -89,7 +113,7 @@ test('额度账号 RPC 仅返回命中的会话和模型，不写入设置快照
     assert.doesNotMatch(JSON.stringify(await f.call('settings.snapshot', {})), /session-one|account-two/)
     reject = 403
     assert.equal((await f.call('quota.account', route)).result.error.code, 'unified-router/forbidden')
-  } finally { f.dispose(); await rm(dir, { recursive: true, force: true }) }
+  } finally { f.dispose(); await rm(dir, { recursive: true, force: true, maxRetries: 3 }) }
 })
 test('安装清单仅提供 Web 设置客户端，没有原生胶囊或面板贡献', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))

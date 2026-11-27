@@ -29,14 +29,14 @@ function renderForm(form, ui, key, scope) {
   })
 }
 
-/** 单选分段控件（智能选号模式）：复用参数编辑器的 .eac-tier 外观与 aria-pressed。 */
+/** 单选分段控件：复用参数编辑器的 .eac-tier 外观与 aria-pressed。 */
 function renderOptionTiers({ options, value, name }, ui, disabled) {
   // 返回数组：Row 的 controls 按数组展开（单个元素没有 length 会被丢掉）。
   return [h('div', { className: 'eac-tier-row', role: 'group', 'aria-label': name },
     options.map(option => h('button', {
-      key: option.value, type: 'button', className: 'eac-tier',
+      key: String(option.value), type: 'button', className: 'eac-tier',
       'aria-pressed': option.value === value, disabled,
-      onClick: () => ui.act(...option.call),
+      onClick: () => { if (option.value !== value) ui.act(...option.call) },
     }, option.label)))]
 }
 
@@ -244,6 +244,24 @@ function ModelsPanel({ groups }, ui) {
   })
 }
 
+const CHANNEL_AUTOMATION_MODES = [
+  { value: null, label: '跟随全局' },
+  { value: true, label: '单独开启' },
+  { value: false, label: '单独关闭' },
+]
+
+function channelAutomationRow(provider, config, { id, name, field, actions }) {
+  const override = config?.providers?.[provider.id]?.[field]
+  const value = config ? override ?? null : undefined
+  return {
+    id, name, value, actions, scope: 'automation', disabled: !config,
+    meta: !config ? '正在读取设置…' : value === null ? `当前按全局${config[field] ? '开启' : '关闭'}` : undefined,
+    options: CHANNEL_AUTOMATION_MODES.map(option => ({
+      ...option, call: ['setAutomationConfig', { provider: provider.id, [field]: option.value }],
+    })),
+  }
+}
+
 function automationRowsFor(provider, state) {
   const id = provider.id
   // `autoCheckin` 是显式覆盖位：签到（automation 任务）与「一键领取每日额度」
@@ -256,42 +274,13 @@ function automationRowsFor(provider, state) {
   const capabilities = state.automation?.tasks?.[id]?.capabilities
   const supportsRewards = capabilities?.claimRewards ?? (provider.caps?.onboarding === true && provider.caps?.completeTasks !== true || provider.caps?.claimRewards === true)
   const supportsTasks = capabilities?.completeTasks ?? (provider.caps?.completeTasks === true)
-  const overrides = state.automation?.config?.providers?.[id] ?? {}
+  const config = state.automation?.config
   // 账号列表的位置由渠道自己说（`managed.js` / `workbuddy.js` 各提供 `accountsOf`）。
   const accounts = provider.pack ? state.accounts : (provider.accountsOf?.(state) ?? [])
   const eligible = accounts.some(account => account.enabled !== false && (provider.pack || account.signedIn))
   const query = mode => ({ label: '查询状态', call: ['queryAutomationTask', id, mode], disabled: !eligible, scope: taskScope(id, mode) })
-  const inherited = field => !state.automation ? '待读取' : typeof overrides[field] === 'boolean' ? '本渠道单独设置' : '跟随全局设置'
   const scope = 'automation'
   const rows = []
-  // 全局开关（只在一个渠道卡渲染，避免每张卡重复）：向 subusage 推送额度。
-  // 默认关闭——接收端一次会被塞入多张卡，开与不开由用户决定。
-  if (provider.caps?.quotaIngestToggle === true) {
-    const enabled = state.automation?.config?.quotaIngest === true
-    rows.push({ id: 'quota-ingest', name: '向 subusage 推送额度', scope,
-      meta: enabled ? '按渠道分卡推送 · 与额度刷新同频（60 秒）' : '关闭 · 不向 subusage 推送',
-      value: enabled,
-      options: [
-        { value: false, label: '关' },
-        { value: true, label: '开' },
-      ].map(option => ({ ...option, call: ['setAutomationConfig', { quotaIngest: option.value }] })) })
-  }
-  if (state.automation?.quotaProviders?.includes(id)) {
-    // 智能选号模式（全局单选）：分段控件代替旧的布尔开关。
-    // manual = 手动顺序；free = 免费额度优先；expiring = 临期优先（兼容旧开关）；
-    // sticky = 缓存优先（同一账号用到额度用尽或受限才切换）。
-    const mode = state.automation.config?.routingMode ?? 'manual'
-    rows.push({ id: 'routing-mode', name: '智能选号模式', scope,
-      meta: { manual: '手动顺序（默认）· 按账号列表顺序', free: '免费额度优先 · 先用每日与赠送额度',
-        expiring: '临期额度优先 · 每日 → 赠送 → 7 天内到期', sticky: '缓存优先 · 同一账号用尽或受限才切换' }[mode],
-      value: mode,
-      options: [
-        { value: 'manual', label: '手动' },
-        { value: 'free', label: '免费优先' },
-        { value: 'expiring', label: '临期优先' },
-        { value: 'sticky', label: '缓存优先' },
-      ].map(option => ({ ...option, call: ['setAutomationConfig', { routingMode: option.value }] })) })
-  }
   // 默认输出上限（分渠道）：只在上游没给输出规格时生效（目录 max_output 缺失/为 null
   // 的模型，如云知声 u2-med）。上游有真实规格就用上游值，这里只补缺。
   // 只有自带模型设置文件的三类渠道会消费这个值（API Key、自管、WorkBuddy）；
@@ -310,69 +299,20 @@ function automationRowsFor(provider, state) {
       { value: 128_000, label: '128K' },
       { value: 256_000, label: '256K' },
     ].map(option => ({ ...option, call: ['setAutomationConfig', { provider: id, defaultMaxOutput: option.value || null }] })) })
-  const guardEnabled = automationEffective(state, id, 'cotLoopGuard')
-  rows.push({
-    id: 'cot-loop-guard', name: '思考循环保护', scope,
-    meta: inherited('cotLoopGuard'),
-    enabled: guardEnabled,
-    toggle: ['setAutomationConfig', { provider: id, cotLoopGuard: !guardEnabled }],
-    toggleLabel: `${provider.title} 思考循环保护`,
-    actions: typeof overrides.cotLoopGuard === 'boolean'
-      ? [{ label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, cotLoopGuard: null }] }] : undefined,
-  })
-  if (supportsCheckin) {
-    const enabled = automationEffective(state, id, 'autoCheckin')
-    rows.push({
-      id: 'auto-checkin', name: '自动每日签到', scope,
-      meta: inherited('autoCheckin'),
-      enabled,
-      toggle: ['setAutomationConfig', { provider: id, autoCheckin: !enabled }],
-      toggleLabel: `${provider.title} 自动每日签到`,
-      actions: [query('checkin'), typeof overrides.autoCheckin === 'boolean'
-        ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCheckin: null }] } : null],
-    })
-  }
-  if (supportsRewards) {
-    const enabled = automationEffective(state, id, 'autoClaimRewards')
-    rows.push({
-      id: 'auto-claim-rewards', name: '自动领取奖励', scope,
-      meta: inherited('autoClaimRewards'),
-      enabled,
-      toggle: ['setAutomationConfig', { provider: id, autoClaimRewards: !enabled }],
-      toggleLabel: `${provider.title} 自动领取奖励`,
-      actions: [
-        { label: '立即领取', call: ['runAutomationTask', id, 'claimRewards'], disabled: !eligible, scope: taskScope(id, 'claimRewards') },
-        query('claimRewards'),
-        typeof overrides.autoClaimRewards === 'boolean'
-          ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoClaimRewards: null }] } : null,
-      ],
-    })
-  }
-  if (supportsTasks) {
-    const enabled = automationEffective(state, id, 'autoCompleteTasks')
-    rows.push({
-      id: 'auto-complete-tasks', name: '自动完成任务', scope,
-      meta: inherited('autoCompleteTasks'),
-      enabled,
-      toggle: ['setAutomationConfig', { provider: id, autoCompleteTasks: !enabled }],
-      toggleLabel: `${provider.title} 自动完成任务`,
-      actions: [
-        { label: '立即执行', call: ['runAutomationTask', id, 'completeTasks'], disabled: !eligible, scope: taskScope(id, 'completeTasks') },
-        query('completeTasks'),
-        typeof overrides.autoCompleteTasks === 'boolean'
-          ? { label: '恢复跟随全局', call: ['setAutomationConfig', { provider: id, autoCompleteTasks: null }] } : null,
-      ],
-    })
-  }
+  const add = (id, name, field, actions) => rows.push(channelAutomationRow(provider, config, { id, name, field, actions }))
+  const run = (mode, label) => ({ label, call: ['runAutomationTask', id, mode], disabled: !eligible, scope: taskScope(id, mode) })
+  add('cot-loop-guard', '思考循环保护', 'cotLoopGuard')
+  if (supportsCheckin) add('auto-checkin', '自动每日签到', 'autoCheckin', [query('checkin')])
+  if (supportsRewards) add('auto-claim-rewards', '自动领取奖励', 'autoClaimRewards', [run('claimRewards', '立即领取'), query('claimRewards')])
+  if (supportsTasks) add('auto-complete-tasks', '自动完成任务', 'autoCompleteTasks', [run('completeTasks', '立即执行'), query('completeTasks')])
   return rows
 }
 
-function ChannelPanel(rows, ui, provider, state) {
-  const autoRows = provider ? automationRowsFor(provider, state) : []
-  const renderRows = list => ListBox({
+function renderSettingRows(list, ui, keyPrefix, defaultScope) {
+  return ListBox({
     children: list.map(row => {
-      const key = `${ui.providerId}:channel:${row.id}`
-      const scope = row.scope || `channel:${ui.providerId}`
+      const key = `${keyPrefix}:${row.id}`
+      const scope = row.scope || defaultScope
       const rowDisabled = ui.loading || ui.isPending(scope)
       const expandable = !!(row.form || row.groups?.length)
       return Row({
@@ -380,8 +320,11 @@ function ChannelPanel(rows, ui, provider, state) {
         metric: row.metric ? Metric({ ...row.metric, label: row.name }) : undefined,
         switchControl: row.toggle ? Switch({ checked: row.enabled ?? false, disabled: rowDisabled || row.enabled === undefined,
           label: row.toggleLabel || row.name, onChange: () => ui.act(...row.toggle) }) : undefined,
-        controls: row.options ? renderOptionTiers(row, ui, rowDisabled)
-          : row.href ? [h('a', { className: 'eac-button', href: row.href, target: '_blank', rel: 'noopener noreferrer' }, '打开控制台')] : renderActions(row.actions, ui, scope),
+        controls: [
+          ...(row.options ? renderOptionTiers(row, ui, rowDisabled || row.disabled === true) : []),
+          ...(row.href ? [h('a', { className: 'eac-button', href: row.href, target: '_blank', rel: 'noopener noreferrer' }, '打开控制台')] : []),
+          ...renderActions(row.actions, ui, scope),
+        ],
         moreLabel: expandable ? (row.moreLabel || '配置') : undefined, expanded: ui.more[key] === true,
         onToggle: () => ui.act('toggleMore', key),
         detail: expandable ? [
@@ -391,6 +334,11 @@ function ChannelPanel(rows, ui, provider, state) {
       })
     }),
   })
+}
+
+function ChannelPanel(rows, ui, provider, state) {
+  const autoRows = provider ? automationRowsFor(provider, state) : []
+  const renderRows = list => renderSettingRows(list, ui, `${ui.providerId}:channel`, `channel:${ui.providerId}`)
   return Section({
     title: '渠道设置',
     children: [

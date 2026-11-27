@@ -28,6 +28,12 @@ const panelsFor = id => {
   return available ? SETTINGS_PANELS.filter(panel => available.includes(panel.id)) : SETTINGS_PANELS
 }
 
+function settingsNotice(text, dismiss) {
+  return text ? h('div', { className: 'eac-notice', role: 'status', 'aria-live': 'polite' },
+    h('p', null, text),
+    h('button', { type: 'button', className: 'eac-notice-close', 'aria-label': '关闭提示', onClick: dismiss }, '×')) : null
+}
+
 export function Settings({ ctx }) {
   const storeRef = React.useRef(null)
   const [state, setState] = React.useState(() => restoredRouterState(rememberedProvider()))
@@ -120,6 +126,7 @@ export function Settings({ ctx }) {
                 h('span', { className: 'eac-provider-dot', 'data-tone': toneFor(value) }),
                 value ? value.cardMeta ?? (value.closed ? '已关闭' : `${value.totalAccounts ?? value.accounts ?? '—'} 账号 · ${value.models ?? '—'} 模型`) : '待读取'))
           }))))),
+    GlobalSettingsPanel(state, ui, settingsNotice(state.globalSettingsNotice, () => act('clearGlobalSettingsNotice'))),
     h('div', { className: 'eac-workspace', 'data-panel': panel, role: 'tabpanel', id: 'eac-provider-workspace', 'aria-labelledby': `eac-provider-${state.provider}` },
       h('header', { className: 'eac-header' },
         h('h2', { className: 'eac-title' }, provider.title),
@@ -134,9 +141,7 @@ export function Settings({ ctx }) {
             onKeyDown: event => tabKeys(event, index, panels.map(value => value.id), setPanel),
             onClick: () => setPanel(item.id) }, item.label))),
       h('div', { className: 'eac-panel-body', role: 'tabpanel', id: `eac-panel-${panel}`, 'aria-labelledby': `eac-tab-${panel}` },
-        state.notice ? h('div', { className: 'eac-notice', role: 'status', 'aria-live': 'polite' },
-          h('p', null, state.notice),
-          h('button', { type: 'button', className: 'eac-notice-close', 'aria-label': '关闭提示', onClick: () => act('message', '') }, '×')) : null,
+        settingsNotice(state.notice, () => act('message', '')),
         renderSettingsPanel(panel, provider, state, ui)))
   )
 }

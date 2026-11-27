@@ -164,7 +164,7 @@ test('resume 台账：idle 且收件箱为空时自动续跑、受上限保护�
 
 test('web-host 集成：cot-loop-guard 统一挂载到 llm/stream 覆盖所有 provider，并受分渠道开关动态控制', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'cot-guard-host-'))
-  t.after(() => rm(dir, { recursive: true, force: true }))
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 3 }))
   const listeners = new Map()
   const routes = new Map()
   const cleanup = []

@@ -306,7 +306,8 @@ test('状态灯使用真实配色档；状态未知时渠道开关禁用且文�
   const toAdvanced = () => { const tab = treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced'); tab.props.onClick(); return render() }
   tree = toAdvanced()
   assert.equal(treeNodes(tree).find(n => n.props['aria-label'] === '关闭渠道').props.disabled, false)
-  assert.equal(byText(tree, '重新读取').length, 0, '渠道分区不重复提供页头已有的全局刷新')
+  assert.equal(byText(treeNodes(tree).find(n => n.props.id === 'eac-panel-advanced'), '重新读取').length, 0,
+    '渠道分区不重复提供页头已有的渠道刷新')
   // 状态读不到：按钮禁用，避免显示「打开渠道」却发出关闭指令。
   host.overrides.set('provider.status', async () => ({ ok: true, value: { statuses: {} } }))
   byText(tree, '刷新')[0].props.onClick()
@@ -359,14 +360,15 @@ test('渠道卡片十二张按 Agent / API 分组排布（含 Step Plan 与已�
     assert.equal(host.calls.filter(c => c.method === 'automation.run').length, 1)
     assert.equal(host.calls.find(c => c.method === 'automation.query').payload.mode, 'claimRewards')
 
-    // 签到是**独立能力位**：Raccoon 渠道分区出现「自动每日签到」开关，
+    // 签到是**独立能力位**：Raccoon 渠道分区出现「自动每日签到」三选一，
     // 而没有 `credits.claimAll` 的一键领取入口（靠 `dailyReward: false` 区分）。
     treeNodes(render()).find(n => n.props['aria-label'] === '切换到 Raccoon').props.onClick()
     await tick()
     treeNodes(render()).find(n => n.props.id === 'eac-tab-advanced')?.props.onClick()
     await tick()
-    const raccoonSwitches = treeNodes(render()).filter(n => n.props?.role === 'switch').map(n => n.props['aria-label'])
-    assert.ok(raccoonSwitches.includes('Raccoon 自动每日签到'), `缺少签到开关：${raccoonSwitches.join(', ')}`)
+    const channel = treeNodes(render()).find(n => n.props.id === 'eac-panel-advanced')
+    const checkin = treeNodes(channel).find(n => n.props.role === 'group' && n.props['aria-label'] === '自动每日签到')
+    assert.deepEqual(treeNodes(checkin).filter(n => n.type === 'button').map(n => n.children[0]), ['跟随全局', '单独开启', '单独关闭'])
   } finally { store.dispose(); react.dispose() }
 })
 
