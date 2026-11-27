@@ -1144,6 +1144,32 @@ test('订阅限定模型挂独立徽标，与倍率/免费徽标并存且不互�
   react.dispose()
 })
 
+test('CodeArts 模型列表渲染单倍率和多档区间徽标，不改模型名', async () => {
+  const { module, react } = loadClient(reactHarness(), {
+    localStorage: { getItem: key => key === 'eac-unified-router-last-provider' ? 'codearts' : null },
+  })
+  const host = hostFixture()
+  let Settings
+  const ctx = { slots: { inject(_slot, run) { run() }, register(_spec, view) { Settings = view } }, connection: { rpc: { call(_p, _s, req, signal) { return host.call(req.method, req.payload, signal) } } } }
+  const modelRows = [
+    { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', rate: { label: 'x0.08', tone: 'neutral', multiplier: 0.08 } },
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', rate: { label: 'x0.09–x0.18', tone: 'neutral' } },
+    { id: 'unknown', name: '倍率未知' },
+  ]
+  host.overrides.set('managed.models', async ({ provider }) => ({ ok: true, value: { provider, source: 'remote', models: provider === 'codearts' ? modelRows : [] } }))
+  module.apply(ctx)
+  const render = () => { react.begin(); const tree = Settings({ ctx }); react.flush(); return tree }
+  try {
+    render(); await tick()
+    treeNodes(render()).find(n => n.props.id === 'eac-tab-models').props.onClick()
+    render(); await tick()
+    const nodes = treeNodes(render())
+    const badges = nodes.filter(n => n.props.className === 'eac-tag').map(n => n.children[0])
+    assert.deepEqual(badges.filter(label => /^x|免费/.test(label)), ['x0.08', 'x0.09–x0.18'])
+    assert.ok(nodes.some(n => n.children.includes('DeepSeek V4.1 Flash')))
+  } finally { react.dispose() }
+})
+
 test('模型目录真拉上游：进模型分区自动补拉一次，兜底/远端来源与刷新按钮如实反映', async () => {
   // 默认渠道 Raccoon 是家族卡（首屏后会对两侧各补拉一次）；这个用例断言单渠道的
   // 补拉次数，把首屏直接落在 TRAE 上。

@@ -42,6 +42,7 @@ const { publicManagedModel } = await import('../lib/managed-channel.js')
 const { parseCodeArtsBuiltinModels } = await import('../lib/managed-providers/codearts.js')
 const { createSensenovaAdapter } = await import('../vendor/sensenova-token-plan/llm-adapter.js')
 const { publicResult } = await import('../lib/web-host.js')
+const { viewRate } = await import('../lib/channel-contract.js')
 
 process.on('exit', () => hooks.deregister())
 
@@ -103,6 +104,45 @@ const FREE = { text: { en: 'Free', zh: '免费' }, tone: 'success' }
 const rate = value => ({ text: { en: `x${value}`, zh: `x${value}` }, tone: 'neutral' })
 const promo = value => ({ text: { en: `x${value}`, zh: `x${value}` }, tone: 'info' })
 const reference = value => ({ text: { en: `Ref. x${value}`, zh: `参考 x${value}` }, tone: 'neutral' })
+
+test('CodeArts：目录 credit 数组在两个入口保留同一倍率或实际费率范围', async () => {
+  const spec = { id: 'codearts', title: 'CodeArts', baseUrl: 'https://example.invalid/v1' }
+  const fixture = [
+    { model_id: 'fixed', credit: [{ ratio_display: '0.7x' }, { ratio_display: 'x0.70' }] },
+    { model_id: 'peak-offpeak', credit: [{ ratio_display: '0.18x' }, { ratio_display: '0.09x', before_display_ratio: '0.18x' }] },
+    { model_id: 'mixed-zero', credit: [{ ratio_display: '0×' }, { ratio_display: '0.12x' }] },
+    { model_id: 'discount', credit: [{ ratio_display: '0.08x', before_display_ratio: '0.16x' }] },
+    { model_id: 'legacy', credit: { ratio_display: '0.62x' } },
+    { model_id: 'free', credit: [{ ratio_display: '0x' }] },
+    { model_id: 'unknown', credit: [{ ratio: 0, ratio_display: '2026-11' }, { ratio_display: '0x promotional' }, { ratio_display: '-1x' }, { ratio_display: '50%' }] },
+    { model_id: 'incomplete-zero', credit: [{ ratio_display: '0x' }, { ratio_display: '' }] },
+  ]
+  const normalized = parseCodeArtsBuiltinModels({ data: { builtinModels: fixture } }).map(publicManagedModel)
+  const rows = await createManagedModelSettings(undefined, spec.id).list(normalized)
+  const { adapter } = await createManagedAdapter({ spec, rows })
+  const settings = publicResult('managed.models', { provider: spec.id, models: rows })
+  const restored = publicResult('managed.models', settings)
+  assert.deepEqual(restored.models.map(m => m.rate), settings.models.map(m => m.rate), '快照恢复保留倍率范围')
+  const listed = await adapter.listModels(spec.id)
+  const badgeOf = id => listed.find(model => model.id === id)?.badge
+  const rateOf = id => viewRate(settings.models.find(model => model.id === id)?.rate)
+  for (const [id, label, tone, multiplier] of [
+    ['fixed', 'x0.70', 'neutral', 0.7],
+    ['peak-offpeak', 'x0.09–x0.18', 'neutral', undefined],
+    ['mixed-zero', 'x0.00–x0.12', 'neutral', undefined],
+    ['discount', 'x0.08', 'info', 0.08],
+    ['legacy', 'x0.62', 'neutral', 0.62],
+    ['free', '免费', 'success', undefined],
+  ]) {
+    assert.equal(badgeOf(id)?.text.zh, label, id)
+    assert.deepEqual(rateOf(id), { label, tone, ...(multiplier === undefined ? {} : { multiplier }) }, id)
+  }
+  for (const id of ['unknown', 'incomplete-zero']) {
+    assert.equal(badgeOf(id), undefined, id)
+    assert.equal(rateOf(id), null, id)
+  }
+  assert.equal(rows.find(row => row.id === 'mixed-zero').free, false, '不能按某一档为零把模型路由到免费池')
+})
 
 test('modelRateBadge（lib 版）与 channel-pack 同规则：免费/计费/促销/参考/未知', () => {
   // 未知必须是 undefined，不能落成 0（0 = 免费，会谎报）。

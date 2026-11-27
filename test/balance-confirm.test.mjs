@@ -138,6 +138,7 @@ test('领取奖励：额度增长即确认（claimed + points，主记录不被�
   const main = await seed(dir, ['astudio', 'claimRewards', '2026-11-20'], 'a1', {
     id: 'a1', outcome: { kind: 'pending' }, baseline: 400,
   })
+  const changes = []
   const tasks = createAutoTasks({
     dir,
     adapters: new Map([['astudio', {
@@ -148,13 +149,14 @@ test('领取奖励：额度增长即确认（claimed + points，主记录不被�
     }]]),
     now: () => NOW,
     readBalance: async () => 500,
+    onChange: (provider, mode, outcome) => { changes.push([provider, mode, outcome.kind]) },
   })
   try {
+    await tasks.tick()
+    assert.deepEqual(changes, [['astudio', 'claimRewards', 'claimed']], '自动核实也应通知刷新')
     const rows = await tasks.query('astudio', 'claimRewards')
-    assert.equal(rows[0].outcome.kind, 'claimed')
-    assert.equal(rows[0].outcome.claimed, 1)
-    assert.equal(rows[0].outcome.points, 100)
-    assert.equal(rows[0].verified, true)
+    assert.equal(changes.length, 1, '再次查询不重复通知已确认记录')
+    assert.deepEqual(rows[0].outcome, { kind: 'claimed', claimed: 1, points: 100 })
     assert.equal(JSON.parse(await readFile(main, 'utf8')).outcome.kind, 'pending', '核实不覆盖预留')
     const confirmed = JSON.parse(await readFile(main + '.confirmed', 'utf8'))
     assert.equal(confirmed.outcome.points, 100)

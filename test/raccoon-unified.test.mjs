@@ -40,19 +40,25 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
     params: { context_window: 256_000, max_tokens: 63_999 }, tags: [],
   })) }] } })
   const freeCatalog = catalogRows(['sn-a', 'sn-b'], 0)
-  const proCatalog = catalogRows(['sn-a-p', 'sn-c-p'], 0.75)
+  const proCatalog = catalogRows(['sn-a-p', 'sn-c-p', 'sn-d'], 0.75)
   const chatBodies = []
   let freeQuotaFails = true
+  let freeCatalogFails = false
   globalThis.fetch = async (url, init = {}) => {
     const target = String(url)
     const token = String(init.headers?.Authorization ?? '')
     if (target.includes('model_catalog')) {
+      if (freeCatalogFails && token.endsWith('free-token')) return Response.json({}, { status: 503 })
       const payload = token.endsWith('free-token') ? freeCatalog : token.endsWith('pro-token') ? proCatalog : null
       if (payload === null) throw new Error(`unexpected catalog token: ${token}`)
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (target.includes('chat/completions')) {
       chatBodies.push({ body: JSON.parse(init.body), token })
+      const model = chatBodies.at(-1).body.model
+      if (/^sn-[cd](?:-p)?$/.test(model) && (!token.endsWith('pro-token') || !['sn-c-p', 'sn-d'].includes(model))) {
+        return Response.json({ error: { message: 'model not found' } }, { status: 404 })
+      }
       if (token.endsWith('free-token') && freeQuotaFails) {
         return new Response(JSON.stringify({ error: { code: '402', message: '积分不足' } }),
           { status: 402, headers: { 'content-type': 'application/json' } })
@@ -95,7 +101,7 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
   try {
     let rpc
     const { mountBackend, mergeUnifiedRaccoonCatalogs } = await import('../lib/backend.js')
-    const pool = mountBackend(ctx, call => { rpc = call }, { isRaccoonUnifiedModels: () => unifiedFlag })
+    const pool = mountBackend(ctx, call => { rpc = call }, { catalogDir: scratch, isRaccoonUnifiedModels: () => unifiedFlag })
 
     // ---- 合并纯函数：免费优先、订阅去 -p 补差集、不覆盖同名 ----
     const merged = mergeUnifiedRaccoonCatalogs(
@@ -108,21 +114,41 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
 
     credentials.set('REF_FREE', { value: JSON.stringify({ access_token: 'free-token', office_identity: 'org' }) })
     credentials.set('REF_PRO', { value: JSON.stringify({ access_token: 'pro-token', office_identity: 'org' }) })
-    await pool.addAccount({ id: 'free-acc', provider: 'raccoon', nickname: '免费号', credentialRef: 'REF_FREE', enabled: true, refreshable: false, createdAt: 1, plan: 'free' })
     await pool.addAccount({ id: 'pro-acc', provider: 'raccoon', nickname: '订阅号', credentialRef: 'REF_PRO', enabled: true, refreshable: false, createdAt: 2, plan: 'pro' })
 
     const adapter = adapters.get('raccoon')
     const proAdapter = adapters.get('raccoon-pro')
 
+    // 只有订阅号时的缓存不能证明免费侧没有该模型；随后加入的免费号仍优先。
+    assert.equal((await rpc('model.refresh', { provider: 'raccoon' })).value.source, 'remote')
+    assert.equal((await adapter.options.nextAccount('sn-a', new Set())).accountId, 'pro-acc')
+    await pool.addAccount({ id: 'free-acc', provider: 'raccoon', nickname: '免费号', credentialRef: 'REF_FREE', enabled: true, refreshable: false, createdAt: 1, plan: 'free' })
+    freeCatalogFails = true
+    assert.equal((await rpc('model.refresh', { provider: 'raccoon' })).value.source, 'cached')
+    assert.equal((await adapter.options.nextAccount('sn-a', new Set())).accountId, 'free-acc')
+    freeCatalogFails = false
+
     // ---- 统一模式：合并目录 + 订阅面隐藏 + 提供方名不带后缀 ----
     assert.equal(adapter.providerInfo('raccoon').name, 'Raccoon', '合并后不显示「体验版」后缀')
     const refresh = await rpc('model.refresh', { provider: 'raccoon' })
     assert.equal(refresh.value.source, 'remote')
-    assert.deepEqual(adapter.listAllModels().map(model => model.id), ['sn-a', 'sn-b', 'sn-c'])
-    assert.deepEqual((await services.llm.listModels('raccoon')).map(model => model.id).sort(), ['sn-a', 'sn-b', 'sn-c'])
+    assert.deepEqual(adapter.listAllModels().map(model => model.id), ['sn-a', 'sn-b', 'sn-c', 'sn-d'])
+    assert.deepEqual((await services.llm.listModels('raccoon')).map(model => model.id).sort(), ['sn-a', 'sn-b', 'sn-c', 'sn-d'])
     assert.deepEqual(await services.llm.listModels('raccoon-pro'), [], '统一模式下订阅面从选择器隐藏')
     // 订阅独有的模型可用统一 id 解析（出站时才翻译回 -p）。
     assert.equal((await adapter.resolveModel('raccoon', 'sn-c')).id, 'sn-c')
+    for (const model of ['sn-c', 'sn-d']) {
+      for await (const _chunk of adapter.stream({ model, messages: [{ role: 'user', content: 'hi' }] })) {}
+    }
+    assert.deepEqual(chatBodies.map(row => [row.body.model, row.token.endsWith('pro-token')]), [['sn-c-p', true], ['sn-d', true]])
+    assert.equal(await adapter.options.nextAccount('sn-c', new Set(['pro-acc'])), undefined)
+    assert.equal(await adapter.options.nextAccount('sn-b', new Set(['free-acc'])), undefined)
+
+    freeCatalogFails = true
+    assert.equal((await rpc('model.refresh', { provider: 'raccoon' })).value.source, 'cached')
+    assert.equal((await adapter.options.nextAccount('sn-a', new Set())).accountId, 'free-acc', '免费目录读失败不应改用订阅号')
+    assert.equal((await adapter.options.nextAccount('sn-c', new Set())).accountId, 'pro-acc', '已知订阅独有模型沿用上次目录')
+    freeCatalogFails = false
 
     // ---- 跨侧选号：免费优先；出站翻译按账号套餐 ----
     const outbound = adapter.options.outboundModelId
@@ -159,8 +185,13 @@ test('统一免费与订阅模型：合并目录、跨侧选号、出站 -p 翻�
     assert.equal(adapter.providerInfo('raccoon').name, 'Raccoon 体验版', '关闭合并后恢复「Raccoon 体验版」')
     const proRefresh = await rpc('model.refresh', { provider: 'raccoon-pro' })
     assert.equal(proRefresh.value.source, 'remote')
-    assert.deepEqual((await services.llm.listModels('raccoon-pro')).map(model => model.id).sort(), ['sn-a-p', 'sn-c-p'])
+    assert.deepEqual((await services.llm.listModels('raccoon-pro')).map(model => model.id).sort(), ['sn-a-p', 'sn-c-p', 'sn-d'])
     assert.equal(await adapter.options.nextAccount('sn-a', new Set(['free-acc'])), undefined, '关闭后免费侧不再跨侧选号')
+    await rpc('model.refresh', { provider: 'raccoon' })
+    assert.deepEqual(adapter.listAllModels().map(model => model.id), ['sn-a', 'sn-b'])
+    unifiedFlag = true
+    assert.deepEqual(adapter.listAllModels().map(model => model.id), ['sn-a', 'sn-b', 'sn-c', 'sn-d'], '独立模式不覆盖统一目录缓存')
+    assert.equal((await adapter.options.nextAccount('sn-d', new Set())).accountId, 'pro-acc')
   } finally {
     unifiedFlag = false
     for (const stop of cleanup.reverse()) await stop()

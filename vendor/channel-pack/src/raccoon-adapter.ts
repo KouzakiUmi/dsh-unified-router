@@ -173,6 +173,8 @@ export interface RaccoonRemoteModel {
   statusNote?: string
   /** 逐模型托管思考档位；缺失 = 走旧方言两态。 */
   thinking?: RaccoonThinkingInfo
+  /** 统一目录中的已知套餐路由；缺失的 proId 表示未核实。 */
+  unifiedAvailability?: { freeExcluded?: true; proId?: string | null }
 }
 
 /**
@@ -221,11 +223,12 @@ export interface RaccoonAdapterOptions {
   /** 拉取远端模型目录；失败时适配器回退兜底表。 */
   fetchRemoteModels?: () => Promise<RaccoonRemoteModel[]>
   catalogFile?: string
+  catalogScope?: () => string
   /**
    * 出站模型 id 翻译（统一免费/订阅模型用）。
    *
    * `options.model` 是 DSH 选择的**统一 id**；请求体与限流标记要用**该账号
-   * 所属套餐的真实上游 id**（订阅账号 = `<统一 id>-p`，免费账号 = 原样）。
+   * 所属套餐的真实上游 id**（订阅账号优先使用原始目录 id，免费账号原样）。
    * 选号、Token 账本与调用账号记录仍用统一 id —— 它们描述「用户选了什么」，
    * 只有出站协议与限流键描述「上游怎么称呼它」。
    */
@@ -267,17 +270,35 @@ export class RaccoonAdapter extends LlmAdapter {
   /** 目录加载闸门：并发去重 + 失败/空结果冷却（见 `remote-catalog-gate.ts`）。 */
   private readonly catalogGate = new RemoteCatalogGate()
   private catalogSource: 'remote' | 'cached' | 'fallback' = 'fallback'
+  private catalogScope: string | undefined
 
   constructor(private readonly options: RaccoonAdapterOptions) {
     super()
     this.product = options.product ?? RACCOON
     this.fetchImpl = options.fetchImpl ?? fetch
-    const cached = readCatalogCache(options.catalogFile) as RaccoonRemoteModel[] | undefined
-    if (cached) {
-      this.remoteModels = cached
-      this.catalogSource = 'cached'
-    }
+    this.syncCatalogScope()
     this.fallbackIndex = new Map(this.product.fallbackModels.map((model) => [model.id, model]))
+  }
+
+  private syncCatalogScope(): string {
+    const scope = this.options.catalogScope?.() ?? ''
+    if (scope !== this.catalogScope) {
+      this.catalogScope = scope
+      this.remoteModels = readCatalogCache(this.catalogFileFor(scope), scope) as RaccoonRemoteModel[] | undefined
+      this.catalogSource = this.remoteModels ? 'cached' : 'fallback'
+      this.catalogGate.reset()
+    }
+    return scope
+  }
+
+  private catalogFileFor(scope: string): string | undefined {
+    const file = this.options.catalogFile
+    return file && scope ? `${file}.${scope}` : file
+  }
+
+  unifiedAvailability(modelId: string): RaccoonRemoteModel['unifiedAvailability'] {
+    this.syncCatalogScope()
+    return this.remoteModels?.find(model => model.id === modelId)?.unifiedAvailability
   }
 
   /**
@@ -300,14 +321,17 @@ export class RaccoonAdapter extends LlmAdapter {
    * 只有远端目录才是「上游全量」的证据，兜底表只是精选子集。
    */
   catalogStatus() {
+    this.syncCatalogScope()
     return { source: this.catalogSource }
   }
 
   isRemoteCatalog(): boolean {
+    this.syncCatalogScope()
     return this.remoteModels !== undefined && this.catalogSource === 'remote'
   }
 
   listAllModels(): readonly { id: string; name: string; contextWindow?: number; maxTokens?: number; defaultMaxTokens?: number; efforts?: readonly string[]; defaultEffort?: string; supportsImage?: boolean; stale?: boolean; staleReason?: string; rateBadge?: ModelRateBadge }[] {
+    this.syncCatalogScope()
     const source = this.remoteModels ?? this.product.fallbackModels.map(fallbackToRemote)
     return source.map((model) => {
       const fallback = this.fallbackIndex.get(model.id)
@@ -342,15 +366,16 @@ export class RaccoonAdapter extends LlmAdapter {
    * 并用 {@link RemoteCatalogGate} 的冷却挡住「每模型重试一次」的放大。
    */
   private async loadModels(): Promise<RaccoonRemoteModel[]> {
+    const scope = this.syncCatalogScope()
     if (this.remoteModels !== undefined) return this.remoteModels
     const fetchRemote = this.options.fetchRemoteModels
     if (fetchRemote !== undefined) {
       await this.catalogGate.run(async () => {
         const fetched = await fetchRemote()
-        if (fetched.length === 0) return false
+        if (this.syncCatalogScope() !== scope || fetched.length === 0) return false
         this.remoteModels = fetched
         this.catalogSource = 'remote'
-        await saveCatalogCache(this.options.catalogFile, fetched).catch(() => {})
+        await saveCatalogCache(this.catalogFileFor(scope), fetched, scope).catch(() => {})
         return true
       })
       if (this.remoteModels !== undefined) return this.remoteModels
@@ -360,19 +385,20 @@ export class RaccoonAdapter extends LlmAdapter {
 
   /** Refresh without clearing the last successful catalog. */
   async refreshRemoteModels() {
+    const scope = this.syncCatalogScope()
     const fetchRemote = this.options.fetchRemoteModels
     if (fetchRemote && await providerCatalogVisible(this.options.accountPool, this.product.id)) {
       let updated = false
       await this.catalogGate.run(async () => {
         const models = await fetchRemote()
-        if (!models.length) return false
+        if (this.syncCatalogScope() !== scope || !models.length) return false
         this.remoteModels = models
         this.catalogSource = 'remote'
         updated = true
-        await saveCatalogCache(this.options.catalogFile, models).catch(() => {})
+        await saveCatalogCache(this.catalogFileFor(scope), models, scope).catch(() => {})
         return true
       }, { force: true })
-      if (!updated && this.remoteModels) this.catalogSource = 'cached'
+      if (!updated && this.syncCatalogScope() === scope && this.remoteModels) this.catalogSource = 'cached'
     }
     return { count: this.remoteModels?.length ?? this.product.fallbackModels.length, source: this.catalogSource }
   }
@@ -498,6 +524,9 @@ export class RaccoonAdapter extends LlmAdapter {
     let credential = await this.options.resolveCredential(options.model)
     let accountId = credential === undefined ? undefined
       : await this.options.accountPool?.findAccountIdByCredential(this.product.id, credential.access_token)
+    if (credential === undefined && entry?.unifiedAvailability?.freeExcluded === true) {
+      throw new LlmError('raccoon: 此模型没有可用订阅账号', 'MISSING_CREDENTIAL')
+    }
     if (credential === undefined || isRaccoonExpired(credential)) {
       credential = await this.options.refresh(accountId || undefined)
         ?? await this.options.resolveCredential(options.model)

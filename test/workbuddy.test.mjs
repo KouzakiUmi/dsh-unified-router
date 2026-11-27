@@ -196,6 +196,7 @@ test('空索引快照返回 accounts:[] 与空登录地址，不发任何请求'
     await withFetch(usageStub(), async calls => {
       const snapshot = await manager.call('workbuddy.snapshot', { provider: 'workbuddy' })
       assert.deepEqual(snapshot.accounts, [])
+      assert.equal(snapshot.accountsEmptyConfirmed, true)
       assert.equal(snapshot.loginUrl, null)
       assert.equal(calls.length, 0, '没有账号不得发出网络请求')
       // 索引缺失但旧引用也没有：不写索引（不制造空数据）。
@@ -253,6 +254,7 @@ test('旧单账号损坏或采纳写盘失败时按空账号处理，不抛错�
   try {
     const snapshot = await first.call('workbuddy.snapshot', { provider: 'workbuddy' })
     assert.deepEqual(snapshot.accounts, [])
+    assert.equal(snapshot.accountsEmptyConfirmed, undefined, '旧账号凭据损坏不等于账号已删除')
     assert.equal(broken.values.has(WORKBUDDY_LEGACY_AUTH_REF), true, '损坏的旧凭据不静默销毁')
   } finally {
     first.dispose()
@@ -264,6 +266,7 @@ test('旧单账号损坏或采纳写盘失败时按空账号处理，不抛错�
   try {
     const snapshot = await second.call('workbuddy.snapshot', { provider: 'workbuddy' })
     assert.deepEqual(snapshot.accounts, [])
+    assert.equal(snapshot.accountsEmptyConfirmed, undefined, '迁移写入失败不等于账号已删除')
     assert.equal(failing.values.has(WORKBUDDY_LEGACY_AUTH_REF), true)
     const written = failing.operations.filter(([op, key]) => op === 'set' && key.startsWith(WORKBUDDY_ACCOUNT_REF_PREFIX))
     assert.equal(written.length, 1, '应尝试写一次新凭据引用')

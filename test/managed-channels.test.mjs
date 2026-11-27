@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createManagedChannelManager } from '../lib/managed-channel.js'
@@ -101,6 +101,50 @@ test('自管注册表登记 AStudio 与 CodeArts', () => {
   assert.equal(MANAGED_PROVIDERS.length, 2)
 })
 
+test('自管目录并发刷新：晚到的旧目录不得覆盖适配器、设置页和磁盘', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'managed-catalog-race-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const host = memoryHost()
+  const provider = 'demo'
+  host.store.set('UNIFIED_ROUTER_DEMO_ACCOUNTS', JSON.stringify([{ id: 'demo-12345678', credentialRef: 'UNIFIED_ROUTER_DEMO_ACCOUNT_AABBCC' }]))
+  host.store.set('UNIFIED_ROUTER_DEMO_ACCOUNT_AABBCC', '{"fixture":true}')
+  const jobs = [Promise.withResolvers(), Promise.withResolvers()]
+  const started = [Promise.withResolvers(), Promise.withResolvers()]
+  let i = 0
+  const file = join(dir, 'catalog.json')
+  const manager = createManagedChannelManager(host, {
+    id: provider, title: 'Demo', fetchModels() { const n = i++; started[n].resolve(); return jobs[n].promise },
+  }, { catalogFile: file, createAdapter: async ({ rows }) => ({ adapter: { rows } }) })
+  try {
+    const before = manager.call('managed.refreshModels', { provider }); await started[0].promise
+    const after = manager.call('managed.refreshModels', { provider }); await started[1].promise
+    jobs[1].resolve([{ id: 'new-model' }]); await after
+    jobs[0].resolve([{ id: 'old-model' }])
+    assert.equal((await before).models[0].id, 'new-model')
+    assert.equal((await manager.call('managed.models', { provider })).models[0].id, 'new-model')
+    assert.equal(host.registered[0].adapter.rows[0].id, 'new-model')
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).models[0].id, 'new-model')
+  } finally { manager.dispose() }
+})
+
+test('CodeArts 额度：空值不推导为满额或耗尽，零与已知用量保留', async () => {
+  const fetchUsage = (remain, used, tokenUsed) => codeartsSpec.fetchUsage({
+    getCredential: async () => ({ accessKey: 'fixture', secretKey: 'fixture', securityToken: 'fixture' }),
+    fetch: async url => new URL(url).pathname.includes('statistics') ? Response.json({ metrics: [{
+      name: 'usageTotalPackageCredit', package_credit_amount: '100', package_credit_remain: remain, package_credit_used: used,
+    }] }) : Response.json({ result: { daily_token_limit: '1000', daily_tokens_used: tokenUsed } }),
+  }, {})
+  const unknown = await fetchUsage(null, ' ', null)
+  assert.equal(unknown.balance, null)
+  assert.deepEqual(unknown.windows, [])
+  const actual = await fetchUsage(0, null, '0')
+  assert.equal(actual.balance, 0)
+  assert.deepEqual(actual.windows.map(w => [w.amount, w.used, w.balance]), [[100, 100, 0], [0, 0, 1000]])
+  const usageOnly = await fetchUsage(null, 20, null)
+  assert.equal(usageOnly.balance, null)
+  assert.equal(usageOnly.windows[0].used, 20)
+})
+
 test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭据脱敏/compat 模型参数', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'managed-channel-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
@@ -152,6 +196,8 @@ test('通用自管多账号管理器：导入/去重/备注/删号防复活/凭�
     const pasted = await manager.call('managed.importCredential', { provider: 'demo', credential: 'SECRET_PASTE_2' })
     assert.equal(pasted.signedIn, true)
     assert.notEqual(pasted.id, imported.id)
+    const manualPick = host.registered[0].adapter.selectTransport
+    for (let i = 0; i < 3; i++) assert.equal((await manualPick('demo-1', {})).accountId, imported.id)
     preferredAccount = pasted.id
     const pick = host.registered[0].adapter.selectTransport
     assert.equal((await pick('demo-1', {})).accountId, pasted.id)

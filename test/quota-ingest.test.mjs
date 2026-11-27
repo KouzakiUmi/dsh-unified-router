@@ -3,7 +3,7 @@
 // 关键口径：**按渠道拆源**（一渠道一张卡，卡标题 = 渠道名），条目才是账号名。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildQuotaIngestPayloads, quotaIngestResourceKeys } from '../lib/quota-ingest.js'
+import { buildQuotaIngestPayloads, emptyQuotaIngestSources, quotaIngestResourceKeys } from '../lib/quota-ingest.js'
 
 const NOW = Date.parse('2026-11-27T10:00:00Z')
 const build = resources => buildQuotaIngestPayloads(resources, { now: () => NOW })
@@ -52,23 +52,40 @@ test('自管渠道：balance 数字 + 渠道单位', () => {
   assert.equal(quota.amount.unitKind, 'credit')
 })
 
-test('WorkBuddy：额度窗口变成 window 元素（used/limit → percent）', () => {
+test('WorkBuddy：used 已是百分比，缺失时按绝对已用量换算', () => {
   const payload = card({
     'workbuddy/workbuddy.snapshot': { value: { accounts: [
       { id: 'workbuddy-1', name: 'WB', windows: [
-        { name: 'Credits', used: 31.13, limit: 500, resetsAt: '2026-11-30T15:59:59.000Z' },
+        { name: 'Total credits', used: 51, amount: 510, limit: 1000, resetsAt: '2026-11-30T15:59:59.000Z' },
+        { name: 'Tokens', used: null, amount: 31.13, limit: 500 },
+        { name: 'Percent only', used: 100, limit: null },
       ] },
     ] } },
   }, 'unified-router-workbuddy')
   const [quota] = payload.quotas
   assert.equal(quota.type, 'window')
-  assert.equal(quota.percent, 6.2)
+  assert.equal(quota.percent, 51)
+  assert.equal(payload.quotas[1].percent, 6.2)
+  assert.equal(payload.quotas[2].status, 'rate-limited')
   assert.equal(quota.resetsAt, '2026-11-30T15:59:59.000Z')
   assert.equal(quota.poolScope, 'independent')
 })
 
 test('没有可用额度时不产出卡（不伪造空成功）', () => {
   assert.deepEqual(build({}), [])
+})
+
+test('只撤回明确没有账号的渠道，查询失败或没有快照时保留旧卡', () => {
+  const resources = {
+    'codearts/managed.snapshot': { value: { accounts: [] }, at: NOW },
+    'astudio/managed.snapshot': { value: { accounts: [] }, stale: true, at: NOW },
+    'workbuddy/workbuddy.snapshot': { value: { accounts: [] }, at: NOW },
+    'trae/credits.balances': null,
+  }
+  assert.deepEqual(build(resources), [])
+  assert.deepEqual(emptyQuotaIngestSources(resources), ['unified-router-codearts'])
+  resources['workbuddy/workbuddy.snapshot'].value.accountsEmptyConfirmed = true
+  assert.deepEqual(emptyQuotaIngestSources(resources).sort(), ['unified-router-codearts', 'unified-router-workbuddy'])
 })
 
 test('非法数值（NaN / Infinity / 字符串 / 负数）一律不收', () => {
@@ -170,17 +187,20 @@ test('商汤池窗口用绝对 resetAt 与真实周期（5h / 7d）', () => {
   assert.equal(payload.quotas.find(quota => quota.type === 'plan').value, 'Free Plan')
 })
 
-test('超过 56 条时截断报 partial，且 amount 优先保留', () => {
+test('按接收端分别限制 16 个窗口和 40 个其他元素，截断标 partial', () => {
   const windows = Array.from({ length: 60 }, (_, index) => ({ id: `w-${index}`, used: 1, limit: 10 }))
   const payloads = build({
-    'trae/credits.balances': { value: { accounts: [{ accountId: 't1', nickname: 'T', balance: { total: 5 } }] } },
-    'agnes/apikey.snapshot': { value: { quota: { status: 'ready', updatedAt: NOW, windows }, balance: null } },
+    'trae/credits.balances': { value: { accounts: Array.from({ length: 41 }, (_, i) => ({ accountId: `t${i}`, balance: { total: 5 }, updatedAt: i === 40 ? NOW - 1000 : NOW })) } },
+    'agnes/apikey.snapshot': { value: { quota: { status: 'ready', updatedAt: NOW, windows, balance: 5 }, balance: null } },
   })
   const agnes = payloads.find(payload => payload.source === 'unified-router-agnes')
-  assert.equal(agnes.quotas.length, 56)
+  assert.equal(agnes.quotas.filter(quota => quota.type === 'window').length, 16)
+  assert.equal(agnes.quotas[0].type, 'amount')
   assert.equal(agnes.coverage, 'partial')
   const trae = payloads.find(payload => payload.source === 'unified-router-trae')
-  assert.ok(trae.quotas.some(quota => quota.type === 'amount'), '余额不能被窗口挤掉')
+  assert.equal(trae.quotas.length, 40)
+  assert.equal(trae.coverage, 'partial')
+  assert.equal(trae.receivedAt, NOW, '被截断项的数据时间不影响已推送结果')
 })
 
 test('receivedAt 取保留项里最旧的数据时间（新快照不能把旧数据洗成 fresh）', () => {

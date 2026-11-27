@@ -21,12 +21,19 @@ export function mergeUnifiedRaccoonCatalogs(
   freeModels: readonly RaccoonRemoteModel[],
   proModels: readonly RaccoonRemoteModel[],
 ): RaccoonRemoteModel[] {
-  const seen = new Set(freeModels.map(model => model.id))
-  const extra = proModels.flatMap(model => {
+  const proById = new Map<string, RaccoonRemoteModel>()
+  for (const model of proModels) {
     const id = model.id.endsWith('-p') ? model.id.slice(0, -2) : model.id
-    return seen.has(id) ? [] : [{ ...model, id }]
+    if (!proById.has(id)) proById.set(id, model)
+  }
+  const free = freeModels.map(model => {
+    const pro = proById.get(model.id)
+    proById.delete(model.id)
+    return { ...model, unifiedAvailability: pro ? { proId: pro.id } : proModels.length ? { proId: null } : {} }
   })
-  return [...freeModels, ...extra]
+  return [...free, ...[...proById].map(([id, model]) => ({
+    ...model, id, unifiedAvailability: { ...(freeModels.length ? { freeExcluded: true as const } : {}), proId: model.id },
+  }))]
 }
 
 export function mountRaccoon(
@@ -131,18 +138,22 @@ export function mountRaccoon(
   })
   /**
    * 统一模式选号：**免费侧优先**（沿用「宁可用免费模型也不误扣付费额度」），
-   * 免费侧无可用账号再用订阅账号。两侧的限流键各按本侧真实 id 记
-   * （免费 = 统一 id，订阅 = 统一 id + `-p`），与出站翻译一一对应。
+   * 仅挑模型目录允许的侧；限流键按该侧真实 id，与出站翻译一致。
    */
-  const raccoonUnifiedPick = async (modelId: string, exclude: ReadonlySet<string>) => {
-    if (modelId.length === 0) {
-      const free = await pool.getAvailableAccount(RACCOON.id, '', unionIds(exclude, raccoonOtherSideIds('free')))
-      return free ? { pick: free, wire: '' } : null
+  const unifiedRoute = (modelId: string): { free: boolean; proId: string | null } => {
+    const available = raccoonAdapter.unifiedAvailability(modelId)
+    return {
+      free: available?.freeExcluded !== true,
+      proId: available?.proId === null ? null : (available?.proId ?? (modelId ? `${modelId}-p` : null)),
     }
-    const free = await pool.getAvailableAccount(RACCOON.id, modelId, unionIds(exclude, raccoonOtherSideIds('free')))
-    if (free) return { pick: free, wire: modelId }
-    const pro = await pool.getAvailableAccount(RACCOON.id, `${modelId}-p`, unionIds(exclude, raccoonOtherSideIds('pro')))
-    return pro ? { pick: pro, wire: `${modelId}-p` } : null
+  }
+  const raccoonUnifiedPick = async (modelId: string, exclude: ReadonlySet<string>) => {
+    const route = unifiedRoute(modelId)
+    if (route.free) {
+      const free = await pool.getAvailableAccount(RACCOON.id, modelId, unionIds(exclude, raccoonOtherSideIds('free')))
+      if (free) return free
+    }
+    return route.proId === null ? null : pool.getAvailableAccount(RACCOON.id, route.proId, unionIds(exclude, raccoonOtherSideIds('pro')))
   }
   /**
    * 取某一侧的可用凭据（供远端目录使用）。
@@ -167,16 +178,16 @@ export function mountRaccoon(
     side: RaccoonSide,
     /** 另一侧（订阅面）的远端目录拉取；统一模式合并目录用。仅免费面注入。 */
     proRemoteFetch?: () => Promise<RaccoonRemoteModel[]>,
-  ) => registerRaccoonLlm(ctx, {
+  ): ReturnType<typeof registerRaccoonLlm> => registerRaccoonLlm(ctx, {
     catalogFile: catalogFile(product.id),
+    ...(side === 'free' ? { catalogScope: () => unified() ? 'unified-routing-v1' : '' } : {}),
     credentialRef: credentialRef(product.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {
       let available: Awaited<ReturnType<typeof pool.getAvailableAccount>> = null
       if (side === 'free' && unified()) {
         // 统一模式：跨两侧选号（免费优先），`modelId` 是统一 id（出站翻译由
         // `outboundModelId` 完成；这里只决定「用哪个账号」）。
-        const pick = await raccoonUnifiedPick(modelId ?? '', new Set<string>())
-        available = pick?.pick ?? null
+        available = await raccoonUnifiedPick(modelId ?? '', new Set<string>())
       } else {
         // 只从**单池里属于本侧**的账号取号（`modelId` 照透传：限流按模型记）。
         available = await pool.getAvailableAccount(
@@ -194,8 +205,10 @@ export function mountRaccoon(
       if (side === 'free' && unified()) {
         // 两侧分别核：能证明「全是限流」的那一侧给出精确的解禁时间；
         // 两侧都证不出（如凭据缺失）则静默走单凭据回退。
-        throwIfAllAccountsRateLimited(product, modelId, raccoonAccountsOf('free'))
-        throwIfAllAccountsRateLimited(product, `${modelId ?? ''}-p`, raccoonAccountsOf('pro'))
+        const route = unifiedRoute(modelId ?? '')
+        if (route.free) throwIfAllAccountsRateLimited(product, modelId, raccoonAccountsOf('free'))
+        if (route.proId !== null) throwIfAllAccountsRateLimited(product, route.proId, raccoonAccountsOf('pro'))
+        if (!route.free) return undefined // 默认单凭据没有套餐信息
       } else {
         throwIfAllAccountsRateLimited(product, modelId, raccoonAccountsOf(side))
       }
@@ -221,8 +234,7 @@ export function mountRaccoon(
     nextAccount: async (modelId, tried) => {
       let next: Awaited<ReturnType<typeof pool.getAvailableAccount>> = null
       if (side === 'free' && unified()) {
-        const pick = await raccoonUnifiedPick(modelId, tried)
-        next = pick?.pick ?? null
+        next = await raccoonUnifiedPick(modelId, tried)
       } else {
         // 「本侧 + 未试过」：对侧与已试账号都进排除集合。
         const excluded = raccoonOtherSideIds(side)
@@ -244,6 +256,9 @@ export function mountRaccoon(
       const credential = await raccoonSideCredential(side)
       const own = credential === undefined ? [] : await auth.fetchModelsWithCredential(credential)
       if (side !== 'free' || !unified() || proRemoteFetch === undefined) return own
+      // 免费侧仍有启用账号时，读取不到目录不等于模型已下架。
+      // 保留上次完整目录；没有缓存则走免费侧兜底，避免把共有模型误转到订阅额度。
+      if (own.length === 0 && raccoonAccountsOf('free').some(account => account.enabled !== false)) return []
       // 统一模式：订阅侧目录去 `-p` 后并入（免费侧条目优先 —— 免费面是
       // 默认服务面，徽标/思考档以它为准；订阅独有模型补进差集）。
       // 订阅侧拉取失败只损失「订阅独有」的条目，不影响免费侧目录。
@@ -259,13 +274,13 @@ export function mountRaccoon(
     // 两侧都传「按 plan 门控」的池视图：门控只影响目录可见性判定，
     // 黑名单/限流/凭据读写仍落在真池上。
     accountPool: raccoonSidePool(side),
-    // 统一模式出站翻译：订阅账号把统一 id 还原成上游订阅线（`<id>-p`），
+    // 统一模式出站翻译：订阅账号使用原始订阅 ID（目录未知时回退 `<id>-p`），
     // 免费账号原样。适配器据此构造请求体与限流标记，选号/账本仍记统一 id。
     ...(side === 'free' ? {
       outboundModelId: (modelId: string, accountId: string | undefined): string => {
         if (!unified() || accountId === undefined) return modelId
         const entry = pool.listAccountsByProvider(RACCOON.id).find(account => account.id === accountId)
-        return raccoonSideOf(entry ?? {}) === 'pro' ? `${modelId}-p` : modelId
+        return raccoonSideOf(entry ?? {}) === 'pro' ? unifiedRoute(modelId).proId ?? modelId : modelId
       },
     } : {}),
     product,
@@ -286,7 +301,7 @@ export function mountRaccoon(
     ...RACCOON,
     get displayName() { return unified() ? 'Raccoon' : RACCOON.displayName },
   }
-  const raccoonAdapter = mountRaccoon(raccoonProduct, raccoon, 'free', proRemoteFetch)
+  const raccoonAdapter: ReturnType<typeof registerRaccoonLlm> = mountRaccoon(raccoonProduct, raccoon, 'free', proRemoteFetch)
   const raccoonProAdapter = mountRaccoon(
     RACCOON_PRO,
     raccoonPro,

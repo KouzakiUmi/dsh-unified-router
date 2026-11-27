@@ -10,7 +10,7 @@ import { createSettingsSnapshots, SNAPSHOT_INTERVAL_MS } from '../lib/settings-s
 import { createDailyCheckin } from '../lib/daily-checkin.js'
 import { settingsCheckinAdapters } from '../lib/settings-providers.js'
 
-function fixture({ autoCollect = false, snapshotFile, balance, testDeps, requestRejection } = {}) {
+function fixture({ autoCollect = false, snapshotFile, balance, testDeps, requestRejection, subUsage } = {}) {
   const routes = new Map(); const calls = []; const cleanup = []; let disposed = false
   const account = { id: 'a', provider: 'raccoon', nickname: '测试', enabled: true, credentialRef: 'PRIVATE_REF', token: 'NEVER_DISPLAY', refreshToken: 'PRIVATE_REFRESH' }
   const raw = async (method, payload) => {
@@ -27,13 +27,35 @@ function fixture({ autoCollect = false, snapshotFile, balance, testDeps, request
     fetch: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
   }
   const streamHooks = []
-  const ctx = { connection, credentials: {}, llm: {}, get: key => ctx[key], inject(_deps, fn) { fn(this) }, effect(fn) { cleanup.push(fn()) },
+  const ctx = { connection, credentials: {}, llm: {}, subUsage, get: key => ctx[key], inject(_deps, fn) { fn(this) }, effect(fn) { cleanup.push(fn()) },
     on(name, fn) { if (name === 'llm/stream') streamHooks.push(fn); return () => {} } }
   apply(ctx, { backend: 'shared' }, { autoCollect, snapshotFile, ...testDeps })
   const route = routes.get('/api/unified-router')
   const call = async (method, payload) => { const response = await route.fetch(new Request('http://dsh.internal/api/unified-router', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'test-rpc', method: 'unified-router', payload: { method, payload } }) })); return response.json() }
   return { routes, calls, call, route, streamHooks, dispose() { for (const stop of cleanup.reverse()) stop?.() }, get disposed() { return disposed } }
 }
+
+test('额度推送撤回已确认没有账号的来源，保留缺失或陈旧的来源', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'router-quota-revoke-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const snapshotFile = join(dir, 'settings.json')
+  const at = Date.now()
+  await writeFile(snapshotFile, JSON.stringify({ version: 1, entries: {
+    'codearts/managed.snapshot': { at, value: { provider: 'codearts', accounts: [] } },
+    'workbuddy/workbuddy.snapshot': { at, value: { accounts: [] } },
+    'astudio/managed.snapshot': { at, stale: true, value: { provider: 'astudio', accounts: [] } },
+  } }))
+  const revoked = []
+  const host = fixture({ snapshotFile, subUsage: {
+    ingest() { assert.fail('空快照不应生成额度条目') },
+    revokeIngest(source) { revoked.push(source); return { ok: true } },
+  } })
+  try {
+    await host.call('settings.snapshot', {})
+    assert.equal((await host.call('automation.setConfig', { quotaIngest: true })).result.ok, true)
+    assert.deepEqual(revoked, ['unified-router-codearts'])
+  } finally { host.dispose() }
+})
 
 test('额度账号 RPC 仅返回命中的会话和模型，不写入设置快照，且经宿主授权', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'router-quota-account-'))
